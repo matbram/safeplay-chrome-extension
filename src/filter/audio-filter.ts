@@ -6,7 +6,6 @@ export class AudioFilter {
   private filterMode: FilterMode = 'mute';
   private isActive = false;
   private checkIntervalId: number | null = null;
-  private originalVolume = 1;
   private isMuted = false;
 
   // Audio context for bleep sound
@@ -35,7 +34,6 @@ export class AudioFilter {
     this.video = video;
     this.muteIntervals = intervals;
     this.filterMode = mode;
-    this.originalVolume = video.volume;
 
     // Sort intervals by start time for efficient lookup
     this.muteIntervals.sort((a, b) => a.start - b.start);
