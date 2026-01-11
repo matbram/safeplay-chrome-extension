@@ -1,0 +1,230 @@
+/* SafePlay Content Script Styles */
+
+/* Thumbnail Button */
+.safeplay-filter-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+  color: white;
+  font-family: 'Roboto', 'YouTube Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.safeplay-filter-btn:hover {
+  background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  transform: translateY(-1px);
+}
+
+.safeplay-filter-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.safeplay-filter-btn .safeplay-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.safeplay-filter-btn .safeplay-text {
+  white-space: nowrap;
+}
+
+/* Loading state */
+.safeplay-filter-btn.safeplay-loading {
+  pointer-events: none;
+  opacity: 0.8;
+}
+
+.safeplay-filter-btn.safeplay-loading .safeplay-icon {
+  animation: safeplay-spin 1s linear infinite;
+}
+
+@keyframes safeplay-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Dark mode support */
+html[dark] .safeplay-filter-btn,
+[dark] .safeplay-filter-btn,
+ytd-app[darker-dark-theme] .safeplay-filter-btn {
+  background: linear-gradient(135deg, #4CAF50 0%, #388E3C 100%);
+}
+
+html[dark] .safeplay-filter-btn:hover,
+[dark] .safeplay-filter-btn:hover,
+ytd-app[darker-dark-theme] .safeplay-filter-btn:hover {
+  background: linear-gradient(135deg, #388E3C 0%, #2E7D32 100%);
+}
+
+/* Player Controls Button */
+.safeplay-player-controls {
+  opacity: 0.9;
+  transition: opacity 0.2s ease;
+}
+
+.safeplay-player-controls:hover {
+  opacity: 1;
+}
+
+.safeplay-player-controls svg {
+  fill: #fff;
+  opacity: 0.5;
+  transition: opacity 0.2s ease;
+}
+
+.safeplay-player-controls:hover svg {
+  opacity: 0.8;
+}
+
+.safeplay-player-controls.safeplay-active svg {
+  fill: #4CAF50;
+  opacity: 1;
+}
+
+/* Status Overlay */
+.safeplay-status-overlay {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 100;
+  pointer-events: none;
+  animation: safeplay-fade-in 0.3s ease;
+}
+
+.safeplay-status-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: rgba(76, 175, 80, 0.95);
+  color: white;
+  border-radius: 20px;
+  font-family: 'Roboto', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.safeplay-status-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.safeplay-status-overlay.safeplay-status-hidden {
+  animation: safeplay-fade-out 0.3s ease forwards;
+}
+
+@keyframes safeplay-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes safeplay-fade-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+}
+
+/* Shorts support */
+ytd-reel-video-renderer .safeplay-filter-btn,
+ytd-shorts .safeplay-filter-btn {
+  position: absolute;
+  bottom: 80px;
+  right: 16px;
+  width: auto;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 24px;
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+/* Mobile responsive */
+@media (max-width: 600px) {
+  .safeplay-filter-btn {
+    padding: 6px 10px;
+    font-size: 12px;
+    gap: 4px;
+  }
+
+  .safeplay-filter-btn .safeplay-icon {
+    width: 14px;
+    height: 14px;
+  }
+
+  .safeplay-status-badge {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+}
+
+/* Processing indicator */
+.safeplay-processing-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  background: rgba(0, 0, 0, 0.85);
+  padding: 20px 30px;
+  border-radius: 12px;
+  text-align: center;
+  color: white;
+  font-family: 'Roboto', sans-serif;
+}
+
+.safeplay-processing-indicator .safeplay-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #4CAF50;
+  border-radius: 50%;
+  animation: safeplay-spin 1s linear infinite;
+  margin: 0 auto 12px;
+}
+
+.safeplay-processing-indicator .safeplay-progress-text {
+  font-size: 14px;
+  opacity: 0.9;
+}
+
+.safeplay-processing-indicator .safeplay-progress-bar {
+  width: 200px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  margin-top: 12px;
+  overflow: hidden;
+}
+
+.safeplay-processing-indicator .safeplay-progress-fill {
+  height: 100%;
+  background: #4CAF50;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
