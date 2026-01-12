@@ -11,49 +11,49 @@ export interface InjectorOptions {
 const PROCESSED_ATTR = 'data-safeplay-processed';
 const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
 
-// Button state configurations with colors and text
+// Button state configurations with YouTube theme colors
 const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: string; shadow: string }> = {
   idle: {
-    bg: 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)',
-    hoverBg: 'linear-gradient(135deg, #45a049 0%, #3d8b40 100%)',
+    bg: '#ff0000', // YouTube red
+    hoverBg: '#cc0000',
     text: 'SafePlay',
-    shadow: 'rgba(76, 175, 80, 0.3)',
+    shadow: 'rgba(255, 0, 0, 0.3)',
   },
   connecting: {
-    bg: 'linear-gradient(135deg, #607D8B 0%, #546E7A 100%)',
-    hoverBg: 'linear-gradient(135deg, #546E7A 0%, #455A64 100%)',
+    bg: '#3f3f3f', // YouTube dark gray
+    hoverBg: '#4f4f4f',
     text: 'Connecting...',
-    shadow: 'rgba(96, 125, 139, 0.3)',
+    shadow: 'rgba(63, 63, 63, 0.3)',
   },
   downloading: {
-    bg: 'linear-gradient(135deg, #7E57C2 0%, #673AB7 100%)',
-    hoverBg: 'linear-gradient(135deg, #673AB7 0%, #5E35B1 100%)',
+    bg: '#a855f7', // Purple processing
+    hoverBg: '#9333ea',
     text: 'Analyzing...',
-    shadow: 'rgba(126, 87, 194, 0.3)',
+    shadow: 'rgba(168, 85, 247, 0.4)',
   },
   transcribing: {
-    bg: 'linear-gradient(135deg, #7E57C2 0%, #673AB7 100%)',
-    hoverBg: 'linear-gradient(135deg, #673AB7 0%, #5E35B1 100%)',
+    bg: '#a855f7', // Purple processing
+    hoverBg: '#9333ea',
     text: 'Analyzing...',
-    shadow: 'rgba(126, 87, 194, 0.3)',
+    shadow: 'rgba(168, 85, 247, 0.4)',
   },
   processing: {
-    bg: 'linear-gradient(135deg, #7E57C2 0%, #673AB7 100%)',
-    hoverBg: 'linear-gradient(135deg, #673AB7 0%, #5E35B1 100%)',
+    bg: '#a855f7', // Purple processing
+    hoverBg: '#9333ea',
     text: 'Analyzing...',
-    shadow: 'rgba(126, 87, 194, 0.3)',
+    shadow: 'rgba(168, 85, 247, 0.4)',
   },
   filtering: {
-    bg: 'linear-gradient(135deg, #26A69A 0%, #00897B 100%)',
-    hoverBg: 'linear-gradient(135deg, #00897B 0%, #00796B 100%)',
+    bg: '#2ba640', // YouTube success green
+    hoverBg: '#239a36',
     text: 'Active',
-    shadow: 'rgba(38, 166, 154, 0.3)',
+    shadow: 'rgba(43, 166, 64, 0.4)',
   },
   error: {
-    bg: 'linear-gradient(135deg, #EF5350 0%, #E53935 100%)',
-    hoverBg: 'linear-gradient(135deg, #E53935 0%, #D32F2F 100%)',
+    bg: '#ff4e45', // YouTube error red-orange
+    hoverBg: '#e63e35',
     text: 'Retry',
-    shadow: 'rgba(239, 83, 80, 0.3)',
+    shadow: 'rgba(255, 78, 69, 0.4)',
   },
 };
 

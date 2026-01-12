@@ -2,10 +2,10 @@
  * Smooth Progress Animator
  *
  * Creates a smooth animated progress that:
- * - Animates toward the actual progress without overshooting
- * - Slows down as it approaches the target (logarithmic easing)
- * - Continues to animate even when server updates are slow
- * - Caps at a safe maximum (90%) until completion is confirmed
+ * - Only animates toward the actual server-reported progress
+ * - Never exceeds the target (no overshooting)
+ * - Smoothly interpolates between server updates
+ * - Stays conservative to avoid stalling at high percentages
  */
 
 type ProgressCallback = (progress: number, text: string) => void;
@@ -15,17 +15,14 @@ export class SmoothProgressAnimator {
   private targetProgress = 0;
   private isComplete = false;
   private animationId: number | null = null;
-  private lastUpdateTime = 0;
   private callback: ProgressCallback;
   private baseText: string;
 
-  // Configuration
-  private readonly ANIMATION_INTERVAL = 50; // ms between frames
-  private readonly MIN_INCREMENT = 0.3; // Minimum progress increment per frame
-  private readonly MAX_INCREMENT = 2; // Maximum progress increment per frame
-  private readonly SAFE_CAP = 90; // Don't exceed this until actually complete
-  private readonly SLOWDOWN_THRESHOLD = 70; // Start slowing down here
-  private readonly IDLE_INCREMENT = 0.15; // Increment when waiting for server
+  // Configuration - conservative settings
+  private readonly ANIMATION_INTERVAL = 100; // ms between frames
+  private readonly CATCH_UP_SPEED = 0.15; // How fast to catch up (15% of gap per frame)
+  private readonly MIN_INCREMENT = 0.2; // Minimum progress increment per frame
+  private readonly MAX_INCREMENT = 3; // Maximum progress increment per frame
 
   constructor(callback: ProgressCallback, baseText = 'Analyzing') {
     this.callback = callback;
@@ -39,17 +36,18 @@ export class SmoothProgressAnimator {
     this.displayProgress = 0;
     this.targetProgress = 0;
     this.isComplete = false;
-    this.lastUpdateTime = Date.now();
     this.startAnimation();
+    // Initial callback
+    this.callback(0, `${this.baseText} 0%`);
   }
 
   /**
    * Update the target progress from server
+   * The display will smoothly animate toward this target
    */
   setTarget(progress: number): void {
-    // Clamp target to safe cap unless complete
-    this.targetProgress = Math.min(progress, this.SAFE_CAP);
-    this.lastUpdateTime = Date.now();
+    // Never let target go backwards (unless resetting)
+    this.targetProgress = Math.max(progress, this.targetProgress);
   }
 
   /**
@@ -86,46 +84,20 @@ export class SmoothProgressAnimator {
   }
 
   private tick(): void {
-    const timeSinceUpdate = Date.now() - this.lastUpdateTime;
     const gap = this.targetProgress - this.displayProgress;
 
-    let increment = 0;
+    // Only animate if we're behind the target
+    if (gap > 0.5) {
+      // Calculate increment - proportional to gap but clamped
+      let increment = gap * this.CATCH_UP_SPEED;
+      increment = Math.max(increment, this.MIN_INCREMENT);
+      increment = Math.min(increment, this.MAX_INCREMENT);
 
-    if (gap > 0) {
-      // We're behind the target - catch up
-      // Use easing: faster when far from target, slower when close
-      const easeMultiplier = this.calculateEaseMultiplier();
-      increment = Math.min(
-        Math.max(gap * 0.1 * easeMultiplier, this.MIN_INCREMENT),
-        this.MAX_INCREMENT
+      // Apply increment but never exceed target
+      this.displayProgress = Math.min(
+        this.displayProgress + increment,
+        this.targetProgress
       );
-    } else if (!this.isComplete && this.displayProgress < this.SAFE_CAP) {
-      // No new target, but keep animating slowly to show activity
-      // Slow down more as we approach the safe cap
-      const distanceToSafeCap = this.SAFE_CAP - this.displayProgress;
-      const slowdownFactor = Math.max(0.1, distanceToSafeCap / 30);
-      increment = this.IDLE_INCREMENT * slowdownFactor;
-
-      // Further reduce increment if we've been waiting a long time
-      // This prevents us from hitting the cap too early
-      if (timeSinceUpdate > 5000) {
-        increment *= 0.5;
-      }
-      if (timeSinceUpdate > 10000) {
-        increment *= 0.3;
-      }
-    }
-
-    // Apply increment
-    if (increment > 0) {
-      const newProgress = this.displayProgress + increment;
-
-      // Don't exceed safe cap unless completing
-      if (!this.isComplete && newProgress >= this.SAFE_CAP) {
-        this.displayProgress = this.SAFE_CAP - 0.5; // Hover just below cap
-      } else {
-        this.displayProgress = Math.min(newProgress, 100);
-      }
 
       // Round for display
       const displayValue = Math.round(this.displayProgress);
@@ -138,19 +110,5 @@ export class SmoothProgressAnimator {
       this.callback(100, `${this.baseText} 100%`);
       this.stop();
     }
-  }
-
-  private calculateEaseMultiplier(): number {
-    // Slow down as we approach the slowdown threshold
-    if (this.displayProgress < this.SLOWDOWN_THRESHOLD) {
-      return 1.5; // Faster at the beginning
-    }
-
-    // Logarithmic slowdown as we approach the cap
-    const distanceToCap = this.SAFE_CAP - this.displayProgress;
-    if (distanceToCap <= 0) return 0.1;
-
-    // Returns ~1 at 70%, ~0.5 at 80%, ~0.2 at 88%
-    return Math.max(0.1, Math.log10(distanceToCap + 1) / 1.3);
   }
 }
