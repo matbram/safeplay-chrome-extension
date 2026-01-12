@@ -29,9 +29,31 @@ export interface FilterResponse {
 }
 
 export interface JobStatusResponse {
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'downloading' | 'transcribing' | 'completed' | 'failed';
   progress: number;
   transcript?: Transcript;
+  error?: string;
+  video?: {
+    youtube_id: string;
+    title?: string;
+  };
+}
+
+// Button state for UX
+export type ButtonState =
+  | 'idle'
+  | 'connecting'
+  | 'downloading'
+  | 'transcribing'
+  | 'processing'
+  | 'filtering'
+  | 'error';
+
+export interface ButtonStateInfo {
+  state: ButtonState;
+  text: string;
+  progress?: number;
+  intervalCount?: number;
   error?: string;
 }
 

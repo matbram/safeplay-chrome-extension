@@ -1,6 +1,8 @@
 // SafePlay Video Page Button Injector
 // Injects the SafePlay button next to the Subscribe button on YouTube watch pages
 
+import { ButtonState, ButtonStateInfo } from '../types';
+
 export interface InjectorOptions {
   onButtonClick: (youtubeId: string) => void;
   debug?: boolean;
@@ -9,6 +11,52 @@ export interface InjectorOptions {
 const PROCESSED_ATTR = 'data-safeplay-processed';
 const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
 
+// Button state configurations with colors and text
+const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: string; shadow: string }> = {
+  idle: {
+    bg: 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)',
+    hoverBg: 'linear-gradient(135deg, #45a049 0%, #3d8b40 100%)',
+    text: 'SafePlay',
+    shadow: 'rgba(76, 175, 80, 0.3)',
+  },
+  connecting: {
+    bg: 'linear-gradient(135deg, #607D8B 0%, #546E7A 100%)',
+    hoverBg: 'linear-gradient(135deg, #546E7A 0%, #455A64 100%)',
+    text: 'Connecting...',
+    shadow: 'rgba(96, 125, 139, 0.3)',
+  },
+  downloading: {
+    bg: 'linear-gradient(135deg, #7E57C2 0%, #673AB7 100%)',
+    hoverBg: 'linear-gradient(135deg, #673AB7 0%, #5E35B1 100%)',
+    text: 'Analyzing...',
+    shadow: 'rgba(126, 87, 194, 0.3)',
+  },
+  transcribing: {
+    bg: 'linear-gradient(135deg, #7E57C2 0%, #673AB7 100%)',
+    hoverBg: 'linear-gradient(135deg, #673AB7 0%, #5E35B1 100%)',
+    text: 'Analyzing...',
+    shadow: 'rgba(126, 87, 194, 0.3)',
+  },
+  processing: {
+    bg: 'linear-gradient(135deg, #7E57C2 0%, #673AB7 100%)',
+    hoverBg: 'linear-gradient(135deg, #673AB7 0%, #5E35B1 100%)',
+    text: 'Analyzing...',
+    shadow: 'rgba(126, 87, 194, 0.3)',
+  },
+  filtering: {
+    bg: 'linear-gradient(135deg, #26A69A 0%, #00897B 100%)',
+    hoverBg: 'linear-gradient(135deg, #00897B 0%, #00796B 100%)',
+    text: 'Active',
+    shadow: 'rgba(38, 166, 154, 0.3)',
+  },
+  error: {
+    bg: 'linear-gradient(135deg, #EF5350 0%, #E53935 100%)',
+    hoverBg: 'linear-gradient(135deg, #E53935 0%, #D32F2F 100%)',
+    text: 'Retry',
+    shadow: 'rgba(239, 83, 80, 0.3)',
+  },
+};
+
 export class ResilientInjector {
   private options: InjectorOptions;
   private observer: MutationObserver | null = null;
@@ -16,6 +64,7 @@ export class ResilientInjector {
   private injectionAttempts = 0;
   private maxAttempts = 50;
   private retryInterval: number | null = null;
+  private currentState: ButtonState = 'idle';
 
   constructor(options: InjectorOptions) {
     this.options = options;
@@ -24,11 +73,6 @@ export class ResilientInjector {
   // Start observing and injecting
   start(): void {
     this.log('Starting video page injector');
-
-    // Only run on watch pages
-    if (!this.isWatchPage()) {
-      this.log('Not a watch page, waiting for navigation');
-    }
 
     // Initial injection attempt
     this.attemptInjection();
@@ -98,7 +142,7 @@ export class ResilientInjector {
       this.injectionAttempts++;
       this.log(`Subscribe button not found, attempt ${this.injectionAttempts}/${this.maxAttempts}`);
 
-      // Retry with exponential backoff
+      // Retry with interval
       if (this.injectionAttempts < this.maxAttempts && this.retryInterval === null) {
         this.retryInterval = window.setInterval(() => {
           this.attemptInjection();
@@ -108,7 +152,6 @@ export class ResilientInjector {
   }
 
   private findSubscribeButton(): HTMLElement | null {
-    // Primary selector: the subscribe button container in watch metadata
     const selectors = [
       '#subscribe-button.ytd-watch-metadata',
       'ytd-watch-metadata #subscribe-button',
@@ -138,20 +181,26 @@ export class ResilientInjector {
       existingButton.remove();
     }
 
+    // Reset state for new video
+    this.currentState = 'idle';
+
     // Create button container
     const container = document.createElement('div');
     container.className = `${BUTTON_CONTAINER_CLASS} style-scope ytd-watch-metadata`;
-    container.style.cssText = 'display: inline-block; margin-left: 8px;';
+    container.style.cssText = 'display: inline-flex; align-items: center; margin-left: 8px;';
     container.setAttribute(PROCESSED_ATTR, 'true');
 
     // Create the button matching YouTube's style
     const button = document.createElement('button');
-    button.className = 'yt-spec-button-shape-next yt-spec-button-shape-next--tonal yt-spec-button-shape-next--mono yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading yt-spec-button-shape-next--enable-backdrop-filter-experiment';
+    button.className = 'safeplay-main-button yt-spec-button-shape-next yt-spec-button-shape-next--tonal yt-spec-button-shape-next--mono yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading';
     button.title = 'Filter profanity with SafePlay';
     button.setAttribute('aria-label', 'SafePlay Filter');
+    button.setAttribute('data-video-id', videoId);
+
+    const stateConfig = BUTTON_STATES.idle;
     button.style.cssText = `
-      border: 1px solid var(--yt-spec-outline);
-      background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+      border: none;
+      background: ${stateConfig.bg};
       color: #ffffff;
       border-radius: 18px;
       padding: 0 16px;
@@ -166,37 +215,54 @@ export class ResilientInjector {
       gap: 6px;
       cursor: pointer;
       transition: all 0.2s ease;
-      min-width: 110px;
-      box-shadow: 0 1px 3px rgba(76, 175, 80, 0.3);
+      min-width: 120px;
+      box-shadow: 0 2px 4px ${stateConfig.shadow};
+      position: relative;
+      overflow: hidden;
+    `;
+
+    // Create progress bar (hidden initially)
+    const progressBar = document.createElement('div');
+    progressBar.className = 'safeplay-progress-bar';
+    progressBar.style.cssText = `
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 3px;
+      width: 0%;
+      background: rgba(255, 255, 255, 0.5);
+      transition: width 0.3s ease;
+      border-radius: 0 0 18px 18px;
     `;
 
     // Add icon
     const iconWrapper = document.createElement('div');
-    iconWrapper.style.cssText = 'display: inline-block; width: 20px; height: 20px; vertical-align: middle; flex-shrink: 0;';
-    iconWrapper.innerHTML = `
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-      </svg>
-    `;
+    iconWrapper.className = 'safeplay-icon';
+    iconWrapper.style.cssText = 'display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0;';
+    iconWrapper.innerHTML = this.getIconSVG('idle');
 
     // Add text
     const textSpan = document.createElement('span');
-    textSpan.style.cssText = 'color: currentColor; font-size: 14px; font-weight: 500; line-height: 1;';
-    textSpan.textContent = 'SafePlay';
+    textSpan.className = 'safeplay-text';
+    textSpan.style.cssText = 'color: currentColor; font-size: 14px; font-weight: 500; line-height: 1; white-space: nowrap;';
+    textSpan.textContent = stateConfig.text;
 
     button.appendChild(iconWrapper);
     button.appendChild(textSpan);
+    button.appendChild(progressBar);
 
     // Add hover effects
     button.addEventListener('mouseenter', () => {
-      button.style.background = 'linear-gradient(135deg, #45a049 0%, #3d8b40 100%)';
-      button.style.boxShadow = '0 2px 6px rgba(76, 175, 80, 0.4)';
+      const config = BUTTON_STATES[this.currentState];
+      button.style.background = config.hoverBg;
+      button.style.boxShadow = `0 4px 8px ${config.shadow}`;
       button.style.transform = 'translateY(-1px)';
     });
 
     button.addEventListener('mouseleave', () => {
-      button.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
-      button.style.boxShadow = '0 1px 3px rgba(76, 175, 80, 0.3)';
+      const config = BUTTON_STATES[this.currentState];
+      button.style.background = config.bg;
+      button.style.boxShadow = `0 2px 4px ${config.shadow}`;
       button.style.transform = 'translateY(0)';
     });
 
@@ -204,7 +270,11 @@ export class ResilientInjector {
     button.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      this.options.onButtonClick(videoId);
+
+      // Only allow click in idle or error state
+      if (this.currentState === 'idle' || this.currentState === 'error') {
+        this.options.onButtonClick(videoId);
+      }
     });
 
     container.appendChild(button);
@@ -215,53 +285,138 @@ export class ResilientInjector {
     this.log(`Injected SafePlay button for video: ${videoId}`);
   }
 
-  // Update button state (loading, active, error)
-  updateButtonState(state: 'idle' | 'loading' | 'active' | 'error', message?: string): void {
+  private getIconSVG(state: ButtonState): string {
+    switch (state) {
+      case 'connecting':
+      case 'downloading':
+      case 'transcribing':
+      case 'processing':
+        // Spinning loader icon
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="safeplay-spinner">
+            <style>.safeplay-spinner { animation: safeplay-spin 1s linear infinite; } @keyframes safeplay-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+          </svg>
+        `;
+      case 'filtering':
+        // Active shield icon
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
+          </svg>
+        `;
+      case 'error':
+        // Error icon
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+          </svg>
+        `;
+      default:
+        // Default checkmark icon
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+          </svg>
+        `;
+    }
+  }
+
+  // Update button state with detailed info
+  updateButtonState(stateInfo: ButtonStateInfo): void {
     const container = document.querySelector(`.${BUTTON_CONTAINER_CLASS}`);
     if (!container) return;
 
-    const button = container.querySelector('button');
-    const textSpan = container.querySelector('span');
-    if (!button || !textSpan) return;
+    const button = container.querySelector<HTMLButtonElement>('.safeplay-main-button');
+    const textSpan = container.querySelector<HTMLSpanElement>('.safeplay-text');
+    const iconWrapper = container.querySelector<HTMLDivElement>('.safeplay-icon');
+    const progressBar = container.querySelector<HTMLDivElement>('.safeplay-progress-bar');
 
-    switch (state) {
-      case 'loading':
-        button.style.background = 'linear-gradient(135deg, #888 0%, #666 100%)';
-        button.style.cursor = 'wait';
-        textSpan.textContent = message || 'Loading...';
-        break;
+    if (!button || !textSpan || !iconWrapper) return;
 
-      case 'active':
-        button.style.background = 'linear-gradient(135deg, #2196F3 0%, #1976D2 100%)';
-        button.style.boxShadow = '0 1px 3px rgba(33, 150, 243, 0.3)';
-        button.style.cursor = 'pointer';
-        textSpan.textContent = message || 'Filtering';
-        break;
+    this.currentState = stateInfo.state;
+    const config = BUTTON_STATES[stateInfo.state];
 
-      case 'error':
-        button.style.background = 'linear-gradient(135deg, #f44336 0%, #d32f2f 100%)';
-        button.style.boxShadow = '0 1px 3px rgba(244, 67, 54, 0.3)';
-        button.style.cursor = 'pointer';
-        textSpan.textContent = message || 'Error';
-        break;
+    // Update colors
+    button.style.background = config.bg;
+    button.style.boxShadow = `0 2px 4px ${config.shadow}`;
 
-      case 'idle':
-      default:
-        button.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
-        button.style.boxShadow = '0 1px 3px rgba(76, 175, 80, 0.3)';
-        button.style.cursor = 'pointer';
-        textSpan.textContent = 'SafePlay';
-        break;
+    // Update icon
+    iconWrapper.innerHTML = this.getIconSVG(stateInfo.state);
+
+    // Update text
+    let displayText = stateInfo.text || config.text;
+
+    // Add progress percentage for processing states
+    if (stateInfo.progress !== undefined && stateInfo.progress > 0) {
+      if (stateInfo.state === 'downloading' || stateInfo.state === 'transcribing' || stateInfo.state === 'processing') {
+        displayText = `${config.text.replace('...', '')} ${Math.round(stateInfo.progress)}%`;
+      }
     }
+
+    // Add interval count for filtering state
+    if (stateInfo.state === 'filtering' && stateInfo.intervalCount !== undefined) {
+      displayText = `Filtering (${stateInfo.intervalCount})`;
+    }
+
+    textSpan.textContent = displayText;
+
+    // Update progress bar
+    if (progressBar) {
+      if (stateInfo.progress !== undefined && stateInfo.progress > 0 && stateInfo.progress < 100) {
+        progressBar.style.width = `${stateInfo.progress}%`;
+        progressBar.style.display = 'block';
+      } else {
+        progressBar.style.width = '0%';
+        progressBar.style.display = 'none';
+      }
+    }
+
+    // Update cursor
+    if (stateInfo.state === 'idle' || stateInfo.state === 'error') {
+      button.style.cursor = 'pointer';
+    } else {
+      button.style.cursor = 'default';
+    }
+
+    // Update title/tooltip
+    switch (stateInfo.state) {
+      case 'connecting':
+        button.title = 'Connecting to SafePlay service...';
+        break;
+      case 'downloading':
+        button.title = `Downloading video audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
+        break;
+      case 'transcribing':
+        button.title = `Transcribing audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
+        break;
+      case 'processing':
+        button.title = 'Processing transcript...';
+        break;
+      case 'filtering':
+        button.title = `Filtering profanity${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} instances found` : ''}`;
+        break;
+      case 'error':
+        button.title = stateInfo.error || 'An error occurred. Click to retry.';
+        break;
+      default:
+        button.title = 'Click to filter profanity with SafePlay';
+    }
+
+    this.log(`Button state updated to: ${stateInfo.state}`, stateInfo);
+  }
+
+  // Convenience method for simple state updates
+  setButtonState(state: ButtonState, text?: string, progress?: number): void {
+    this.updateButtonState({ state, text: text || '', progress });
   }
 
   // Set up mutation observer for dynamic content changes
   private setupMutationObserver(): void {
     this.observer = new MutationObserver((mutations) => {
-      // Check if we need to re-inject (e.g., after YouTube updates the page)
       for (const mutation of mutations) {
         if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-          // Check if subscribe button area was modified
           for (const node of mutation.addedNodes) {
             if (node instanceof HTMLElement) {
               if (node.id === 'subscribe-button' ||
@@ -285,7 +440,6 @@ export class ResilientInjector {
 
   // Listen for YouTube SPA navigation
   private setupNavigationListener(): void {
-    // YouTube uses History API for navigation
     const originalPushState = history.pushState;
     const originalReplaceState = history.replaceState;
 
@@ -303,12 +457,10 @@ export class ResilientInjector {
       this.onNavigation();
     });
 
-    // YouTube's custom navigation event
     document.addEventListener('yt-navigate-finish', () => {
       this.onNavigation();
     });
 
-    // Also handle yt-page-data-updated for video changes within watch page
     document.addEventListener('yt-page-data-updated', () => {
       this.log('Page data updated');
       this.onNavigation();
@@ -318,6 +470,7 @@ export class ResilientInjector {
   private onNavigation(): void {
     this.log('Navigation detected');
     this.currentVideoId = null;
+    this.currentState = 'idle';
     this.injectionAttempts = 0;
 
     if (this.retryInterval !== null) {
@@ -325,10 +478,14 @@ export class ResilientInjector {
       this.retryInterval = null;
     }
 
-    // Wait for DOM to update
     setTimeout(() => {
       this.attemptInjection();
     }, 300);
+  }
+
+  // Get current video ID
+  getCurrentVideoId(): string | null {
+    return this.currentVideoId;
   }
 
   // Debug logging

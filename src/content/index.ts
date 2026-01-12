@@ -1,7 +1,7 @@
 // SafePlay Content Script - Main Entry Point
 import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
-import { UserPreferences, DEFAULT_PREFERENCES } from '../types';
+import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo } from '../types';
 import './styles.css';
 
 const DEBUG = true;
@@ -17,6 +17,7 @@ class SafePlayContentScript {
   private videoController: VideoController | null = null;
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private currentVideoId: string | null = null;
+  private isProcessing = false;
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -41,9 +42,9 @@ class SafePlayContentScript {
     // Start injector - it handles watch page detection internally
     this.injector.start();
 
-    // Check if we're on a watch page and auto-filter if enabled
+    // Check if we're on a watch page
     if (this.isWatchPage()) {
-      await this.handleWatchPage();
+      this.currentVideoId = this.getVideoIdFromUrl();
     }
 
     // Listen for messages from background/popup
@@ -78,33 +79,195 @@ class SafePlayContentScript {
     return params.get('v');
   }
 
-  private async handleWatchPage(): Promise<void> {
-    const videoId = this.getVideoIdFromUrl();
-    if (!videoId) return;
-
-    // Don't re-initialize for same video
-    if (videoId === this.currentVideoId) return;
-
-    this.currentVideoId = videoId;
-    log('Watch page detected, video ID:', videoId);
-
-    // Create player controls
-    this.injectPlayerControls();
+  private updateButtonState(stateInfo: ButtonStateInfo): void {
+    this.injector.updateButtonState(stateInfo);
   }
 
-  private async startFiltering(videoId: string): Promise<void> {
-    if (!this.videoController) return;
+  // Main filter flow - called when SafePlay button is clicked
+  private async onFilterButtonClick(youtubeId: string): Promise<void> {
+    if (this.isProcessing) {
+      log('Already processing, ignoring click');
+      return;
+    }
 
-    // Update button state to loading
-    this.injector.updateButtonState('loading', 'Loading...');
+    log('Filter button clicked for:', youtubeId);
+    this.isProcessing = true;
+    this.currentVideoId = youtubeId;
 
     try {
-      await this.videoController.initialize(videoId, this.preferences);
-      await this.videoController.applyFilter();
-      this.injector.updateButtonState('active', 'Filtering');
+      // Step 1: Connecting
+      this.updateButtonState({ state: 'connecting', text: 'Connecting...' });
+
+      // Request filter from background script (which calls the API)
+      const response = await chrome.runtime.sendMessage({
+        type: 'GET_FILTER',
+        payload: { youtubeId },
+      });
+
+      if (!response.success) {
+        throw new Error(response.error || 'Failed to request filter');
+      }
+
+      const { status, transcript, jobId } = response.data;
+
+      if (status === 'cached' && transcript) {
+        // Transcript was cached, skip to processing
+        log('Using cached transcript');
+        this.updateButtonState({ state: 'processing', text: 'Processing...' });
+        await this.applyFilter(transcript);
+      } else if (status === 'processing' && jobId) {
+        // Need to poll for job completion
+        log('Job started, polling for completion:', jobId);
+        await this.pollJobStatus(jobId);
+      } else {
+        throw new Error('Unexpected API response');
+      }
     } catch (error) {
-      log('Failed to start filtering:', error);
-      this.injector.updateButtonState('error', 'Error');
+      log('Filter request failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.updateButtonState({
+        state: 'error',
+        text: 'Error',
+        error: errorMessage,
+      });
+      this.isProcessing = false;
+    }
+  }
+
+  // Poll for job status with progress updates
+  private async pollJobStatus(jobId: string): Promise<void> {
+    const maxAttempts = 180; // 6 minutes max (2s intervals)
+    const pollInterval = 2000;
+    let attempts = 0;
+
+    while (attempts < maxAttempts) {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: 'CHECK_JOB',
+          payload: { jobId },
+        });
+
+        if (!response.success) {
+          throw new Error(response.error || 'Failed to check job status');
+        }
+
+        const { status, progress, transcript, error } = response.data;
+
+        log(`Job status: ${status}, progress: ${progress}%`);
+
+        // Update button based on job status with user-friendly messages
+        switch (status) {
+          case 'pending':
+            this.updateButtonState({
+              state: 'processing',
+              text: 'Starting...',
+              progress: 5,
+            });
+            break;
+
+          case 'downloading':
+          case 'transcribing':
+            // Show generic "Analyzing" with progress percentage
+            // Scale progress: downloading 0-30%, transcribing 30-90%
+            const scaledProgress = status === 'downloading'
+              ? Math.round(progress * 0.3)
+              : Math.round(30 + progress * 0.6);
+            this.updateButtonState({
+              state: 'processing',
+              text: `Analyzing ${scaledProgress}%`,
+              progress: scaledProgress,
+            });
+            break;
+
+          case 'completed':
+            if (transcript) {
+              this.updateButtonState({
+                state: 'processing',
+                text: 'Analyzing 95%',
+                progress: 95,
+              });
+              await this.applyFilter(transcript);
+              return;
+            } else {
+              throw new Error('Job completed but no transcript returned');
+            }
+
+          case 'failed':
+            throw new Error(error || 'Processing failed');
+
+          default:
+            // Generic processing state
+            this.updateButtonState({
+              state: 'processing',
+              text: `Analyzing ${Math.round(progress)}%`,
+              progress,
+            });
+        }
+
+        // Wait before next poll
+        await new Promise((resolve) => setTimeout(resolve, pollInterval));
+        attempts++;
+      } catch (error) {
+        log('Poll error:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        this.updateButtonState({
+          state: 'error',
+          text: 'Error',
+          error: errorMessage,
+        });
+        this.isProcessing = false;
+        return;
+      }
+    }
+
+    // Timeout
+    this.updateButtonState({
+      state: 'error',
+      text: 'Timeout',
+      error: 'Processing took too long. Please try again.',
+    });
+    this.isProcessing = false;
+  }
+
+  // Apply the filter using the transcript
+  private async applyFilter(transcript: Transcript): Promise<void> {
+    if (!this.videoController) {
+      throw new Error('Video controller not initialized');
+    }
+
+    const videoId = this.currentVideoId;
+    if (!videoId) {
+      throw new Error('No video ID');
+    }
+
+    try {
+      // Initialize video controller with transcript
+      await this.videoController.initialize(videoId, this.preferences);
+      this.videoController.onTranscriptReceived(transcript);
+
+      // Apply the filter
+      await this.videoController.applyFilter();
+
+      // Get the interval count for display
+      const state = this.videoController.getState();
+      const intervalCount = state.intervalCount || 0;
+
+      // Update button to filtering state
+      this.updateButtonState({
+        state: 'filtering',
+        text: `Filtering (${intervalCount})`,
+        intervalCount,
+      });
+
+      log(`Filter applied successfully. ${intervalCount} profanity instances will be muted.`);
+
+      // Create player controls for toggling
+      this.injectPlayerControls();
+    } catch (error) {
+      log('Failed to apply filter:', error);
+      throw error;
+    } finally {
+      this.isProcessing = false;
     }
   }
 
@@ -127,11 +290,11 @@ class SafePlayContentScript {
 
   private createPlayerButton(container: Element): void {
     const button = document.createElement('button');
-    button.className = 'ytp-button safeplay-player-controls';
-    button.title = 'SafePlay Filter';
+    button.className = 'ytp-button safeplay-player-controls safeplay-active';
+    button.title = 'SafePlay Filter Active - Click to toggle';
     button.innerHTML = `
       <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+        <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
       </svg>
     `;
 
@@ -144,57 +307,36 @@ class SafePlayContentScript {
     } else {
       container.appendChild(button);
     }
-
-    this.updatePlayerButtonState();
-  }
-
-  private updatePlayerButtonState(): void {
-    const button = document.querySelector('.safeplay-player-controls');
-    if (!button) return;
-
-    const state = this.videoController?.getState();
-    const isActive = state?.status === 'active';
-
-    button.classList.toggle('safeplay-active', isActive);
-    button.setAttribute('title', isActive ? 'SafePlay Active' : 'SafePlay Inactive');
   }
 
   private async toggleFilter(): Promise<void> {
     if (!this.videoController) return;
 
     const state = this.videoController.getState();
+    const playerButton = document.querySelector('.safeplay-player-controls');
 
     if (state.status === 'active') {
       this.videoController.stop();
-      this.injector.updateButtonState('idle');
+      playerButton?.classList.remove('safeplay-active');
+      playerButton?.setAttribute('title', 'SafePlay Filter Paused - Click to resume');
+      this.updateButtonState({ state: 'idle', text: 'SafePlay' });
     } else if (this.currentVideoId) {
-      await this.startFiltering(this.currentVideoId);
+      // Resume filtering
+      this.videoController.resume();
+      playerButton?.classList.add('safeplay-active');
+      playerButton?.setAttribute('title', 'SafePlay Filter Active - Click to toggle');
+
+      const intervalCount = state.intervalCount || 0;
+      this.updateButtonState({
+        state: 'filtering',
+        text: `Filtering (${intervalCount})`,
+        intervalCount,
+      });
     }
-
-    this.updatePlayerButtonState();
-  }
-
-  private onFilterButtonClick(youtubeId: string): void {
-    log('Filter button clicked for:', youtubeId);
-
-    // Start filtering for this video
-    this.startFiltering(youtubeId);
   }
 
   private onVideoStateChange(state: ReturnType<VideoController['getState']>): void {
     log('Video state changed:', state);
-    this.updatePlayerButtonState();
-
-    // Update the SafePlay button based on state
-    if (state.status === 'active') {
-      this.injector.updateButtonState('active', 'Filtering');
-    } else if (state.status === 'error') {
-      this.injector.updateButtonState('error', 'Error');
-    } else if (state.status === 'loading') {
-      this.injector.updateButtonState('loading', 'Loading...');
-    } else {
-      this.injector.updateButtonState('idle');
-    }
 
     // Notify popup of state change
     chrome.runtime.sendMessage({
@@ -218,24 +360,6 @@ class SafePlayContentScript {
         const newPrefs = message.payload as UserPreferences;
         this.preferences = newPrefs;
         this.videoController?.updatePreferences(newPrefs);
-        return { success: true };
-      }
-
-      case 'TRANSCRIPT_RECEIVED': {
-        const transcript = message.payload as { transcript: unknown };
-        this.videoController?.onTranscriptReceived(transcript.transcript as import('../types').Transcript);
-        return { success: true };
-      }
-
-      case 'PROCESSING_PROGRESS': {
-        const progress = (message.payload as { progress: number }).progress;
-        this.videoController?.onProcessingProgress(progress);
-        return { success: true };
-      }
-
-      case 'PROCESSING_ERROR': {
-        const error = (message.payload as { error: string }).error;
-        this.videoController?.onProcessingError(error);
         return { success: true };
       }
 
@@ -270,14 +394,19 @@ class SafePlayContentScript {
       this.videoController.stop();
     }
 
-    // Reset current video
+    // Reset state
     this.currentVideoId = null;
+    this.isProcessing = false;
 
-    // Check if on watch page
+    // Remove player button
+    const playerButton = document.querySelector('.safeplay-player-controls');
+    if (playerButton) {
+      playerButton.remove();
+    }
+
+    // Update video ID if on watch page
     if (this.isWatchPage()) {
-      setTimeout(() => {
-        this.handleWatchPage();
-      }, 500);
+      this.currentVideoId = this.getVideoIdFromUrl();
     }
   }
 }

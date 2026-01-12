@@ -4,6 +4,7 @@ import {
   MessageResponse,
   Transcript,
   UserPreferences,
+  JobStatusResponse,
 } from '../types';
 import {
   getPreferences,
@@ -14,7 +15,7 @@ import {
   clearCachedTranscripts,
   isAuthenticated,
 } from '../utils/storage';
-import { getOrRequestTranscript } from '../api/client';
+import { requestFilter, checkJobStatus } from '../api/client';
 
 const DEBUG = true;
 
@@ -23,9 +24,6 @@ function log(...args: unknown[]): void {
     console.log('[SafePlay BG]', ...args);
   }
 }
-
-// Track active jobs for progress reporting (reserved for future use)
-// const activeJobs = new Map<string, { tabId: number; youtubeId: string }>();
 
 // Message handler
 chrome.runtime.onMessage.addListener(
@@ -37,17 +35,14 @@ chrome.runtime.onMessage.addListener(
 
 async function handleMessage(
   message: Message,
-  sender: chrome.runtime.MessageSender
+  _sender: chrome.runtime.MessageSender
 ): Promise<MessageResponse> {
   log('Received message:', message.type);
 
   try {
     switch (message.type) {
       case 'GET_FILTER':
-        return await handleGetFilter(
-          message.payload as { youtubeId: string },
-          sender.tab?.id
-        );
+        return await handleGetFilter(message.payload as { youtubeId: string });
 
       case 'CHECK_JOB':
         return await handleCheckJob(message.payload as { jobId: string });
@@ -76,10 +71,10 @@ async function handleMessage(
   }
 }
 
+// Handle initial filter request - returns cached transcript or job_id for polling
 async function handleGetFilter(
-  payload: { youtubeId: string },
-  tabId?: number
-): Promise<MessageResponse<{ status: string; transcript?: Transcript; progress?: number }>> {
+  payload: { youtubeId: string }
+): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string }>> {
   const { youtubeId } = payload;
 
   // Check local cache first
@@ -92,61 +87,53 @@ async function handleGetFilter(
     };
   }
 
-  // Check if authenticated (for now, skip auth check - will implement later)
-  // const authenticated = await isAuthenticated();
-  // if (!authenticated) {
-  //   return { success: false, error: 'Authentication required' };
-  // }
-
   try {
-    // Request from API with progress callback
-    const transcript = await getOrRequestTranscript(youtubeId, (progress) => {
-      // Send progress updates to content script
-      if (tabId) {
-        chrome.tabs.sendMessage(tabId, {
-          type: 'PROCESSING_PROGRESS',
-          payload: { progress },
-        }).catch(() => {
-          // Tab might be closed
-        });
-      }
-    });
+    // Make initial request to API
+    const response = await requestFilter(youtubeId);
 
-    // Cache the transcript locally
-    await setCachedTranscript(youtubeId, transcript);
-
-    // Notify content script
-    if (tabId) {
-      chrome.tabs.sendMessage(tabId, {
-        type: 'TRANSCRIPT_RECEIVED',
-        payload: { transcript },
-      }).catch(() => {});
+    if (response.status === 'cached' && response.transcript) {
+      // API had it cached - save locally and return
+      await setCachedTranscript(youtubeId, response.transcript);
+      return {
+        success: true,
+        data: { status: 'cached', transcript: response.transcript },
+      };
     }
 
-    return {
-      success: true,
-      data: { status: 'completed', transcript },
-    };
+    if (response.status === 'processing' && response.job_id) {
+      // Processing started - return job ID for polling
+      return {
+        success: true,
+        data: { status: 'processing', jobId: response.job_id },
+      };
+    }
+
+    return { success: false, error: 'Unexpected API response' };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : 'Failed to get transcript';
-
-    // Notify content script of error
-    if (tabId) {
-      chrome.tabs.sendMessage(tabId, {
-        type: 'PROCESSING_ERROR',
-        payload: { error: errorMessage },
-      }).catch(() => {});
-    }
-
+    const errorMessage = error instanceof Error ? error.message : 'Failed to request filter';
     return { success: false, error: errorMessage };
   }
 }
 
+// Handle job status polling
 async function handleCheckJob(
-  _payload: { jobId: string }
-): Promise<MessageResponse> {
-  // This is handled within pollForTranscript, but keeping for direct polling if needed
-  return { success: true, data: { message: 'Use GET_FILTER instead' } };
+  payload: { jobId: string }
+): Promise<MessageResponse<JobStatusResponse>> {
+  const { jobId } = payload;
+
+  try {
+    const status = await checkJobStatus(jobId);
+
+    // If completed, cache the transcript
+    if (status.status === 'completed' && status.transcript) {
+      await setCachedTranscript(status.transcript.youtube_id, status.transcript);
+    }
+
+    return { success: true, data: status };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Failed to check job status';
+    return { success: false, error: errorMessage };
+  }
 }
 
 async function handleGetPreferences(): Promise<MessageResponse<UserPreferences>> {
@@ -188,7 +175,6 @@ async function handleClearCache(): Promise<MessageResponse> {
 
 // Handle extension icon click
 chrome.action.onClicked.addListener((_tab) => {
-  // Open popup is handled by manifest, but we can add extra logic here if needed
   log('Extension icon clicked');
 });
 
@@ -203,13 +189,10 @@ chrome.runtime.onInstalled.addListener((details) => {
 });
 
 // Handle auth callback from website (deep-link auth flow)
-// This will be implemented when we build the website
 chrome.runtime.onMessageExternal.addListener(
   (message, sender, sendResponse) => {
-    // Handle messages from safeplay.app for auth
     if (sender.origin === 'https://safeplay.app') {
       if (message.type === 'AUTH_TOKEN') {
-        // Store the auth token
         import('../utils/storage').then(({ setAuthToken, setUserId, setSubscriptionTier }) => {
           Promise.all([
             setAuthToken(message.token),
