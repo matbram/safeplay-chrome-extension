@@ -19,9 +19,9 @@ class SafePlayContentScript {
   private currentVideoId: string | null = null;
 
   constructor() {
-    // Initialize resilient injector
+    // Initialize resilient injector for video watch page
     this.injector = new ResilientInjector({
-      onButtonClick: (youtubeId, container) => this.onFilterButtonClick(youtubeId, container),
+      onButtonClick: (youtubeId) => this.onFilterButtonClick(youtubeId),
       debug: DEBUG,
     });
 
@@ -38,10 +38,10 @@ class SafePlayContentScript {
     // Load user preferences
     await this.loadPreferences();
 
-    // Start injector for thumbnail buttons
+    // Start injector - it handles watch page detection internally
     this.injector.start();
 
-    // Check if we're on a watch page
+    // Check if we're on a watch page and auto-filter if enabled
     if (this.isWatchPage()) {
       await this.handleWatchPage();
     }
@@ -90,18 +90,22 @@ class SafePlayContentScript {
 
     // Create player controls
     this.injectPlayerControls();
-
-    // Auto-filter if enabled
-    if (this.preferences.enabled) {
-      await this.startFiltering(videoId);
-    }
   }
 
   private async startFiltering(videoId: string): Promise<void> {
     if (!this.videoController) return;
 
-    await this.videoController.initialize(videoId, this.preferences);
-    await this.videoController.applyFilter();
+    // Update button state to loading
+    this.injector.updateButtonState('loading', 'Loading...');
+
+    try {
+      await this.videoController.initialize(videoId, this.preferences);
+      await this.videoController.applyFilter();
+      this.injector.updateButtonState('active', 'Filtering');
+    } catch (error) {
+      log('Failed to start filtering:', error);
+      this.injector.updateButtonState('error', 'Error');
+    }
   }
 
   private injectPlayerControls(): void {
@@ -162,6 +166,7 @@ class SafePlayContentScript {
 
     if (state.status === 'active') {
       this.videoController.stop();
+      this.injector.updateButtonState('idle');
     } else if (this.currentVideoId) {
       await this.startFiltering(this.currentVideoId);
     }
@@ -169,23 +174,27 @@ class SafePlayContentScript {
     this.updatePlayerButtonState();
   }
 
-  private onFilterButtonClick(youtubeId: string, container: HTMLElement): void {
+  private onFilterButtonClick(youtubeId: string): void {
     log('Filter button clicked for:', youtubeId);
 
-    // Update button to show loading state
-    const button = container.querySelector('.safeplay-filter-btn');
-    if (button) {
-      button.classList.add('safeplay-loading');
-    }
-
-    // Navigate to the video with filter enabled
-    // For now, just navigate - filtering will auto-start on watch page
-    window.location.href = `https://www.youtube.com/watch?v=${youtubeId}`;
+    // Start filtering for this video
+    this.startFiltering(youtubeId);
   }
 
   private onVideoStateChange(state: ReturnType<VideoController['getState']>): void {
     log('Video state changed:', state);
     this.updatePlayerButtonState();
+
+    // Update the SafePlay button based on state
+    if (state.status === 'active') {
+      this.injector.updateButtonState('active', 'Filtering');
+    } else if (state.status === 'error') {
+      this.injector.updateButtonState('error', 'Error');
+    } else if (state.status === 'loading') {
+      this.injector.updateButtonState('loading', 'Loading...');
+    } else {
+      this.injector.updateButtonState('idle');
+    }
 
     // Notify popup of state change
     chrome.runtime.sendMessage({
@@ -261,18 +270,14 @@ class SafePlayContentScript {
       this.videoController.stop();
     }
 
-    // Re-inject buttons
-    setTimeout(() => {
-      this.injector.injectButtons();
-    }, 500);
+    // Reset current video
+    this.currentVideoId = null;
 
     // Check if on watch page
     if (this.isWatchPage()) {
       setTimeout(() => {
         this.handleWatchPage();
-      }, 1000);
-    } else {
-      this.currentVideoId = null;
+      }, 500);
     }
   }
 }

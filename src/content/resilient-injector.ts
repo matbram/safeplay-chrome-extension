@@ -1,26 +1,21 @@
-// Resilient YouTube Button Injector for SafePlay
-// Based on pattern recognition rather than brittle class selectors
+// SafePlay Video Page Button Injector
+// Injects the SafePlay button next to the Subscribe button on YouTube watch pages
 
 export interface InjectorOptions {
-  onButtonClick: (youtubeId: string, container: HTMLElement) => void;
+  onButtonClick: (youtubeId: string) => void;
   debug?: boolean;
 }
 
-interface DetectedContainer {
-  element: HTMLElement;
-  youtubeId: string;
-  thumbnail: HTMLElement | null;
-}
-
 const PROCESSED_ATTR = 'data-safeplay-processed';
-const BUTTON_CLASS = 'safeplay-filter-btn';
+const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
 
 export class ResilientInjector {
   private options: InjectorOptions;
   private observer: MutationObserver | null = null;
-  private intersectionObserver: IntersectionObserver | null = null;
-  private debounceTimer: number | null = null;
-  private processedContainers = new WeakSet<HTMLElement>();
+  private currentVideoId: string | null = null;
+  private injectionAttempts = 0;
+  private maxAttempts = 50;
+  private retryInterval: number | null = null;
 
   constructor(options: InjectorOptions) {
     this.options = options;
@@ -28,16 +23,18 @@ export class ResilientInjector {
 
   // Start observing and injecting
   start(): void {
-    this.log('Starting resilient injector');
+    this.log('Starting video page injector');
 
-    // Initial injection
-    this.injectButtons();
+    // Only run on watch pages
+    if (!this.isWatchPage()) {
+      this.log('Not a watch page, waiting for navigation');
+    }
 
-    // Set up mutation observer for dynamic content
+    // Initial injection attempt
+    this.attemptInjection();
+
+    // Set up mutation observer for SPA navigation
     this.setupMutationObserver();
-
-    // Set up intersection observer for lazy-loaded content
-    this.setupIntersectionObserver();
 
     // Listen for YouTube SPA navigation
     this.setupNavigationListener();
@@ -50,308 +47,239 @@ export class ResilientInjector {
       this.observer = null;
     }
 
-    if (this.intersectionObserver) {
-      this.intersectionObserver.disconnect();
-      this.intersectionObserver = null;
+    if (this.retryInterval !== null) {
+      clearInterval(this.retryInterval);
+      this.retryInterval = null;
     }
 
-    this.log('Stopped resilient injector');
+    this.log('Stopped video page injector');
+  }
+
+  private isWatchPage(): boolean {
+    return window.location.pathname === '/watch' &&
+           window.location.search.includes('v=');
+  }
+
+  private getVideoId(): string | null {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('v');
   }
 
   // Main injection function
-  injectButtons(): void {
-    const containers = this.detectVideoContainers();
-    this.log(`Found ${containers.length} video containers`);
-
-    for (const container of containers) {
-      this.injectButton(container);
+  private attemptInjection(): void {
+    if (!this.isWatchPage()) {
+      return;
     }
-  }
 
-  // Detect video containers using multiple strategies
-  private detectVideoContainers(): DetectedContainer[] {
-    const containers: DetectedContainer[] = [];
-    const seen = new Set<HTMLElement>();
+    const videoId = this.getVideoId();
+    if (!videoId) {
+      this.log('No video ID found');
+      return;
+    }
 
-    // Strategy 1: Find by video link pattern
-    const videoLinks = document.querySelectorAll<HTMLAnchorElement>(
-      'a[href*="/watch?v="], a[href*="/shorts/"]'
-    );
+    // Check if already injected for this video
+    if (this.currentVideoId === videoId && this.isButtonPresent()) {
+      this.log('Button already present for this video');
+      return;
+    }
 
-    for (const link of videoLinks) {
-      const youtubeId = this.extractYoutubeId(link.href);
-      if (!youtubeId) continue;
+    // Try to find the subscribe button container
+    const subscribeButton = this.findSubscribeButton();
 
-      const container = this.findContainerFromLink(link);
-      if (container && !seen.has(container) && !this.isProcessed(container)) {
-        seen.add(container);
-        containers.push({
-          element: container,
-          youtubeId,
-          thumbnail: this.findThumbnail(container),
-        });
+    if (subscribeButton) {
+      this.injectButton(subscribeButton, videoId);
+      this.currentVideoId = videoId;
+      this.injectionAttempts = 0;
+      if (this.retryInterval !== null) {
+        clearInterval(this.retryInterval);
+        this.retryInterval = null;
+      }
+    } else {
+      this.injectionAttempts++;
+      this.log(`Subscribe button not found, attempt ${this.injectionAttempts}/${this.maxAttempts}`);
+
+      // Retry with exponential backoff
+      if (this.injectionAttempts < this.maxAttempts && this.retryInterval === null) {
+        this.retryInterval = window.setInterval(() => {
+          this.attemptInjection();
+        }, 200);
       }
     }
-
-    // Strategy 2: Find by thumbnail image pattern
-    const thumbnails = document.querySelectorAll<HTMLImageElement>(
-      'img[src*="ytimg.com"], img[src*="i.ytimg.com"]'
-    );
-
-    for (const img of thumbnails) {
-      const container = this.findContainerFromThumbnail(img);
-      if (!container || seen.has(container) || this.isProcessed(container)) continue;
-
-      const link = container.querySelector<HTMLAnchorElement>('a[href*="/watch?v="], a[href*="/shorts/"]');
-      const youtubeId = link ? this.extractYoutubeId(link.href) : null;
-      if (!youtubeId) continue;
-
-      seen.add(container);
-      containers.push({
-        element: container,
-        youtubeId,
-        thumbnail: img.closest('[class*="thumbnail"]') as HTMLElement || img.parentElement,
-      });
-    }
-
-    return containers;
   }
 
-  // Extract YouTube video ID from URL
-  private extractYoutubeId(url: string): string | null {
-    // Handle /watch?v= format
-    const watchMatch = url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-    if (watchMatch) return watchMatch[1];
+  private findSubscribeButton(): HTMLElement | null {
+    // Primary selector: the subscribe button container in watch metadata
+    const selectors = [
+      '#subscribe-button.ytd-watch-metadata',
+      'ytd-watch-metadata #subscribe-button',
+      '#owner #subscribe-button',
+      '#subscribe-button',
+    ];
 
-    // Handle /shorts/ format
-    const shortsMatch = url.match(/\/shorts\/([a-zA-Z0-9_-]{11})/);
-    if (shortsMatch) return shortsMatch[1];
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (element) {
+        this.log(`Found subscribe button with selector: ${selector}`);
+        return element;
+      }
+    }
 
     return null;
   }
 
-  // Find the container element from a video link
-  private findContainerFromLink(link: HTMLAnchorElement): HTMLElement | null {
-    // Walk up the DOM to find a suitable container
-    let element: HTMLElement | null = link;
-    let lastValidContainer: HTMLElement | null = null;
+  private isButtonPresent(): boolean {
+    return document.querySelector(`.${BUTTON_CONTAINER_CLASS}`) !== null;
+  }
 
-    while (element && element !== document.body) {
-      // Check for common container patterns
-      if (this.looksLikeVideoContainer(element)) {
-        lastValidContainer = element;
-      }
-
-      // Stop if we've gone too far up
-      if (this.isTooHighInDOM(element)) {
-        break;
-      }
-
-      element = element.parentElement;
+  private injectButton(subscribeButton: HTMLElement, videoId: string): void {
+    // Remove any existing SafePlay button
+    const existingButton = document.querySelector(`.${BUTTON_CONTAINER_CLASS}`);
+    if (existingButton) {
+      existingButton.remove();
     }
 
-    return lastValidContainer;
-  }
+    // Create button container
+    const container = document.createElement('div');
+    container.className = `${BUTTON_CONTAINER_CLASS} style-scope ytd-watch-metadata`;
+    container.style.cssText = 'display: inline-block; margin-left: 8px;';
+    container.setAttribute(PROCESSED_ATTR, 'true');
 
-  // Find container from a thumbnail image
-  private findContainerFromThumbnail(img: HTMLImageElement): HTMLElement | null {
-    let element: HTMLElement | null = img;
-    let lastValidContainer: HTMLElement | null = null;
-
-    while (element && element !== document.body) {
-      if (this.looksLikeVideoContainer(element)) {
-        lastValidContainer = element;
-      }
-
-      if (this.isTooHighInDOM(element)) {
-        break;
-      }
-
-      element = element.parentElement;
-    }
-
-    return lastValidContainer;
-  }
-
-  // Check if an element looks like a video container
-  private looksLikeVideoContainer(element: HTMLElement): boolean {
-    const rect = element.getBoundingClientRect();
-
-    // Must have reasonable dimensions
-    if (rect.width < 100 || rect.height < 80) return false;
-
-    // Check for video-related attributes/classes
-    const className = element.className.toLowerCase();
-    const tagName = element.tagName.toLowerCase();
-
-    // Common YouTube container patterns
-    const containerPatterns = [
-      'video', 'item', 'renderer', 'content', 'card', 'tile', 'entry'
-    ];
-
-    const hasContainerPattern = containerPatterns.some(
-      (pattern) => className.includes(pattern) || tagName.includes(pattern)
-    );
-
-    // Must contain both a link and an image
-    const hasLink = element.querySelector('a[href*="/watch"], a[href*="/shorts"]') !== null;
-    const hasImage = element.querySelector('img[src*="ytimg.com"]') !== null;
-
-    return hasContainerPattern || (hasLink && hasImage);
-  }
-
-  // Check if we've gone too high in the DOM tree
-  private isTooHighInDOM(element: HTMLElement): boolean {
-    const className = element.className.toLowerCase();
-    const id = element.id.toLowerCase();
-
-    const stopPatterns = [
-      'page', 'content', 'main', 'body', 'app', 'root',
-      'feed', 'browse', 'results', 'grid', 'list'
-    ];
-
-    return stopPatterns.some(
-      (pattern) => className.includes(pattern) || id.includes(pattern)
-    );
-  }
-
-  // Find thumbnail element within container
-  private findThumbnail(container: HTMLElement): HTMLElement | null {
-    // Look for thumbnail wrapper
-    const thumbnailSelectors = [
-      '[class*="thumbnail"]',
-      '[id*="thumbnail"]',
-      'ytd-thumbnail',
-      '.ytd-thumbnail',
-    ];
-
-    for (const selector of thumbnailSelectors) {
-      const thumb = container.querySelector<HTMLElement>(selector);
-      if (thumb) return thumb;
-    }
-
-    // Fallback: find the element containing the img
-    const img = container.querySelector<HTMLImageElement>('img[src*="ytimg.com"]');
-    return img?.parentElement || null;
-  }
-
-  // Check if container is already processed
-  private isProcessed(container: HTMLElement): boolean {
-    return (
-      this.processedContainers.has(container) ||
-      container.hasAttribute(PROCESSED_ATTR) ||
-      container.querySelector(`.${BUTTON_CLASS}`) !== null
-    );
-  }
-
-  // Inject button into a container
-  private injectButton(detected: DetectedContainer): void {
-    if (this.isProcessed(detected.element)) return;
-
-    // Mark as processed
-    detected.element.setAttribute(PROCESSED_ATTR, 'true');
-    this.processedContainers.add(detected.element);
-
-    // Create button
-    const button = this.createButton(detected.youtubeId);
-
-    // Find injection point (prefer after thumbnail)
-    const injectionPoint = detected.thumbnail || detected.element.firstElementChild;
-
-    if (injectionPoint) {
-      injectionPoint.parentElement?.insertBefore(
-        button,
-        injectionPoint.nextSibling
-      );
-    } else {
-      detected.element.appendChild(button);
-    }
-
-    this.log(`Injected button for video: ${detected.youtubeId}`);
-  }
-
-  // Create the SafePlay button element
-  private createButton(youtubeId: string): HTMLElement {
+    // Create the button matching YouTube's style
     const button = document.createElement('button');
-    button.className = BUTTON_CLASS;
-    button.setAttribute('data-youtube-id', youtubeId);
-    button.innerHTML = `
-      <svg class="safeplay-icon" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-      </svg>
-      <span class="safeplay-text">SafePlay</span>
+    button.className = 'yt-spec-button-shape-next yt-spec-button-shape-next--tonal yt-spec-button-shape-next--mono yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading yt-spec-button-shape-next--enable-backdrop-filter-experiment';
+    button.title = 'Filter profanity with SafePlay';
+    button.setAttribute('aria-label', 'SafePlay Filter');
+    button.style.cssText = `
+      border: 1px solid var(--yt-spec-outline);
+      background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+      color: #ffffff;
+      border-radius: 18px;
+      padding: 0 16px;
+      height: 36px;
+      font-family: "Roboto", "Arial", sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      min-width: 110px;
+      box-shadow: 0 1px 3px rgba(76, 175, 80, 0.3);
     `;
 
+    // Add icon
+    const iconWrapper = document.createElement('div');
+    iconWrapper.style.cssText = 'display: inline-block; width: 20px; height: 20px; vertical-align: middle; flex-shrink: 0;';
+    iconWrapper.innerHTML = `
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+      </svg>
+    `;
+
+    // Add text
+    const textSpan = document.createElement('span');
+    textSpan.style.cssText = 'color: currentColor; font-size: 14px; font-weight: 500; line-height: 1;';
+    textSpan.textContent = 'SafePlay';
+
+    button.appendChild(iconWrapper);
+    button.appendChild(textSpan);
+
+    // Add hover effects
+    button.addEventListener('mouseenter', () => {
+      button.style.background = 'linear-gradient(135deg, #45a049 0%, #3d8b40 100%)';
+      button.style.boxShadow = '0 2px 6px rgba(76, 175, 80, 0.4)';
+      button.style.transform = 'translateY(-1px)';
+    });
+
+    button.addEventListener('mouseleave', () => {
+      button.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
+      button.style.boxShadow = '0 1px 3px rgba(76, 175, 80, 0.3)';
+      button.style.transform = 'translateY(0)';
+    });
+
+    // Add click handler
     button.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-
-      const container = button.closest(`[${PROCESSED_ATTR}]`) as HTMLElement;
-      this.options.onButtonClick(youtubeId, container);
+      this.options.onButtonClick(videoId);
     });
 
-    return button;
+    container.appendChild(button);
+
+    // Insert after subscribe button
+    subscribeButton.parentElement?.insertBefore(container, subscribeButton.nextSibling);
+
+    this.log(`Injected SafePlay button for video: ${videoId}`);
   }
 
-  // Set up mutation observer for dynamic content
+  // Update button state (loading, active, error)
+  updateButtonState(state: 'idle' | 'loading' | 'active' | 'error', message?: string): void {
+    const container = document.querySelector(`.${BUTTON_CONTAINER_CLASS}`);
+    if (!container) return;
+
+    const button = container.querySelector('button');
+    const textSpan = container.querySelector('span');
+    if (!button || !textSpan) return;
+
+    switch (state) {
+      case 'loading':
+        button.style.background = 'linear-gradient(135deg, #888 0%, #666 100%)';
+        button.style.cursor = 'wait';
+        textSpan.textContent = message || 'Loading...';
+        break;
+
+      case 'active':
+        button.style.background = 'linear-gradient(135deg, #2196F3 0%, #1976D2 100%)';
+        button.style.boxShadow = '0 1px 3px rgba(33, 150, 243, 0.3)';
+        button.style.cursor = 'pointer';
+        textSpan.textContent = message || 'Filtering';
+        break;
+
+      case 'error':
+        button.style.background = 'linear-gradient(135deg, #f44336 0%, #d32f2f 100%)';
+        button.style.boxShadow = '0 1px 3px rgba(244, 67, 54, 0.3)';
+        button.style.cursor = 'pointer';
+        textSpan.textContent = message || 'Error';
+        break;
+
+      case 'idle':
+      default:
+        button.style.background = 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)';
+        button.style.boxShadow = '0 1px 3px rgba(76, 175, 80, 0.3)';
+        button.style.cursor = 'pointer';
+        textSpan.textContent = 'SafePlay';
+        break;
+    }
+  }
+
+  // Set up mutation observer for dynamic content changes
   private setupMutationObserver(): void {
     this.observer = new MutationObserver((mutations) => {
-      let shouldInject = false;
-
+      // Check if we need to re-inject (e.g., after YouTube updates the page)
       for (const mutation of mutations) {
-        if (mutation.addedNodes.length > 0) {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+          // Check if subscribe button area was modified
           for (const node of mutation.addedNodes) {
             if (node instanceof HTMLElement) {
-              // Check if the added node or its children might contain videos
-              if (
-                node.querySelector?.('a[href*="/watch"], a[href*="/shorts"]') ||
-                node.querySelector?.('img[src*="ytimg.com"]')
-              ) {
-                shouldInject = true;
-                break;
+              if (node.id === 'subscribe-button' ||
+                  node.querySelector?.('#subscribe-button') ||
+                  node.closest?.('ytd-watch-metadata')) {
+                this.log('Subscribe button area changed, re-injecting');
+                this.attemptInjection();
+                return;
               }
             }
           }
         }
-
-        if (shouldInject) break;
-      }
-
-      if (shouldInject) {
-        this.debouncedInject();
       }
     });
 
     this.observer.observe(document.body, {
       childList: true,
       subtree: true,
-    });
-  }
-
-  // Set up intersection observer for lazy loading
-  private setupIntersectionObserver(): void {
-    this.intersectionObserver = new IntersectionObserver(
-      (entries) => {
-        const hasVisibleUnprocessed = entries.some(
-          (entry) =>
-            entry.isIntersecting &&
-            !this.isProcessed(entry.target as HTMLElement)
-        );
-
-        if (hasVisibleUnprocessed) {
-          this.debouncedInject();
-        }
-      },
-      { rootMargin: '200px' }
-    );
-
-    // Observe potential video containers
-    const containers = document.querySelectorAll<HTMLElement>(
-      'ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer'
-    );
-
-    containers.forEach((container) => {
-      this.intersectionObserver?.observe(container);
     });
   }
 
@@ -375,28 +303,32 @@ export class ResilientInjector {
       this.onNavigation();
     });
 
-    // Also listen for YouTube's custom navigation event
+    // YouTube's custom navigation event
     document.addEventListener('yt-navigate-finish', () => {
+      this.onNavigation();
+    });
+
+    // Also handle yt-page-data-updated for video changes within watch page
+    document.addEventListener('yt-page-data-updated', () => {
+      this.log('Page data updated');
       this.onNavigation();
     });
   }
 
   private onNavigation(): void {
-    this.log('Navigation detected, re-injecting buttons');
-    // Wait for DOM to update
-    setTimeout(() => this.injectButtons(), 500);
-  }
+    this.log('Navigation detected');
+    this.currentVideoId = null;
+    this.injectionAttempts = 0;
 
-  // Debounced injection to prevent excessive processing
-  private debouncedInject(): void {
-    if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
+    if (this.retryInterval !== null) {
+      clearInterval(this.retryInterval);
+      this.retryInterval = null;
     }
 
-    this.debounceTimer = window.setTimeout(() => {
-      this.injectButtons();
-      this.debounceTimer = null;
-    }, 100);
+    // Wait for DOM to update
+    setTimeout(() => {
+      this.attemptInjection();
+    }, 300);
   }
 
   // Debug logging
