@@ -116,9 +116,9 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   },
   customBlacklist: [],
   customWhitelist: [],
-  paddingMs: 150, // Increased for better coverage
-  paddingBeforeMs: 200, // Extra padding before word starts
-  paddingAfterMs: 100, // Padding after word ends
+  paddingMs: 100, // Legacy/fallback symmetric padding
+  paddingBeforeMs: 150, // Padding before word starts (catches attack)
+  paddingAfterMs: 50, // Padding after word ends (tighter to avoid cutting next word)
   mergeThresholdMs: 100,
 };
 
