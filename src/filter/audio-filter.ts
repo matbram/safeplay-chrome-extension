@@ -1,8 +1,8 @@
 import { MuteInterval, FilterMode } from '../types';
 
 // Fade duration in seconds for smooth transitions
-const FADE_DURATION = 0.04; // 40ms fade - fast but smooth
-const FADE_BUFFER = 0.05; // 50ms - start fading before interval begins
+const FADE_DURATION = 0.05; // 50ms fade - fast but smooth
+const FADE_BUFFER = 0.08; // 80ms - start fading before interval begins
 
 export class AudioFilter {
   private video: HTMLVideoElement | null = null;

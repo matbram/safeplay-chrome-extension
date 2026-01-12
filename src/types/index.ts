@@ -117,8 +117,8 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   customBlacklist: [],
   customWhitelist: [],
   paddingMs: 50, // Legacy/fallback symmetric padding
-  paddingBeforeMs: 75, // Reduced - smooth fade adds ~90ms effective lead time
-  paddingAfterMs: 25, // Reduced - fade-in handles smooth transition
+  paddingBeforeMs: 100, // Padding before word - smooth fade adds ~130ms effective lead time
+  paddingAfterMs: 30, // Padding after word ends
   mergeThresholdMs: 100,
 };
 

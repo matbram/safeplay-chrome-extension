@@ -18,6 +18,7 @@ class SafePlayContentScript {
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private currentVideoId: string | null = null;
   private isProcessing = false;
+  private videoWasPlaying = false; // Track if video was playing before we paused it
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -83,6 +84,14 @@ class SafePlayContentScript {
     this.injector.updateButtonState(stateInfo);
   }
 
+  // Get the video element
+  private getVideoElement(): HTMLVideoElement | null {
+    return document.querySelector('video.html5-main-video') ||
+           document.querySelector('video.video-stream') ||
+           document.querySelector('#movie_player video') ||
+           document.querySelector('video');
+  }
+
   // Main filter flow - called when SafePlay button is clicked
   private async onFilterButtonClick(youtubeId: string): Promise<void> {
     if (this.isProcessing) {
@@ -93,6 +102,14 @@ class SafePlayContentScript {
     log('Filter button clicked for:', youtubeId);
     this.isProcessing = true;
     this.currentVideoId = youtubeId;
+
+    // Pause video while we load the filter to prevent hearing profanity
+    const video = this.getVideoElement();
+    this.videoWasPlaying = !!(video && !video.paused);
+    if (video && this.videoWasPlaying) {
+      video.pause();
+      log('Video paused while loading filter');
+    }
 
     try {
       // Step 1: Connecting
@@ -130,6 +147,15 @@ class SafePlayContentScript {
         text: 'Error',
         error: errorMessage,
       });
+      // Resume video on error
+      if (this.videoWasPlaying) {
+        const video = this.getVideoElement();
+        if (video) {
+          video.play();
+          log('Video resumed after error');
+        }
+        this.videoWasPlaying = false;
+      }
       this.isProcessing = false;
     }
   }
@@ -274,10 +300,29 @@ class SafePlayContentScript {
 
       log(`Filter applied successfully. ${intervalCount} profanity instances will be muted.`);
 
+      // Resume video if it was playing before
+      if (this.videoWasPlaying) {
+        const video = this.getVideoElement();
+        if (video) {
+          video.play();
+          log('Video resumed after filter applied');
+        }
+        this.videoWasPlaying = false;
+      }
+
       // Create player controls for toggling
       this.injectPlayerControls();
     } catch (error) {
       log('Failed to apply filter:', error);
+      // Resume video even on error
+      if (this.videoWasPlaying) {
+        const video = this.getVideoElement();
+        if (video) {
+          video.play();
+          log('Video resumed after filter error');
+        }
+        this.videoWasPlaying = false;
+      }
       throw error;
     } finally {
       this.isProcessing = false;
