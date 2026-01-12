@@ -17,12 +17,13 @@ import {
 } from '../utils/storage';
 import { requestFilter, checkJobStatus } from '../api/client';
 
-const DEBUG = true;
-
 function log(...args: unknown[]): void {
-  if (DEBUG) {
-    console.log('[SafePlay BG]', ...args);
-  }
+  // Always log for debugging
+  console.log('[SafePlay BG]', ...args);
+}
+
+function logError(...args: unknown[]): void {
+  console.error('[SafePlay BG ERROR]', ...args);
 }
 
 // Message handler
@@ -76,23 +77,28 @@ async function handleGetFilter(
   payload: { youtubeId: string }
 ): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string }>> {
   const { youtubeId } = payload;
+  log('handleGetFilter called with youtubeId:', youtubeId);
 
   // Check local cache first
   const cached = await getCachedTranscript(youtubeId);
   if (cached) {
-    log('Returning cached transcript for:', youtubeId);
+    log('Found in local cache, returning cached transcript');
     return {
       success: true,
       data: { status: 'cached', transcript: cached },
     };
   }
 
+  log('Not in local cache, making API request...');
+
   try {
     // Make initial request to API
+    log('Calling requestFilter API...');
     const response = await requestFilter(youtubeId);
+    log('API response:', JSON.stringify(response).substring(0, 200));
 
     if (response.status === 'cached' && response.transcript) {
-      // API had it cached - save locally and return
+      log('API returned cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
       return {
         success: true,
@@ -101,15 +107,17 @@ async function handleGetFilter(
     }
 
     if (response.status === 'processing' && response.job_id) {
-      // Processing started - return job ID for polling
+      log('API returned processing status, job_id:', response.job_id);
       return {
         success: true,
         data: { status: 'processing', jobId: response.job_id },
       };
     }
 
-    return { success: false, error: 'Unexpected API response' };
+    logError('Unexpected API response:', response);
+    return { success: false, error: 'Unexpected API response: ' + JSON.stringify(response) };
   } catch (error) {
+    logError('handleGetFilter error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to request filter';
     return { success: false, error: errorMessage };
   }
@@ -120,17 +128,22 @@ async function handleCheckJob(
   payload: { jobId: string }
 ): Promise<MessageResponse<JobStatusResponse>> {
   const { jobId } = payload;
+  log('handleCheckJob called with jobId:', jobId);
 
   try {
+    log('Calling checkJobStatus API...');
     const status = await checkJobStatus(jobId);
+    log('Job status response:', JSON.stringify(status).substring(0, 300));
 
     // If completed, cache the transcript
     if (status.status === 'completed' && status.transcript) {
+      log('Job completed, caching transcript for:', status.transcript.youtube_id);
       await setCachedTranscript(status.transcript.youtube_id, status.transcript);
     }
 
     return { success: true, data: status };
   } catch (error) {
+    logError('handleCheckJob error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to check job status';
     return { success: false, error: errorMessage };
   }
