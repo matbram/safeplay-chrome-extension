@@ -240,6 +240,19 @@ class SafePlayContentScript {
       throw new Error('No video ID');
     }
 
+    // Log transcript structure to verify character-level data
+    log('Transcript received for filtering:', {
+      id: transcript.id,
+      segmentCount: transcript.segments?.length,
+      sampleSegment: transcript.segments?.[0] ? {
+        text: transcript.segments[0].text,
+        times: `${transcript.segments[0].start_time}s - ${transcript.segments[0].end_time}s`,
+        hasCharacters: !!transcript.segments[0].characters,
+        charCount: transcript.segments[0].characters?.length,
+        sampleChars: transcript.segments[0].characters?.slice(0, 3),
+      } : null,
+    });
+
     try {
       // Initialize video controller with transcript
       await this.videoController.initialize(videoId, this.preferences);
