@@ -1,7 +1,10 @@
 import { FilterResponse, JobStatusResponse, Transcript } from '../types';
 import { getAuthToken } from '../utils/storage';
 
-const API_BASE_URL = 'https://api.safeplay.app';
+// API URL - change this to your local orchestrator URL for development
+// Production: https://api.safeplay.app
+// Local: http://localhost:3001
+const API_BASE_URL = 'http://localhost:3001';
 
 // Verbose logging
 function logApi(...args: unknown[]): void {
