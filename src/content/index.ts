@@ -1,6 +1,7 @@
 // SafePlay Content Script - Main Entry Point
 import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
+import { SmoothProgressAnimator } from './smooth-progress';
 import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo } from '../types';
 import './styles.css';
 
@@ -19,6 +20,7 @@ class SafePlayContentScript {
   private currentVideoId: string | null = null;
   private isProcessing = false;
   private videoWasPlaying = false; // Track if video was playing before we paused it
+  private progressAnimator: SmoothProgressAnimator | null = null;
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -166,6 +168,19 @@ class SafePlayContentScript {
     const pollInterval = 2000;
     let attempts = 0;
 
+    // Initialize smooth progress animator
+    this.progressAnimator = new SmoothProgressAnimator(
+      (progress, text) => {
+        this.updateButtonState({
+          state: 'processing',
+          text,
+          progress,
+        });
+      },
+      'Analyzing'
+    );
+    this.progressAnimator.start();
+
     while (attempts < maxAttempts) {
       try {
         const response = await chrome.runtime.sendMessage({
@@ -181,37 +196,33 @@ class SafePlayContentScript {
 
         log(`Job status: ${status}, progress: ${progress}%`);
 
-        // Update button based on job status with user-friendly messages
+        // Calculate actual progress and update animator target
         switch (status) {
           case 'pending':
-            this.updateButtonState({
-              state: 'processing',
-              text: 'Starting...',
-              progress: 5,
-            });
+            this.progressAnimator.setTarget(5);
             break;
 
           case 'downloading':
+            // Scale downloading: 0-100% server progress -> 5-30% display
+            this.progressAnimator.setTarget(5 + progress * 0.25);
+            break;
+
           case 'transcribing':
-            // Show generic "Analyzing" with progress percentage
-            // Scale progress: downloading 0-30%, transcribing 30-90%
-            const scaledProgress = status === 'downloading'
-              ? Math.round(progress * 0.3)
-              : Math.round(30 + progress * 0.6);
-            this.updateButtonState({
-              state: 'processing',
-              text: `Analyzing ${scaledProgress}%`,
-              progress: scaledProgress,
-            });
+            // Scale transcribing: 0-100% server progress -> 30-85% display
+            this.progressAnimator.setTarget(30 + progress * 0.55);
             break;
 
           case 'completed':
             if (transcript) {
-              this.updateButtonState({
-                state: 'processing',
-                text: 'Analyzing 95%',
-                progress: 95,
-              });
+              // Signal completion - animator will smoothly reach 100%
+              this.progressAnimator.setTarget(95);
+              // Give a moment for progress to animate up
+              await new Promise((resolve) => setTimeout(resolve, 300));
+              this.progressAnimator.complete();
+              // Wait for animation to finish
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              this.progressAnimator.stop();
+              this.progressAnimator = null;
               await this.applyFilter(transcript);
               return;
             } else {
@@ -223,11 +234,7 @@ class SafePlayContentScript {
 
           default:
             // Generic processing state
-            this.updateButtonState({
-              state: 'processing',
-              text: `Analyzing ${Math.round(progress)}%`,
-              progress,
-            });
+            this.progressAnimator.setTarget(progress);
         }
 
         // Wait before next poll
@@ -235,6 +242,11 @@ class SafePlayContentScript {
         attempts++;
       } catch (error) {
         log('Poll error:', error);
+        // Stop animator on error
+        if (this.progressAnimator) {
+          this.progressAnimator.stop();
+          this.progressAnimator = null;
+        }
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         this.updateButtonState({
           state: 'error',
@@ -246,7 +258,11 @@ class SafePlayContentScript {
       }
     }
 
-    // Timeout
+    // Timeout - stop animator
+    if (this.progressAnimator) {
+      this.progressAnimator.stop();
+      this.progressAnimator = null;
+    }
     this.updateButtonState({
       state: 'error',
       text: 'Timeout',
