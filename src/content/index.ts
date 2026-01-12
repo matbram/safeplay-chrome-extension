@@ -110,8 +110,8 @@ class SafePlayContentScript {
 
       const { status, transcript, jobId } = response.data;
 
-      if (status === 'cached' && transcript) {
-        // Transcript was cached, skip to processing
+      if ((status === 'cached' || status === 'completed') && transcript) {
+        // Transcript was cached (locally or on server), skip to processing
         log('Using cached transcript');
         this.updateButtonState({ state: 'processing', text: 'Processing...' });
         await this.applyFilter(transcript);

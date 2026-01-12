@@ -119,10 +119,10 @@ export class TranscriptParser {
           const endChar = segment.characters[embedded.endIndex - 1];
 
           if (startChar) {
-            startTime = startChar.start_time;
+            startTime = startChar.start;
           }
           if (endChar) {
-            endTime = endChar.end_time;
+            endTime = endChar.end;
           }
         }
 

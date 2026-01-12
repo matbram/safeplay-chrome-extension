@@ -1,9 +1,9 @@
 // API Response Types
 
 export interface CharacterTiming {
-  character: string;
-  start_time: number;
-  end_time: number;
+  char: string;
+  start: number;
+  end: number;
 }
 
 export interface TranscriptSegment {
@@ -14,15 +14,18 @@ export interface TranscriptSegment {
 }
 
 export interface Transcript {
-  youtube_id: string;
+  id: string;
+  youtube_id?: string; // May be set from context
+  full_text?: string;
   segments: TranscriptSegment[];
-  duration: number;
-  language: string;
-  created_at: string;
+  duration?: number;
+  language?: string;
+  created_at?: string;
 }
 
 export interface FilterResponse {
-  status: 'cached' | 'processing';
+  status: 'completed' | 'processing';
+  cached?: boolean;
   transcript?: Transcript;
   job_id?: string;
   message?: string;

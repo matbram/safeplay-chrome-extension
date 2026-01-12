@@ -97,12 +97,12 @@ async function handleGetFilter(
     const response = await requestFilter(youtubeId);
     log('API response:', JSON.stringify(response).substring(0, 200));
 
-    if (response.status === 'cached' && response.transcript) {
-      log('API returned cached transcript, saving locally');
+    if (response.status === 'completed' && response.transcript) {
+      log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
       return {
         success: true,
-        data: { status: 'cached', transcript: response.transcript },
+        data: { status: 'completed', transcript: response.transcript },
       };
     }
 
@@ -137,8 +137,9 @@ async function handleCheckJob(
 
     // If completed, cache the transcript
     if (status.status === 'completed' && status.transcript) {
-      log('Job completed, caching transcript for:', status.transcript.youtube_id);
-      await setCachedTranscript(status.transcript.youtube_id, status.transcript);
+      const cacheKey = status.video?.youtube_id || status.transcript.id;
+      log('Job completed, caching transcript for:', cacheKey);
+      await setCachedTranscript(cacheKey, status.transcript);
     }
 
     return { success: true, data: status };

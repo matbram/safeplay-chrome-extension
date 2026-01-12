@@ -157,8 +157,8 @@ export async function getOrRequestTranscript(
   logApi('=== getOrRequestTranscript ===', youtubeId);
   const response = await requestFilter(youtubeId);
 
-  if (response.status === 'cached' && response.transcript) {
-    logApi('Got cached transcript');
+  if (response.status === 'completed' && response.transcript) {
+    logApi('Got completed/cached transcript');
     return response.transcript;
   }
 
