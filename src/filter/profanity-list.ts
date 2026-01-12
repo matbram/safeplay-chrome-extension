@@ -98,6 +98,190 @@ export const PROFANITY_MAP: Map<string, SeverityLevel> = new Map(
   PROFANITY_LIST.map((item) => [item.word.toLowerCase(), item.severity])
 );
 
+// Safe words that contain profanity substrings but are NOT profane
+// This prevents false positives like "class" (contains "ass"), "hello" (contains "hell")
+export const SAFE_WORDS: Set<string> = new Set([
+  // Words containing "ass"
+  'class', 'classes', 'classic', 'classical', 'classics', 'classify', 'classified',
+  'classification', 'classmate', 'classmates', 'classroom', 'classrooms', 'classy',
+  'grass', 'grassy', 'grassland', 'grasshopper',
+  'pass', 'passed', 'passes', 'passing', 'passable', 'passage', 'passages',
+  'passenger', 'passengers', 'passport', 'passports', 'password', 'passwords',
+  'bypass', 'bypassed', 'bypasses', 'bypassing',
+  'compass', 'compasses',
+  'bass', 'bassist', 'bassline',
+  'mass', 'masses', 'massive', 'massively', 'massacre',
+  'brass', 'brassy',
+  'glass', 'glasses', 'glassy', 'glassware',
+  'sass', 'sassy', 'sassafras',
+  'lass', 'lassie', 'lasso',
+  'cassette', 'cassettes', 'casserole',
+  'assassin', 'assassins', 'assassinate', 'assassination',
+  'embassy', 'embassies', 'ambassador', 'ambassadors',
+  'harass', 'harassed', 'harassing', 'harassment',
+  'amass', 'amassed', 'amassing',
+  'morass',
+  'trespass', 'trespassed', 'trespassing', 'trespasser',
+  'carcass', 'carcasses',
+  'canvas', 'canvases', 'canvass', 'canvassed',
+  'molasses',
+  'assume', 'assumed', 'assumes', 'assuming', 'assumption', 'assumptions',
+  'assure', 'assured', 'assures', 'assuring', 'assurance',
+  'assess', 'assessed', 'assesses', 'assessing', 'assessment', 'assessments',
+  'asset', 'assets',
+  'assign', 'assigned', 'assigns', 'assigning', 'assignment', 'assignments',
+  'assist', 'assisted', 'assists', 'assisting', 'assistant', 'assistants', 'assistance',
+  'associate', 'associated', 'associates', 'associating', 'association', 'associations',
+  'assort', 'assorted', 'assortment',
+
+  // Words containing "hell"
+  'hello', 'hellos',
+  'shell', 'shells', 'shelled', 'shelling', 'shellfish', 'bombshell',
+  'nutshell', 'eggshell', 'seashell', 'clamshell',
+  'dwell', 'dwells', 'dwelled', 'dwelling', 'dwellings',
+  'swell', 'swells', 'swelled', 'swelling', 'swollen',
+  'well', 'wells', 'wellness', 'farewell', 'stairwell',
+  'spell', 'spells', 'spelled', 'spelling', 'misspell', 'misspelled',
+  'smell', 'smells', 'smelled', 'smelling', 'smelly',
+  'bell', 'bells', 'doorbell', 'bellhop', 'bluebell', 'dumbbell', 'barbell',
+  'cell', 'cells', 'cellular', 'cellar', 'cellars',
+  'fell', 'fella', 'fellas', 'fellow', 'fellows', 'fellowship',
+  'jell', 'jelly', 'jellyfish',
+  'tell', 'tells', 'telling', 'teller', 'storytelling', 'foretell',
+  'sell', 'sells', 'selling', 'seller', 'sellers', 'bestseller', 'bestselling',
+  'yell', 'yells', 'yelled', 'yelling',
+  'propel', 'propelled', 'propeller', 'propelling',
+  'excel', 'excels', 'excelled', 'excelling', 'excellent', 'excellence',
+  'expel', 'expels', 'expelled', 'expelling',
+  'compel', 'compels', 'compelled', 'compelling',
+  'repel', 'repels', 'repelled', 'repelling', 'repellent',
+  'rebellion', 'rebellious', 'rebel', 'rebels', 'rebelled',
+  'hellenic', 'hellenistic',
+
+  // Words containing "damn"
+  'goddamn', // This IS profanity, but "adam" is not
+  'amsterdam',
+  'macadam', 'madame', 'madam',
+
+  // Words containing "cock"
+  'peacock', 'peacocks',
+  'cockpit', 'cockpits',
+  'cocktail', 'cocktails',
+  'cockatoo', 'cockatoos',
+  'cockerel',
+  'hancock', 'hitchcock', 'babcock', 'woodcock',
+  'stopcock', 'weathercock',
+
+  // Words containing "dick"
+  'dickens',
+  'benedict', 'benediction',
+  'predict', 'predicts', 'predicted', 'predicting', 'prediction', 'predictions',
+  'addict', 'addicts', 'addicted', 'addicting', 'addiction', 'addictions', 'addictive',
+  'verdict', 'verdicts',
+  'indict', 'indicts', 'indicted', 'indicting', 'indictment',
+  'contradict', 'contradicts', 'contradicted', 'contradicting', 'contradiction',
+  'dictionary', 'dictionaries', 'diction',
+  'dictate', 'dictates', 'dictated', 'dictating', 'dictation', 'dictator',
+  'edict', 'edicts',
+  'jurisdiction',
+
+  // Words containing "crap"
+  'scrap', 'scraps', 'scrapped', 'scrapping', 'scrappy', 'scrapbook', 'scrapyard',
+
+  // Words containing "piss"
+  'mississippi',
+
+  // Words containing "tit"
+  'title', 'titles', 'titled', 'titling', 'subtitle', 'subtitles', 'subtitled',
+  'entitle', 'entitled', 'entitles', 'entitling', 'entitlement',
+  'constitution', 'constitutional', 'constitutions',
+  'institution', 'institutional', 'institutions',
+  'restitution',
+  'stitute', 'substitute', 'substitutes', 'substituted', 'substitution',
+  'institute', 'institutes', 'instituted', 'institution',
+  'prostitute', 'prostitutes', 'prostitution', // This might be context-dependent
+  'titan', 'titans', 'titanic',
+  'appetite', 'appetites', 'appetizer', 'appetizers',
+  'competition', 'competitions', 'competitive', 'competitor', 'competitors',
+  'petition', 'petitions', 'petitioned', 'petitioning',
+  'repetition', 'repetitions', 'repetitive',
+  'partition', 'partitions', 'partitioned',
+  'quantity', 'quantities', 'quantitative',
+  'identity', 'identities',
+  'entity', 'entities',
+  'utility', 'utilities',
+  'fertility', 'infertility',
+
+  // Words containing "cum"
+  'document', 'documents', 'documented', 'documenting', 'documentation', 'documentary',
+  'circumstance', 'circumstances', 'circumstantial',
+  'circumference',
+  'accumulate', 'accumulated', 'accumulates', 'accumulating', 'accumulation',
+  'cucumber', 'cucumbers',
+  'incumbent',
+  'succumb', 'succumbed', 'succumbing',
+
+  // Words containing "fag"
+  'faggot', // This IS profanity - keeping for reference
+
+  // Words containing "sex" - often legitimate
+  'sextant', 'sextet', 'sextuple',
+
+  // Words containing "ho" / "hoe"
+  'shoe', 'shoes', 'shoed', 'shoeing', 'horseshoe',
+  'hoe', 'hoes', 'hoeing', // gardening tool
+  'whole', 'wholesome', 'wholesale', 'wholly',
+  'honest', 'honestly', 'honesty', 'dishonest',
+  'honor', 'honors', 'honored', 'honoring', 'honorable', 'honorary', 'dishonor',
+  'hope', 'hopes', 'hoped', 'hoping', 'hopeful', 'hopefully', 'hopeless',
+  'home', 'homes', 'homed', 'homing', 'homeless', 'homemade', 'hometown', 'homework',
+  'horse', 'horses', 'horseback', 'horsepower',
+  'hotel', 'hotels',
+  'horizon', 'horizons', 'horizontal',
+  'hour', 'hours', 'hourly',
+  'house', 'houses', 'housed', 'housing', 'household', 'housewife', 'housekeeper',
+
+  // Words containing "nig"
+  'night', 'nights', 'nightly', 'nighttime', 'nightmare', 'nightmares', 'nightclub',
+  'tonight', 'overnight', 'midnight', 'goodnight', 'fortnight',
+  'knight', 'knights', 'knighthood',
+  'ignite', 'ignites', 'ignited', 'igniting', 'ignition',
+  'insignificant', 'significance', 'significant', 'significantly',
+
+  // Words containing "nud"
+  'nude', 'nudes', 'nudity', // Context-dependent, usually fine in art/medical context
+
+  // Words containing "porn"
+  // Most are actually related to pornography, so no safe words here
+
+  // Words containing "anal"
+  'analog', 'analogue', 'analogous', 'analogy', 'analogies',
+  'analysis', 'analyses', 'analyst', 'analysts', 'analytical', 'analyze', 'analyzed',
+  'banal',
+  'canal', 'canals',
+  'final', 'finals', 'finally', 'finalist', 'finalize', 'finalized',
+  'journal', 'journals', 'journalism', 'journalist', 'journalists',
+  'national', 'nationally', 'international', 'internationally',
+  'personal', 'personally', 'personality', 'personalities',
+  'professional', 'professionally', 'professionals',
+  'regional', 'regionally',
+  'original', 'originally', 'originals',
+  'criminal', 'criminally', 'criminals',
+  'terminal', 'terminals',
+  'cardinal', 'cardinals',
+  'signal', 'signals', 'signaled', 'signaling',
+
+  // Words containing "nut"
+  'minute', 'minutes', 'minutely',
+  'peanut', 'peanuts',
+  'coconut', 'coconuts',
+  'chestnut', 'chestnuts',
+  'walnut', 'walnuts',
+  'doughnut', 'doughnuts', 'donut', 'donuts',
+  'nutmeg',
+  'nutrition', 'nutritious', 'nutritional', 'nutrient', 'nutrients',
+]);
+
 // Get all words of a specific severity
 export function getWordsBySeverity(severity: SeverityLevel): string[] {
   return PROFANITY_LIST
@@ -115,27 +299,50 @@ export function getSeverity(word: string): SeverityLevel | null {
   return PROFANITY_MAP.get(word.toLowerCase()) || null;
 }
 
+// Check if a word is in the safe list (not profane despite containing profanity substring)
+export function isSafeWord(word: string): boolean {
+  return SAFE_WORDS.has(word.toLowerCase());
+}
+
 // Find profanity within a longer word (e.g., "fuck" in "motherfucker")
+// Now checks against safe words to avoid false positives
 export function findEmbeddedProfanity(
   text: string
 ): { word: string; severity: SeverityLevel; startIndex: number; endIndex: number }[] {
+  const lowerText = text.toLowerCase().trim();
+
+  // First, check if the entire text is a safe word - if so, return no matches
+  if (SAFE_WORDS.has(lowerText)) {
+    return [];
+  }
+
   const results: {
     word: string;
     severity: SeverityLevel;
     startIndex: number;
     endIndex: number;
   }[] = [];
-  const lowerText = text.toLowerCase();
 
   for (const [word, severity] of PROFANITY_MAP) {
     let index = lowerText.indexOf(word);
     while (index !== -1) {
-      results.push({
-        word,
-        severity,
-        startIndex: index,
-        endIndex: index + word.length,
-      });
+      // Check if the found substring is actually the whole word (exact match)
+      // or if it's embedded in a safe context
+      const isExactMatch = lowerText === word;
+      const isWholeWord = (index === 0 || !/[a-z]/.test(lowerText[index - 1])) &&
+                          (index + word.length === lowerText.length || !/[a-z]/.test(lowerText[index + word.length]));
+
+      // Only add if it's an exact match or a whole word within the text
+      // This prevents "ass" matching in "class" but allows "ass" in "bad-ass"
+      if (isExactMatch || isWholeWord) {
+        results.push({
+          word,
+          severity,
+          startIndex: index,
+          endIndex: index + word.length,
+        });
+      }
+
       index = lowerText.indexOf(word, index + 1);
     }
   }

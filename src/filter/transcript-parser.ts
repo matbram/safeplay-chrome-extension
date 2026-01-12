@@ -9,6 +9,7 @@ import {
 import {
   PROFANITY_MAP,
   findEmbeddedProfanity,
+  isSafeWord,
 } from './profanity-list';
 
 export class TranscriptParser {
@@ -57,9 +58,14 @@ export class TranscriptParser {
   private getWordSeverity(word: string): SeverityLevel | null {
     const lowerWord = word.toLowerCase();
 
-    // Check custom blacklist first
+    // Check custom blacklist first (takes priority over safe words)
     if (this.customBlacklistMap.has(lowerWord)) {
       return this.customBlacklistMap.get(lowerWord)!;
+    }
+
+    // Check if it's a safe word (e.g., "class" contains "ass" but is not profane)
+    if (isSafeWord(lowerWord)) {
+      return null;
     }
 
     // Check built-in profanity list
