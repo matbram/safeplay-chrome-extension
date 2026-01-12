@@ -100,7 +100,9 @@ export interface UserPreferences {
   };
   customBlacklist: string[];
   customWhitelist: string[];
-  paddingMs: number;
+  paddingMs: number; // Legacy/fallback symmetric padding
+  paddingBeforeMs?: number; // Padding before word starts (catches attack)
+  paddingAfterMs?: number; // Padding after word ends (catches release)
   mergeThresholdMs: number;
 }
 
@@ -114,7 +116,9 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   },
   customBlacklist: [],
   customWhitelist: [],
-  paddingMs: 50,
+  paddingMs: 150, // Increased for better coverage
+  paddingBeforeMs: 200, // Extra padding before word starts
+  paddingAfterMs: 100, // Padding after word ends
   mergeThresholdMs: 100,
 };
 

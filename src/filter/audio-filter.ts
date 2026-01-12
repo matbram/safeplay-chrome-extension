@@ -63,10 +63,10 @@ export class AudioFilter {
 
     this.isActive = true;
 
-    // Check every 10ms for precise timing
+    // Check every 5ms for more precise timing
     this.checkIntervalId = window.setInterval(() => {
       this.checkCurrentTime();
-    }, 10);
+    }, 5);
 
     console.log('[SafePlay] Audio filter started with', this.muteIntervals.length, 'intervals');
   }

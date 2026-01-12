@@ -166,19 +166,21 @@ export class TranscriptParser {
 
   // Convert profanity matches to mute intervals with padding
   createMuteIntervals(matches: ProfanityMatch[]): MuteInterval[] {
-    const paddingSeconds = this.preferences.paddingMs / 1000;
+    // Use asymmetric padding if available, otherwise fall back to symmetric
+    const paddingBeforeSeconds = (this.preferences.paddingBeforeMs ?? this.preferences.paddingMs) / 1000;
+    const paddingAfterSeconds = (this.preferences.paddingAfterMs ?? this.preferences.paddingMs) / 1000;
 
     return matches.map((match) => {
       const interval = {
-        start: Math.max(0, match.startTime - paddingSeconds),
-        end: match.endTime + paddingSeconds,
+        start: Math.max(0, match.startTime - paddingBeforeSeconds),
+        end: match.endTime + paddingAfterSeconds,
         word: match.word,
         severity: match.severity,
       };
 
       console.log(`[SafePlay Parser] Mute interval: "${match.word}" ` +
         `${interval.start.toFixed(3)}s - ${interval.end.toFixed(3)}s ` +
-        `(padding: ${this.preferences.paddingMs}ms)`);
+        `(padding: -${paddingBeforeSeconds * 1000}ms / +${paddingAfterSeconds * 1000}ms)`);
 
       return interval;
     });
