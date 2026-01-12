@@ -1,10 +1,8 @@
 import { FilterResponse, JobStatusResponse, Transcript } from '../types';
 import { getAuthToken } from '../utils/storage';
 
-// API URL - change this to your local orchestrator URL for development
-// Production: https://api.safeplay.app
-// Local: http://localhost:3001
-const API_BASE_URL = 'http://localhost:3001';
+// API URL for the orchestration service
+const API_BASE_URL = 'https://safeplay-orchestrator-production.up.railway.app';
 
 // Verbose logging
 function logApi(...args: unknown[]): void {
