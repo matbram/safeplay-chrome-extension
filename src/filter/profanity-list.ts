@@ -1,9 +1,32 @@
 import { ProfanityWord, SeverityLevel } from '../types';
 
 // Comprehensive profanity list with severity levels
-// Severity: mild (common/casual), moderate (offensive), severe (highly offensive)
+// Severity: mild (common/casual), moderate (offensive), severe (highly offensive), religious (religious terms)
 
 export const PROFANITY_LIST: ProfanityWord[] = [
+  // Religious - opt-in category for religious terms some users may want filtered
+  { word: 'jesus', severity: 'religious' },
+  { word: 'jesus christ', severity: 'religious' },
+  { word: 'christ', severity: 'religious' },
+  { word: 'god', severity: 'religious' },
+  { word: 'oh my god', severity: 'religious' },
+  { word: 'omg', severity: 'religious' },
+  { word: 'oh god', severity: 'religious' },
+  { word: 'my god', severity: 'religious' },
+  { word: 'for gods sake', severity: 'religious' },
+  { word: 'for god\'s sake', severity: 'religious' },
+  { word: 'lord', severity: 'religious' },
+  { word: 'oh lord', severity: 'religious' },
+  { word: 'dear lord', severity: 'religious' },
+  { word: 'good lord', severity: 'religious' },
+  { word: 'holy', severity: 'religious' },
+  { word: 'holy shit', severity: 'religious' },
+  { word: 'holy crap', severity: 'religious' },
+  { word: 'holy hell', severity: 'religious' },
+  { word: 'holy fuck', severity: 'religious' },
+  { word: 'holy cow', severity: 'religious' },
+  { word: 'holy smokes', severity: 'religious' },
+
   // Severe
   { word: 'fuck', severity: 'severe' },
   { word: 'fucking', severity: 'severe' },
@@ -280,7 +303,96 @@ export const SAFE_WORDS: Set<string> = new Set([
   'doughnut', 'doughnuts', 'donut', 'donuts',
   'nutmeg',
   'nutrition', 'nutritious', 'nutritional', 'nutrient', 'nutrients',
+
+  // Words containing "god" (for religious filter)
+  'godfather', 'godfathers', 'godmother', 'godmothers', 'godchild', 'godchildren',
+  'godson', 'godsons', 'goddaughter', 'goddaughters',
+  'godly', 'godliness', 'ungodly',
+  'goddess', 'goddesses',
+  'godspeed',
+  'godsend',
+
+  // Words containing "lord" (for religious filter)
+  'landlord', 'landlords', 'landlady',
+  'warlord', 'warlords',
+  'overlord', 'overlords',
+  'lordship',
+
+  // Words containing "holy" (for religious filter)
+  'holiday', 'holidays',
+  'wholly',
+
+  // Words containing "christ" (for religious filter)
+  'christen', 'christened', 'christening',
+  'christian', 'christians', 'christianity',
+  'christmas', 'christmastime',
+  'christopher',
+
+  // Words containing "jesus" (for religious filter)
+  // No common safe words
+
+  // Words containing "hell" that are already covered but adding more religious context
+  'hellfire', 'hellbound', // These ARE religious references, not safe words
 ]);
+
+// Spelling variations mapping - normalizes common letter substitutions
+// Maps variant characters to their standard letter
+const CHAR_SUBSTITUTIONS: Record<string, string> = {
+  // Common leetspeak / symbol substitutions
+  '0': 'o',
+  '1': 'i',
+  '3': 'e',
+  '4': 'a',
+  '5': 's',
+  '7': 't',
+  '8': 'b',
+  '@': 'a',
+  '$': 's',
+  '!': 'i',
+  '*': '', // Often used as censoring, remove it
+  '#': '', // Often used as censoring, remove it
+  '+': 't',
+  '(': 'c',
+  '<': 'c',
+  '|': 'i',
+  // Common letter swaps
+  'ph': 'f',
+  'ck': 'k',
+};
+
+// Multi-character substitutions (processed first)
+const MULTI_CHAR_SUBSTITUTIONS: [string, string][] = [
+  ['ph', 'f'],
+  ['ck', 'k'],
+  ['kk', 'ck'],
+  ['cc', 'ck'],
+  ['xx', 'x'],
+];
+
+/**
+ * Normalize a word by replacing common spelling variations with standard letters.
+ * This helps detect words like "f*ck", "sh!t", "a$$", "fvck", etc.
+ */
+export function normalizeSpelling(text: string): string {
+  let normalized = text.toLowerCase();
+
+  // First, apply multi-character substitutions
+  for (const [from, to] of MULTI_CHAR_SUBSTITUTIONS) {
+    normalized = normalized.split(from).join(to);
+  }
+
+  // Then, apply single character substitutions
+  let result = '';
+  for (const char of normalized) {
+    result += CHAR_SUBSTITUTIONS[char] ?? char;
+  }
+
+  // Remove repeated characters that might be used to evade (e.g., "fuuuck" -> "fuck")
+  // But be careful not to break legitimate double letters
+  result = result.replace(/(.)\1{2,}/g, '$1$1'); // Keep max 2 of same char
+
+  return result;
+}
 
 // Get all words of a specific severity
 export function getWordsBySeverity(severity: SeverityLevel): string[] {
@@ -289,14 +401,25 @@ export function getWordsBySeverity(severity: SeverityLevel): string[] {
     .map((item) => item.word);
 }
 
-// Check if a word is profanity
+// Check if a word is profanity (also checks normalized spelling)
 export function isProfanity(word: string): boolean {
-  return PROFANITY_MAP.has(word.toLowerCase());
+  const lower = word.toLowerCase();
+  if (PROFANITY_MAP.has(lower)) return true;
+
+  // Also check normalized version for spelling variations
+  const normalized = normalizeSpelling(lower);
+  return PROFANITY_MAP.has(normalized);
 }
 
-// Get the severity of a word
+// Get the severity of a word (also checks normalized spelling)
 export function getSeverity(word: string): SeverityLevel | null {
-  return PROFANITY_MAP.get(word.toLowerCase()) || null;
+  const lower = word.toLowerCase();
+  const direct = PROFANITY_MAP.get(lower);
+  if (direct) return direct;
+
+  // Also check normalized version for spelling variations
+  const normalized = normalizeSpelling(lower);
+  return PROFANITY_MAP.get(normalized) || null;
 }
 
 // Check if a word is in the safe list (not profane despite containing profanity substring)
@@ -306,6 +429,7 @@ export function isSafeWord(word: string): boolean {
 
 // Find profanity within a longer word (e.g., "fuck" in "motherfucker")
 // Now checks against safe words to avoid false positives
+// Also checks normalized spellings (f*ck, sh!t, etc.)
 export function findEmbeddedProfanity(
   text: string
 ): { word: string; severity: SeverityLevel; startIndex: number; endIndex: number }[] {
@@ -323,27 +447,37 @@ export function findEmbeddedProfanity(
     endIndex: number;
   }[] = [];
 
-  for (const [word, severity] of PROFANITY_MAP) {
-    let index = lowerText.indexOf(word);
-    while (index !== -1) {
-      // Check if the found substring is actually the whole word (exact match)
-      // or if it's embedded in a safe context
-      const isExactMatch = lowerText === word;
-      const isWholeWord = (index === 0 || !/[a-z]/.test(lowerText[index - 1])) &&
-                          (index + word.length === lowerText.length || !/[a-z]/.test(lowerText[index + word.length]));
+  // Check both original and normalized text
+  const normalizedText = normalizeSpelling(lowerText);
+  const textsToCheck = [lowerText];
+  if (normalizedText !== lowerText) {
+    textsToCheck.push(normalizedText);
+  }
 
-      // Only add if it's an exact match or a whole word within the text
-      // This prevents "ass" matching in "class" but allows "ass" in "bad-ass"
-      if (isExactMatch || isWholeWord) {
-        results.push({
-          word,
-          severity,
-          startIndex: index,
-          endIndex: index + word.length,
-        });
+  for (const textToCheck of textsToCheck) {
+    for (const [word, severity] of PROFANITY_MAP) {
+      let index = textToCheck.indexOf(word);
+      while (index !== -1) {
+        // Check if the found substring is actually the whole word (exact match)
+        // or if it's embedded in a safe context
+        const isExactMatch = textToCheck === word;
+        const isWholeWord = (index === 0 || !/[a-z]/.test(textToCheck[index - 1])) &&
+                            (index + word.length === textToCheck.length || !/[a-z]/.test(textToCheck[index + word.length]));
+
+        // Only add if it's an exact match or a whole word within the text
+        // This prevents "ass" matching in "class" but allows "ass" in "bad-ass"
+        if (isExactMatch || isWholeWord) {
+          // Use original text indices for timing (approximate for normalized)
+          results.push({
+            word,
+            severity,
+            startIndex: index,
+            endIndex: index + word.length,
+          });
+        }
+
+        index = textToCheck.indexOf(word, index + 1);
       }
-
-      index = lowerText.indexOf(word, index + 1);
     }
   }
 
@@ -361,5 +495,12 @@ export function findEmbeddedProfanity(
     }
   }
 
-  return filtered;
+  // Deduplicate by word (in case both original and normalized matched)
+  const seen = new Set<string>();
+  return filtered.filter(match => {
+    const key = `${match.word}-${match.startIndex}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }

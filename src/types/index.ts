@@ -62,7 +62,7 @@ export interface ButtonStateInfo {
 
 // Profanity Types
 
-export type SeverityLevel = 'mild' | 'moderate' | 'severe';
+export type SeverityLevel = 'mild' | 'moderate' | 'severe' | 'religious';
 
 export interface ProfanityWord {
   word: string;
@@ -97,6 +97,7 @@ export interface UserPreferences {
     mild: boolean;
     moderate: boolean;
     severe: boolean;
+    religious: boolean;
   };
   customBlacklist: string[];
   customWhitelist: string[];
@@ -113,6 +114,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
     mild: false,
     moderate: true,
     severe: true,
+    religious: false, // Off by default - user opt-in
   },
   customBlacklist: [],
   customWhitelist: [],

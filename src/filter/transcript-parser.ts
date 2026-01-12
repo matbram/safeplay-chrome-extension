@@ -231,8 +231,9 @@ export class TranscriptParser {
   private severityRank(severity: SeverityLevel): number {
     const ranks: Record<SeverityLevel, number> = {
       mild: 1,
-      moderate: 2,
-      severe: 3,
+      religious: 2,
+      moderate: 3,
+      severe: 4,
     };
     return ranks[severity];
   }

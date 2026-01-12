@@ -11,7 +11,8 @@ class PopupController {
   private severityMild!: HTMLInputElement;
   private severityModerate!: HTMLInputElement;
   private severitySevere!: HTMLInputElement;
-  private statusIndicator!: HTMLElement;
+  private severityReligious!: HTMLInputElement;
+  private statusBanner!: HTMLElement;
   private statusText!: HTMLElement;
   private videoStatusSection!: HTMLElement;
   private videoStatusValue!: HTMLElement;
@@ -26,8 +27,9 @@ class PopupController {
     this.severityMild = document.getElementById('severityMild') as HTMLInputElement;
     this.severityModerate = document.getElementById('severityModerate') as HTMLInputElement;
     this.severitySevere = document.getElementById('severitySevere') as HTMLInputElement;
-    this.statusIndicator = document.getElementById('statusIndicator') as HTMLElement;
-    this.statusText = this.statusIndicator.querySelector('.status-text') as HTMLElement;
+    this.severityReligious = document.getElementById('severityReligious') as HTMLInputElement;
+    this.statusBanner = document.getElementById('statusBanner') as HTMLElement;
+    this.statusText = document.getElementById('statusText') as HTMLElement;
     this.videoStatusSection = document.getElementById('videoStatus') as HTMLElement;
     this.videoStatusValue = document.getElementById('videoStatusValue') as HTMLElement;
     this.filteredCount = document.getElementById('filteredCount') as HTMLElement;
@@ -64,8 +66,8 @@ class PopupController {
     this.enableToggle.checked = this.preferences.enabled;
     document.body.classList.toggle('disabled', !this.preferences.enabled);
 
-    // Update status indicator
-    this.updateStatusIndicator();
+    // Update status banner
+    this.updateStatusBanner();
 
     // Update filter mode
     this.filterModeRadios.forEach((radio) => {
@@ -76,16 +78,17 @@ class PopupController {
     this.severityMild.checked = this.preferences.severityLevels.mild;
     this.severityModerate.checked = this.preferences.severityLevels.moderate;
     this.severitySevere.checked = this.preferences.severityLevels.severe;
+    this.severityReligious.checked = this.preferences.severityLevels.religious;
   }
 
-  private updateStatusIndicator(): void {
-    this.statusIndicator.classList.remove('inactive', 'error');
+  private updateStatusBanner(): void {
+    this.statusBanner.classList.remove('inactive', 'error');
 
     if (!this.preferences.enabled) {
-      this.statusIndicator.classList.add('inactive');
-      this.statusText.textContent = 'Disabled';
+      this.statusBanner.classList.add('inactive');
+      this.statusText.textContent = 'Protection Disabled';
     } else {
-      this.statusText.textContent = 'Active';
+      this.statusText.textContent = 'Protection Active';
     }
   }
 
@@ -117,11 +120,15 @@ class PopupController {
       this.saveSeverityLevels();
     });
 
+    this.severityReligious.addEventListener('change', () => {
+      this.saveSeverityLevels();
+    });
+
     // Settings link
     const settingsLink = document.getElementById('settingsLink');
     settingsLink?.addEventListener('click', (e) => {
       e.preventDefault();
-      // TODO: Open options page when implemented
+      // Open options page when implemented
       chrome.runtime.openOptionsPage?.();
     });
   }
@@ -132,6 +139,7 @@ class PopupController {
         mild: this.severityMild.checked,
         moderate: this.severityModerate.checked,
         severe: this.severitySevere.checked,
+        religious: this.severityReligious.checked,
       },
     });
   }
@@ -197,7 +205,8 @@ class PopupController {
 
     if (state.status === 'error' && state.error) {
       this.videoStatusValue.textContent = state.error;
-      this.statusIndicator.classList.add('error');
+      this.statusBanner.classList.add('error');
+      this.statusText.textContent = 'Error Occurred';
     }
 
     // Update filtered count
@@ -216,6 +225,10 @@ class PopupController {
     chrome.runtime.onMessage.addListener((message) => {
       if (message.type === 'VIDEO_STATE_CHANGED' && message.payload) {
         this.updateVideoStatus(message.payload);
+      }
+      if (message.type === 'PREFERENCES_UPDATED' && message.payload) {
+        this.preferences = message.payload;
+        this.updateUI();
       }
     });
   }
