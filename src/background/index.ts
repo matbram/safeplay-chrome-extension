@@ -4,7 +4,6 @@ import {
   MessageResponse,
   Transcript,
   UserPreferences,
-  FilterResponse,
 } from '../types';
 import {
   getPreferences,
@@ -15,7 +14,7 @@ import {
   clearCachedTranscripts,
   isAuthenticated,
 } from '../utils/storage';
-import { getOrRequestTranscript, pollForTranscript, ApiError } from '../api/client';
+import { getOrRequestTranscript } from '../api/client';
 
 const DEBUG = true;
 
@@ -25,8 +24,8 @@ function log(...args: unknown[]): void {
   }
 }
 
-// Track active jobs for progress reporting
-const activeJobs = new Map<string, { tabId: number; youtubeId: string }>();
+// Track active jobs for progress reporting (reserved for future use)
+// const activeJobs = new Map<string, { tabId: number; youtubeId: string }>();
 
 // Message handler
 chrome.runtime.onMessage.addListener(
@@ -144,7 +143,7 @@ async function handleGetFilter(
 }
 
 async function handleCheckJob(
-  payload: { jobId: string }
+  _payload: { jobId: string }
 ): Promise<MessageResponse> {
   // This is handled within pollForTranscript, but keeping for direct polling if needed
   return { success: true, data: { message: 'Use GET_FILTER instead' } };
@@ -188,7 +187,7 @@ async function handleClearCache(): Promise<MessageResponse> {
 }
 
 // Handle extension icon click
-chrome.action.onClicked.addListener((tab) => {
+chrome.action.onClicked.addListener((_tab) => {
   // Open popup is handled by manifest, but we can add extra logic here if needed
   log('Extension icon clicked');
 });
