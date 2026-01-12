@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SafePlay</title>
   <link rel="stylesheet" href="popup.css">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="popup-container">
@@ -48,7 +49,7 @@
       <section class="card">
         <div class="card-header">
           <h3 class="card-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="12 2 2 7 12 12 22 7 12 2"/>
               <polyline points="2 17 12 22 22 17"/>
               <polyline points="2 12 12 17 22 12"/>
@@ -92,12 +93,13 @@
       <section class="card">
         <div class="card-header">
           <h3 class="card-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
               <polyline points="22 4 12 14.01 9 11.01"/>
             </svg>
             Filter Levels
           </h3>
+          <span class="card-count" id="totalWordCount">0 words</span>
         </div>
         <div class="severity-list">
           <label class="severity-option">
@@ -106,8 +108,11 @@
               <span class="checkbox-mark"></span>
             </div>
             <div class="severity-info">
-              <span class="severity-name">Mild</span>
-              <span class="severity-examples">damn, hell, crap</span>
+              <span class="severity-name">
+                Mild
+                <span class="severity-word-count" id="mildCount">(0)</span>
+              </span>
+              <span class="severity-examples">damn, hell, crap, piss</span>
             </div>
             <span class="severity-badge mild">Low</span>
           </label>
@@ -117,8 +122,11 @@
               <span class="checkbox-mark"></span>
             </div>
             <div class="severity-info">
-              <span class="severity-name">Moderate</span>
-              <span class="severity-examples">s***, b****, a**</span>
+              <span class="severity-name">
+                Moderate
+                <span class="severity-word-count" id="moderateCount">(0)</span>
+              </span>
+              <span class="severity-examples">shit, bitch, ass, bastard</span>
             </div>
             <span class="severity-badge moderate">Med</span>
           </label>
@@ -128,8 +136,11 @@
               <span class="checkbox-mark"></span>
             </div>
             <div class="severity-info">
-              <span class="severity-name">Severe</span>
-              <span class="severity-examples">f***, c***, slurs</span>
+              <span class="severity-name">
+                Severe
+                <span class="severity-word-count" id="severeCount">(0)</span>
+              </span>
+              <span class="severity-examples">fuck, cunt, n-word, slurs</span>
             </div>
             <span class="severity-badge severe">High</span>
           </label>
@@ -140,11 +151,29 @@
               <span class="checkbox-mark"></span>
             </div>
             <div class="severity-info">
-              <span class="severity-name">Religious</span>
-              <span class="severity-examples">OMG, Jesus, God, Lord</span>
+              <span class="severity-name">
+                Religious
+                <span class="severity-word-count" id="religiousCount">(0)</span>
+              </span>
+              <span class="severity-examples">OMG, Jesus, God, Lord, holy</span>
             </div>
             <span class="severity-badge religious">Opt-in</span>
           </label>
+        </div>
+
+        <!-- Word Preview Toggle -->
+        <div class="word-preview">
+          <div class="word-preview-toggle" id="wordPreviewToggle">
+            <span class="word-preview-label">View all filtered words</span>
+            <svg class="word-preview-arrow" id="wordPreviewArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="word-preview-content" id="wordPreviewContent">
+            <div class="word-tags" id="wordTags">
+              <!-- Words will be populated dynamically -->
+            </div>
+          </div>
         </div>
       </section>
 
@@ -152,7 +181,7 @@
       <section class="card video-card" id="videoStatus" style="display: none;">
         <div class="card-header">
           <h3 class="card-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <polygon points="23 7 16 12 23 17 23 7"/>
               <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
             </svg>
@@ -162,9 +191,8 @@
         <div class="video-stats">
           <div class="stat-item">
             <span class="stat-value" id="filteredCount">0</span>
-            <span class="stat-label">Words Filtered</span>
+            <span class="stat-label">Filtered</span>
           </div>
-          <div class="stat-divider"></div>
           <div class="stat-item">
             <span class="stat-value" id="videoStatusValue">Ready</span>
             <span class="stat-label">Status</span>
@@ -181,14 +209,14 @@
     <!-- Footer -->
     <footer class="popup-footer">
       <a href="#" class="footer-btn" id="settingsLink">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
         Settings
       </a>
       <a href="https://safeplay.app" target="_blank" class="footer-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="18" height="18">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/>
           <line x1="2" y1="12" x2="22" y2="12"/>
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>

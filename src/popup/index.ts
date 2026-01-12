@@ -1,9 +1,19 @@
 // SafePlay Popup Script
-import { UserPreferences, DEFAULT_PREFERENCES, FilterMode } from '../types';
+import { UserPreferences, DEFAULT_PREFERENCES, FilterMode, SeverityLevel } from '../types';
+import { PROFANITY_LIST, getWordsBySeverity } from '../filter/profanity-list';
 import './popup.css';
 
 class PopupController {
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
+  private wordPreviewExpanded = false;
+
+  // Word counts by severity
+  private wordCounts: Record<SeverityLevel, number> = {
+    mild: 0,
+    moderate: 0,
+    severe: 0,
+    religious: 0,
+  };
 
   // DOM Elements
   private enableToggle!: HTMLInputElement;
@@ -19,8 +29,20 @@ class PopupController {
   private filteredCount!: HTMLElement;
   private progressBar!: HTMLElement;
   private progressFill!: HTMLElement;
+  private totalWordCount!: HTMLElement;
+  private mildCount!: HTMLElement;
+  private moderateCount!: HTMLElement;
+  private severeCount!: HTMLElement;
+  private religiousCount!: HTMLElement;
+  private wordPreviewToggle!: HTMLElement;
+  private wordPreviewArrow!: HTMLElement;
+  private wordPreviewContent!: HTMLElement;
+  private wordTags!: HTMLElement;
 
   async initialize(): Promise<void> {
+    // Calculate word counts
+    this.calculateWordCounts();
+
     // Get DOM elements
     this.enableToggle = document.getElementById('enableToggle') as HTMLInputElement;
     this.filterModeRadios = document.querySelectorAll('input[name="filterMode"]');
@@ -35,6 +57,18 @@ class PopupController {
     this.filteredCount = document.getElementById('filteredCount') as HTMLElement;
     this.progressBar = document.getElementById('progressBar') as HTMLElement;
     this.progressFill = document.getElementById('progressFill') as HTMLElement;
+    this.totalWordCount = document.getElementById('totalWordCount') as HTMLElement;
+    this.mildCount = document.getElementById('mildCount') as HTMLElement;
+    this.moderateCount = document.getElementById('moderateCount') as HTMLElement;
+    this.severeCount = document.getElementById('severeCount') as HTMLElement;
+    this.religiousCount = document.getElementById('religiousCount') as HTMLElement;
+    this.wordPreviewToggle = document.getElementById('wordPreviewToggle') as HTMLElement;
+    this.wordPreviewArrow = document.getElementById('wordPreviewArrow') as HTMLElement;
+    this.wordPreviewContent = document.getElementById('wordPreviewContent') as HTMLElement;
+    this.wordTags = document.getElementById('wordTags') as HTMLElement;
+
+    // Display word counts
+    this.displayWordCounts();
 
     // Load preferences
     await this.loadPreferences();
@@ -47,6 +81,37 @@ class PopupController {
 
     // Listen for status updates
     this.setupMessageListener();
+  }
+
+  private calculateWordCounts(): void {
+    // Count words by severity from the profanity list
+    for (const item of PROFANITY_LIST) {
+      this.wordCounts[item.severity]++;
+    }
+  }
+
+  private displayWordCounts(): void {
+    // Update individual counts
+    this.mildCount.textContent = `(${this.wordCounts.mild})`;
+    this.moderateCount.textContent = `(${this.wordCounts.moderate})`;
+    this.severeCount.textContent = `(${this.wordCounts.severe})`;
+    this.religiousCount.textContent = `(${this.wordCounts.religious})`;
+
+    // Update total (will be recalculated based on selected levels)
+    this.updateTotalWordCount();
+  }
+
+  private updateTotalWordCount(): void {
+    let total = 0;
+    if (this.severityMild?.checked) total += this.wordCounts.mild;
+    if (this.severityModerate?.checked) total += this.wordCounts.moderate;
+    if (this.severitySevere?.checked) total += this.wordCounts.severe;
+    if (this.severityReligious?.checked) total += this.wordCounts.religious;
+
+    // Add custom blacklist count
+    total += this.preferences.customBlacklist.length;
+
+    this.totalWordCount.textContent = `${total} words`;
   }
 
   private async loadPreferences(): Promise<void> {
@@ -79,6 +144,14 @@ class PopupController {
     this.severityModerate.checked = this.preferences.severityLevels.moderate;
     this.severitySevere.checked = this.preferences.severityLevels.severe;
     this.severityReligious.checked = this.preferences.severityLevels.religious;
+
+    // Update total word count
+    this.updateTotalWordCount();
+
+    // Update word preview if expanded
+    if (this.wordPreviewExpanded) {
+      this.renderWordPreview();
+    }
   }
 
   private updateStatusBanner(): void {
@@ -110,27 +183,86 @@ class PopupController {
     // Severity levels
     this.severityMild.addEventListener('change', () => {
       this.saveSeverityLevels();
+      this.updateTotalWordCount();
+      if (this.wordPreviewExpanded) this.renderWordPreview();
     });
 
     this.severityModerate.addEventListener('change', () => {
       this.saveSeverityLevels();
+      this.updateTotalWordCount();
+      if (this.wordPreviewExpanded) this.renderWordPreview();
     });
 
     this.severitySevere.addEventListener('change', () => {
       this.saveSeverityLevels();
+      this.updateTotalWordCount();
+      if (this.wordPreviewExpanded) this.renderWordPreview();
     });
 
     this.severityReligious.addEventListener('change', () => {
       this.saveSeverityLevels();
+      this.updateTotalWordCount();
+      if (this.wordPreviewExpanded) this.renderWordPreview();
+    });
+
+    // Word preview toggle
+    this.wordPreviewToggle.addEventListener('click', () => {
+      this.toggleWordPreview();
     });
 
     // Settings link
     const settingsLink = document.getElementById('settingsLink');
     settingsLink?.addEventListener('click', (e) => {
       e.preventDefault();
-      // Open options page when implemented
       chrome.runtime.openOptionsPage?.();
     });
+  }
+
+  private toggleWordPreview(): void {
+    this.wordPreviewExpanded = !this.wordPreviewExpanded;
+    this.wordPreviewArrow.classList.toggle('expanded', this.wordPreviewExpanded);
+    this.wordPreviewContent.classList.toggle('show', this.wordPreviewExpanded);
+
+    if (this.wordPreviewExpanded) {
+      this.renderWordPreview();
+    }
+  }
+
+  private renderWordPreview(): void {
+    const words: { word: string; isCustom: boolean }[] = [];
+
+    // Add words from selected severity levels
+    if (this.severityMild.checked) {
+      getWordsBySeverity('mild').forEach(word => words.push({ word, isCustom: false }));
+    }
+    if (this.severityModerate.checked) {
+      getWordsBySeverity('moderate').forEach(word => words.push({ word, isCustom: false }));
+    }
+    if (this.severitySevere.checked) {
+      getWordsBySeverity('severe').forEach(word => words.push({ word, isCustom: false }));
+    }
+    if (this.severityReligious.checked) {
+      getWordsBySeverity('religious').forEach(word => words.push({ word, isCustom: false }));
+    }
+
+    // Add custom blacklist words
+    this.preferences.customBlacklist.forEach(word => words.push({ word, isCustom: true }));
+
+    // Sort alphabetically
+    words.sort((a, b) => a.word.localeCompare(b.word));
+
+    // Render tags
+    this.wordTags.innerHTML = words
+      .map(({ word, isCustom }) =>
+        `<span class="word-tag${isCustom ? ' custom' : ''}">${this.escapeHtml(word)}</span>`
+      )
+      .join('');
+  }
+
+  private escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   private saveSeverityLevels(): void {
