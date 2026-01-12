@@ -300,12 +300,13 @@ class SafePlayContentScript {
 
     button.addEventListener('click', () => this.toggleFilter());
 
-    // Insert before settings button
+    // Insert before settings button (if it's a direct child)
     const settingsButton = container.querySelector('.ytp-settings-button');
-    if (settingsButton) {
+    if (settingsButton && settingsButton.parentElement === container) {
       container.insertBefore(button, settingsButton);
     } else {
-      container.appendChild(button);
+      // Just prepend to the container
+      container.insertBefore(button, container.firstChild);
     }
   }
 

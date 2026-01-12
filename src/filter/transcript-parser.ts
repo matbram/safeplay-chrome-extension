@@ -66,6 +66,36 @@ export class TranscriptParser {
     return PROFANITY_MAP.get(lowerWord) || null;
   }
 
+  // Get precise timing using character-level data
+  private getCharacterLevelTiming(
+    segment: TranscriptSegment,
+    startIndex: number,
+    endIndex: number
+  ): { startTime: number; endTime: number } {
+    let startTime = segment.start_time;
+    let endTime = segment.end_time;
+
+    if (segment.characters && segment.characters.length > 0) {
+      // Use character-level timing for precision
+      // Find the first character of the word
+      const startChar = segment.characters[startIndex];
+      // Find the last character of the word (endIndex is exclusive, so -1)
+      const endChar = segment.characters[Math.min(endIndex - 1, segment.characters.length - 1)];
+
+      if (startChar) {
+        startTime = startChar.start;
+      }
+      if (endChar) {
+        endTime = endChar.end;
+      }
+
+      console.log(`[SafePlay Parser] Character timing: "${segment.text.substring(startIndex, endIndex)}" ` +
+        `chars[${startIndex}..${endIndex-1}] -> ${startTime.toFixed(3)}s - ${endTime.toFixed(3)}s`);
+    }
+
+    return { startTime, endTime };
+  }
+
   // Find profanity matches in transcript segments
   findProfanityMatches(segments: TranscriptSegment[]): ProfanityMatch[] {
     const matches: ProfanityMatch[] = [];
@@ -77,12 +107,15 @@ export class TranscriptParser {
       // Check for exact word match first
       const exactSeverity = this.getWordSeverity(normalizedText);
       if (exactSeverity && this.shouldFilterWord(normalizedText, exactSeverity)) {
+        // Use character-level timing for precision even on exact matches
+        const { startTime, endTime } = this.getCharacterLevelTiming(segment, 0, segment.text.length);
+
         matches.push({
           segmentIndex: i,
           word: segment.text,
           severity: exactSeverity,
-          startTime: segment.start_time,
-          endTime: segment.end_time,
+          startTime,
+          endTime,
           isPartialMatch: false,
         });
         continue;
@@ -109,22 +142,12 @@ export class TranscriptParser {
           continue;
         }
 
-        // Calculate timing using character-level data if available
-        let startTime = segment.start_time;
-        let endTime = segment.end_time;
-
-        if (segment.characters && segment.characters.length > 0) {
-          // Use character-level timing for precision
-          const startChar = segment.characters[embedded.startIndex];
-          const endChar = segment.characters[embedded.endIndex - 1];
-
-          if (startChar) {
-            startTime = startChar.start;
-          }
-          if (endChar) {
-            endTime = endChar.end;
-          }
-        }
+        // Use character-level timing for precision
+        const { startTime, endTime } = this.getCharacterLevelTiming(
+          segment,
+          embedded.startIndex,
+          embedded.endIndex
+        );
 
         matches.push({
           segmentIndex: i,
@@ -145,12 +168,20 @@ export class TranscriptParser {
   createMuteIntervals(matches: ProfanityMatch[]): MuteInterval[] {
     const paddingSeconds = this.preferences.paddingMs / 1000;
 
-    return matches.map((match) => ({
-      start: Math.max(0, match.startTime - paddingSeconds),
-      end: match.endTime + paddingSeconds,
-      word: match.word,
-      severity: match.severity,
-    }));
+    return matches.map((match) => {
+      const interval = {
+        start: Math.max(0, match.startTime - paddingSeconds),
+        end: match.endTime + paddingSeconds,
+        word: match.word,
+        severity: match.severity,
+      };
+
+      console.log(`[SafePlay Parser] Mute interval: "${match.word}" ` +
+        `${interval.start.toFixed(3)}s - ${interval.end.toFixed(3)}s ` +
+        `(padding: ${this.preferences.paddingMs}ms)`);
+
+      return interval;
+    });
   }
 
   // Merge overlapping or close intervals
