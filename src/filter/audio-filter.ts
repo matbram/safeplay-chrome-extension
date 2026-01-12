@@ -291,6 +291,12 @@ export class AudioFilter {
     }
   }
 
+  // Classic TV censor bleep settings
+  private readonly BLEEP_FREQUENCY = 1000; // 1kHz - the classic censor bleep frequency
+  private readonly BLEEP_VOLUME = 0.35; // Volume level (0-1)
+  private readonly BLEEP_ATTACK = 0.008; // 8ms attack - very fast like real censor bleeps
+  private readonly BLEEP_RELEASE = 0.025; // 25ms release - slightly slower to avoid clicks
+
   private startBleep(): void {
     if (!this.audioContext || !this.bleepGain) return;
 
@@ -299,37 +305,67 @@ export class AudioFilter {
       this.audioContext.resume();
     }
 
-    // Create oscillator for bleep sound
+    // Create main oscillator for classic censor bleep
     this.bleepOscillator = this.audioContext.createOscillator();
-    this.bleepOscillator.type = 'sine';
-    this.bleepOscillator.frequency.value = 1000; // 1kHz bleep
-    this.bleepOscillator.connect(this.bleepGain);
+    this.bleepOscillator.type = 'sine'; // Pure sine wave for clean bleep
+    this.bleepOscillator.frequency.value = this.BLEEP_FREQUENCY;
 
-    // Fade in bleep
+    // Create a subtle second oscillator slightly detuned for richness (optional TV effect)
+    const oscillator2 = this.audioContext.createOscillator();
+    oscillator2.type = 'sine';
+    oscillator2.frequency.value = this.BLEEP_FREQUENCY * 1.001; // Slight detune for thickness
+
+    // Create a mixer for the two oscillators
+    const mixer = this.audioContext.createGain();
+    mixer.gain.value = 0.5;
+
+    // Connect oscillators
+    this.bleepOscillator.connect(this.bleepGain);
+    oscillator2.connect(mixer);
+    mixer.connect(this.bleepGain);
+
+    // Fast attack envelope - classic censor bleep snaps on quickly
     const now = this.audioContext.currentTime;
     this.bleepGain.gain.setValueAtTime(0, now);
-    this.bleepGain.gain.linearRampToValueAtTime(0.3, now + FADE_DURATION);
+    this.bleepGain.gain.linearRampToValueAtTime(this.BLEEP_VOLUME, now + this.BLEEP_ATTACK);
 
-    this.bleepOscillator.start();
+    // Start both oscillators
+    this.bleepOscillator.start(now);
+    oscillator2.start(now);
+
+    // Store reference to second oscillator for cleanup
+    (this.bleepOscillator as any)._secondOscillator = oscillator2;
+    (this.bleepOscillator as any)._mixer = mixer;
   }
 
   private stopBleep(): void {
     if (!this.audioContext || !this.bleepGain || !this.bleepOscillator) return;
 
-    // Fade out bleep
+    // Smooth release to avoid clicks
     const now = this.audioContext.currentTime;
-    this.bleepGain.gain.linearRampToValueAtTime(0, now + FADE_DURATION);
+    this.bleepGain.gain.setValueAtTime(this.bleepGain.gain.value, now);
+    this.bleepGain.gain.linearRampToValueAtTime(0, now + this.BLEEP_RELEASE);
 
-    // Stop and disconnect after fade
+    // Stop and disconnect after release completes
     const oscillator = this.bleepOscillator;
+    const oscillator2 = (oscillator as any)._secondOscillator;
+    const mixer = (oscillator as any)._mixer;
+
     setTimeout(() => {
       try {
         oscillator.stop();
         oscillator.disconnect();
+        if (oscillator2) {
+          oscillator2.stop();
+          oscillator2.disconnect();
+        }
+        if (mixer) {
+          mixer.disconnect();
+        }
       } catch (e) {
         // Already stopped
       }
-    }, FADE_DURATION * 1000 + 10);
+    }, this.BLEEP_RELEASE * 1000 + 10);
 
     this.bleepOscillator = null;
   }
