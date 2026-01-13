@@ -1,5 +1,6 @@
 // SafePlay Video Page Button Injector
 // Injects the SafePlay button next to the Subscribe button on YouTube watch pages
+// and above the like button on YouTube Shorts
 
 import { ButtonState, ButtonStateInfo } from '../types';
 
@@ -11,6 +12,7 @@ export interface InjectorOptions {
 
 const PROCESSED_ATTR = 'data-safeplay-processed';
 const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
+const SHORTS_BUTTON_CLASS = 'safeplay-shorts-button';
 
 // Button state configurations with YouTube theme colors
 // Water fill uses blue (#3b82f6) that fills from bottom to top during processing
@@ -76,6 +78,9 @@ export class ResilientInjector {
   private maxAttempts = 50;
   private retryInterval: number | null = null;
   private currentState: ButtonState = 'idle';
+  // Track Shorts button states by video ID
+  private shortsButtonStates: Map<string, ButtonState> = new Map();
+  private shortsScrollObserver: IntersectionObserver | null = null;
 
   constructor(options: InjectorOptions) {
     this.options = options;
@@ -93,6 +98,9 @@ export class ResilientInjector {
 
     // Listen for YouTube SPA navigation
     this.setupNavigationListener();
+
+    // Set up Shorts scroll observer
+    this.setupShortsScrollObserver();
   }
 
   // Stop observing
@@ -107,6 +115,11 @@ export class ResilientInjector {
       this.retryInterval = null;
     }
 
+    if (this.shortsScrollObserver) {
+      this.shortsScrollObserver.disconnect();
+      this.shortsScrollObserver = null;
+    }
+
     this.log('Stopped video page injector');
   }
 
@@ -115,13 +128,29 @@ export class ResilientInjector {
            window.location.search.includes('v=');
   }
 
+  private isShortsPage(): boolean {
+    return window.location.pathname.startsWith('/shorts');
+  }
+
   private getVideoId(): string | null {
     const urlParams = new URLSearchParams(window.location.search);
     return urlParams.get('v');
   }
 
+  private getShortsVideoId(): string | null {
+    const match = window.location.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+    return match ? match[1] : null;
+  }
+
   // Main injection function
   private attemptInjection(): void {
+    // Handle Shorts pages
+    if (this.isShortsPage()) {
+      this.attemptShortsInjection();
+      return;
+    }
+
+    // Handle regular watch pages
     if (!this.isWatchPage()) {
       return;
     }
@@ -160,6 +189,311 @@ export class ResilientInjector {
         }, 200);
       }
     }
+  }
+
+  // Attempt injection for YouTube Shorts
+  private attemptShortsInjection(): void {
+    // Find all Shorts renderers on the page
+    const shortsRenderers = document.querySelectorAll('ytd-reel-video-renderer, ytd-shorts');
+
+    shortsRenderers.forEach((renderer) => {
+      // Skip if already processed
+      if (renderer.getAttribute(PROCESSED_ATTR) === 'true') {
+        return;
+      }
+
+      // Find the video ID from the renderer
+      const videoId = this.getShortsVideoIdFromRenderer(renderer);
+      if (!videoId) {
+        return;
+      }
+
+      // Find the action buttons container (like, dislike, comment, share)
+      const actionsContainer = this.findShortsActionsContainer(renderer);
+      if (!actionsContainer) {
+        this.log('Shorts actions container not found for', videoId);
+        return;
+      }
+
+      // Inject the button
+      this.injectShortsButton(actionsContainer, videoId, renderer);
+      renderer.setAttribute(PROCESSED_ATTR, 'true');
+    });
+
+    // Also try to inject into the currently visible Short
+    this.injectIntoVisibleShort();
+  }
+
+  // Get video ID from a Shorts renderer element
+  private getShortsVideoIdFromRenderer(renderer: Element): string | null {
+    // Try to get from URL/link in the renderer
+    const link = renderer.querySelector('a[href*="/shorts/"]');
+    if (link) {
+      const href = link.getAttribute('href');
+      const match = href?.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+      if (match) return match[1];
+    }
+
+    // Try to extract from video source
+    const videoElement = renderer.querySelector('video');
+    if (videoElement) {
+      const src = videoElement.src || videoElement.currentSrc;
+      if (src) {
+        const match = src.match(/\/([a-zA-Z0-9_-]{11})\//);
+        if (match) return match[1];
+      }
+    }
+
+    // DO NOT fall back to URL - it may have stale video ID when scrolling
+    // Only injectIntoVisibleShort should use the URL
+    return null;
+  }
+
+  // Find the actions container in Shorts (like button, dislike, etc.)
+  private findShortsActionsContainer(renderer: Element): HTMLElement | null {
+    // Shorts uses different selectors - try multiple
+    const selectors = [
+      '#actions', // Main actions container
+      'ytd-reel-player-overlay-renderer #actions',
+      '#like-button', // Fall back to like button itself
+      '[id="like-button"]',
+      'ytd-like-button-renderer',
+    ];
+
+    for (const selector of selectors) {
+      const element = renderer.querySelector<HTMLElement>(selector);
+      if (element) {
+        this.log(`Found Shorts actions with selector: ${selector}`);
+        return element;
+      }
+    }
+
+    // Also try document-level for the currently playing Short
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(`ytd-shorts ${selector}, ytd-reel-video-renderer ${selector}`);
+      if (element) {
+        this.log(`Found Shorts actions at document level: ${selector}`);
+        return element;
+      }
+    }
+
+    return null;
+  }
+
+  // Inject into the currently visible/active Short
+  private injectIntoVisibleShort(): void {
+    const videoId = this.getShortsVideoId();
+    if (!videoId) return;
+
+    // Check if already injected for this video
+    const existingButton = document.querySelector(`.${SHORTS_BUTTON_CLASS}[data-video-id="${videoId}"]`);
+    if (existingButton) return;
+
+    // Find the actions container for the current Short
+    const actionsContainer = document.querySelector<HTMLElement>(
+      'ytd-shorts #actions, ytd-reel-video-renderer[is-active] #actions, #shorts-player #actions'
+    );
+
+    if (actionsContainer && !actionsContainer.querySelector(`.${SHORTS_BUTTON_CLASS}`)) {
+      const renderer = actionsContainer.closest('ytd-reel-video-renderer, ytd-shorts') || document.body;
+      this.injectShortsButton(actionsContainer, videoId, renderer);
+    }
+  }
+
+  // Inject SafePlay button into Shorts UI
+  private injectShortsButton(actionsContainer: HTMLElement, videoId: string, renderer: Element): void {
+    // Remove any existing button for this video
+    const existingButton = renderer.querySelector(`.${SHORTS_BUTTON_CLASS}[data-video-id="${videoId}"]`);
+    if (existingButton) {
+      existingButton.remove();
+    }
+
+    // Initialize state for this video
+    if (!this.shortsButtonStates.has(videoId)) {
+      this.shortsButtonStates.set(videoId, 'idle');
+    }
+
+    // Create button container matching Shorts style
+    const container = document.createElement('div');
+    container.className = `${SHORTS_BUTTON_CLASS}`;
+    container.setAttribute('data-video-id', videoId);
+    container.style.cssText = `
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      margin-bottom: 16px;
+      cursor: pointer;
+    `;
+
+    // Create circular button (matching YouTube Shorts action buttons)
+    const button = document.createElement('button');
+    button.className = 'safeplay-shorts-action-button';
+    const state = this.shortsButtonStates.get(videoId) || 'idle';
+    const stateConfig = BUTTON_STATES[state];
+
+    button.style.cssText = `
+      width: 48px;
+      height: 48px;
+      border-radius: 50%;
+      border: none;
+      background: ${stateConfig.bg};
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      position: relative;
+      overflow: hidden;
+    `;
+
+    // Add icon
+    const iconWrapper = document.createElement('div');
+    iconWrapper.className = 'safeplay-shorts-icon';
+    iconWrapper.style.cssText = 'display: flex; align-items: center; justify-content: center; position: relative; z-index: 1;';
+    iconWrapper.innerHTML = this.getShortsIconSVG(state);
+    button.appendChild(iconWrapper);
+
+    // Add label below button
+    const label = document.createElement('span');
+    label.className = 'safeplay-shorts-label';
+    label.style.cssText = `
+      color: white;
+      font-size: 12px;
+      margin-top: 4px;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+      font-family: "Roboto", "Arial", sans-serif;
+    `;
+    label.textContent = state === 'filtering' ? 'Censored' : (state === 'idle' ? 'SafePlay' : stateConfig.text);
+
+    // Add hover effects
+    button.addEventListener('mouseenter', () => {
+      const currentState = this.shortsButtonStates.get(videoId) || 'idle';
+      const config = BUTTON_STATES[currentState];
+      button.style.background = config.hoverBg;
+      button.style.transform = 'scale(1.1)';
+    });
+
+    button.addEventListener('mouseleave', () => {
+      const currentState = this.shortsButtonStates.get(videoId) || 'idle';
+      const config = BUTTON_STATES[currentState];
+      button.style.background = config.bg;
+      button.style.transform = 'scale(1)';
+    });
+
+    // Add click handler
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const currentState = this.shortsButtonStates.get(videoId) || 'idle';
+
+      if (currentState === 'idle' || currentState === 'error') {
+        this.currentVideoId = videoId;
+        this.options.onButtonClick(videoId);
+      } else if (currentState === 'filtering' || currentState === 'paused') {
+        this.currentVideoId = videoId;
+        if (this.options.onToggleFilter) {
+          this.options.onToggleFilter();
+        }
+      }
+    });
+
+    container.appendChild(button);
+    container.appendChild(label);
+
+    // Insert at the top of the actions container (above like button)
+    actionsContainer.insertBefore(container, actionsContainer.firstChild);
+
+    this.log(`Injected SafePlay Shorts button for video: ${videoId}`);
+  }
+
+  // Get icon SVG for Shorts buttons (smaller, simpler icons)
+  private getShortsIconSVG(state: ButtonState): string {
+    switch (state) {
+      case 'connecting':
+      case 'downloading':
+      case 'transcribing':
+      case 'processing':
+        return `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="safeplay-spinner">
+            <style>.safeplay-spinner { animation: safeplay-spin 1s linear infinite; } @keyframes safeplay-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+          </svg>
+        `;
+      case 'filtering':
+        return `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
+          </svg>
+        `;
+      case 'paused':
+        return `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 14H9V9h2v6zm4 0h-2V9h2v6z"/>
+          </svg>
+        `;
+      case 'error':
+        return `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+          </svg>
+        `;
+      default:
+        // Shield icon for idle state
+        return `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+          </svg>
+        `;
+    }
+  }
+
+  // Set up IntersectionObserver for Shorts scroll detection
+  private setupShortsScrollObserver(): void {
+    if (this.shortsScrollObserver) {
+      this.shortsScrollObserver.disconnect();
+    }
+
+    this.shortsScrollObserver = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            // A Short has scrolled into view
+            const renderer = entry.target;
+            const videoId = this.getShortsVideoIdFromRenderer(renderer);
+
+            if (videoId) {
+              this.log(`Short scrolled into view: ${videoId}`);
+              // Update current video ID
+              this.currentVideoId = videoId;
+              // Attempt to inject button if not present
+              if (!renderer.querySelector(`.${SHORTS_BUTTON_CLASS}`)) {
+                this.attemptShortsInjection();
+              }
+            }
+          }
+        });
+      },
+      {
+        threshold: 0.5, // Trigger when 50% visible
+      }
+    );
+
+    // Observe existing Shorts renderers
+    this.observeShortsRenderers();
+  }
+
+  // Observe Shorts renderers for scroll detection
+  private observeShortsRenderers(): void {
+    if (!this.shortsScrollObserver) return;
+
+    const renderers = document.querySelectorAll('ytd-reel-video-renderer, ytd-shorts');
+    renderers.forEach((renderer) => {
+      this.shortsScrollObserver!.observe(renderer);
+    });
   }
 
   private findSubscribeButton(): HTMLElement | null {
@@ -350,6 +684,18 @@ export class ResilientInjector {
 
   // Update button state with detailed info
   updateButtonState(stateInfo: ButtonStateInfo): void {
+    // Update regular watch page button
+    this.updateWatchPageButton(stateInfo);
+
+    // Update Shorts button - use videoId from stateInfo if provided, otherwise currentVideoId
+    const targetVideoId = stateInfo.videoId || this.currentVideoId;
+    if (targetVideoId) {
+      this.updateShortsButton(targetVideoId, stateInfo);
+    }
+  }
+
+  // Update watch page button
+  private updateWatchPageButton(stateInfo: ButtonStateInfo): void {
     const container = document.querySelector(`.${BUTTON_CONTAINER_CLASS}`);
     if (!container) return;
 
@@ -451,6 +797,58 @@ export class ResilientInjector {
     this.updateButtonState({ state, text: text || '', progress });
   }
 
+  // Update Shorts button state for a specific video
+  private updateShortsButton(videoId: string, stateInfo: ButtonStateInfo): void {
+    const container = document.querySelector(`.${SHORTS_BUTTON_CLASS}[data-video-id="${videoId}"]`);
+    if (!container) return;
+
+    const button = container.querySelector<HTMLButtonElement>('.safeplay-shorts-action-button');
+    const iconWrapper = container.querySelector<HTMLDivElement>('.safeplay-shorts-icon');
+    const label = container.querySelector<HTMLSpanElement>('.safeplay-shorts-label');
+
+    if (!button || !iconWrapper) return;
+
+    // Update state tracking
+    this.shortsButtonStates.set(videoId, stateInfo.state);
+    const config = BUTTON_STATES[stateInfo.state];
+
+    // Update button background
+    button.style.background = config.bg;
+
+    // Update icon
+    iconWrapper.innerHTML = this.getShortsIconSVG(stateInfo.state);
+
+    // Update label
+    if (label) {
+      let labelText = stateInfo.state === 'idle' ? 'SafePlay' : config.text;
+
+      if (stateInfo.state === 'filtering' && stateInfo.intervalCount !== undefined) {
+        labelText = `${stateInfo.intervalCount}`;
+      } else if (stateInfo.state === 'filtering') {
+        labelText = 'Censored';
+      }
+
+      // Show progress for processing states
+      if (stateInfo.progress !== undefined && stateInfo.progress > 0) {
+        if (stateInfo.state === 'downloading' || stateInfo.state === 'transcribing' || stateInfo.state === 'processing') {
+          labelText = `${Math.round(stateInfo.progress)}%`;
+        }
+      }
+
+      label.textContent = labelText;
+    }
+
+    // Update cursor
+    if (stateInfo.state === 'idle' || stateInfo.state === 'error' ||
+        stateInfo.state === 'filtering' || stateInfo.state === 'paused') {
+      button.style.cursor = 'pointer';
+    } else {
+      button.style.cursor = 'default';
+    }
+
+    this.log(`Shorts button state updated to: ${stateInfo.state} for ${videoId}`);
+  }
+
   // Set up mutation observer for dynamic content changes
   private setupMutationObserver(): void {
     this.observer = new MutationObserver((mutations) => {
@@ -458,12 +856,33 @@ export class ResilientInjector {
         if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
           for (const node of mutation.addedNodes) {
             if (node instanceof HTMLElement) {
+              // Watch page: detect subscribe button changes
               if (node.id === 'subscribe-button' ||
                   node.querySelector?.('#subscribe-button') ||
                   node.closest?.('ytd-watch-metadata')) {
                 this.log('Subscribe button area changed, re-injecting');
                 this.attemptInjection();
                 return;
+              }
+
+              // Shorts: detect new Short renderers being added
+              if (node.tagName === 'YTD-REEL-VIDEO-RENDERER' ||
+                  node.tagName === 'YTD-SHORTS' ||
+                  node.querySelector?.('ytd-reel-video-renderer')) {
+                this.log('Shorts renderer added, attempting injection');
+                // Add new renderers to the intersection observer
+                this.observeShortsRenderers();
+                this.attemptShortsInjection();
+                return;
+              }
+
+              // Shorts: detect actions container being added
+              if (node.id === 'actions' || node.querySelector?.('#actions')) {
+                if (this.isShortsPage()) {
+                  this.log('Shorts actions container added');
+                  this.attemptShortsInjection();
+                  return;
+                }
               }
             }
           }
@@ -515,6 +934,20 @@ export class ResilientInjector {
     if (this.retryInterval !== null) {
       clearInterval(this.retryInterval);
       this.retryInterval = null;
+    }
+
+    // Clear processed attribute on Shorts renderers so they can be re-processed
+    // This is needed because scrolling in Shorts triggers navigation events
+    if (this.isShortsPage()) {
+      document.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach(el => {
+        el.removeAttribute(PROCESSED_ATTR);
+      });
+      // Remove all existing Shorts buttons - they'll be re-injected with correct state
+      document.querySelectorAll(`.${SHORTS_BUTTON_CLASS}`).forEach(el => {
+        el.remove();
+      });
+      // Clear button states for fresh start
+      this.shortsButtonStates.clear();
     }
 
     setTimeout(() => {
