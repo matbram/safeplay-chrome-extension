@@ -21,6 +21,7 @@ class SafePlayContentScript {
   private captionFilter: CaptionFilter;
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private currentVideoId: string | null = null;
+  private filteringVideoId: string | null = null; // Track which video is being filtered (for Shorts)
   private isProcessing = false;
   private videoWasPlaying = false; // Track if video was playing before we paused it
   private progressAnimator: SmoothProgressAnimator | null = null;
@@ -133,6 +134,8 @@ class SafePlayContentScript {
     log('Filter button clicked for:', youtubeId);
     this.isProcessing = true;
     this.currentVideoId = youtubeId;
+    // Store the video ID being filtered so state updates go to the right button
+    this.filteringVideoId = youtubeId;
 
     // Pause video while we load the filter to prevent hearing profanity
     const video = this.getVideoElement();
@@ -144,7 +147,7 @@ class SafePlayContentScript {
 
     try {
       // Step 1: Connecting
-      this.updateButtonState({ state: 'connecting', text: 'Connecting...' });
+      this.updateButtonState({ state: 'connecting', text: 'Connecting...', videoId: youtubeId });
 
       // Request filter from background script (which calls the API)
       const response = await chrome.runtime.sendMessage({
@@ -161,7 +164,7 @@ class SafePlayContentScript {
       if ((status === 'cached' || status === 'completed') && transcript) {
         // Transcript was cached (locally or on server), skip to processing
         log('Using cached transcript');
-        this.updateButtonState({ state: 'processing', text: 'Processing...' });
+        this.updateButtonState({ state: 'processing', text: 'Processing...', videoId: youtubeId });
         await this.applyFilter(transcript);
       } else if (status === 'processing' && jobId) {
         // Need to poll for job completion
@@ -177,6 +180,7 @@ class SafePlayContentScript {
         state: 'error',
         text: 'Error',
         error: errorMessage,
+        videoId: youtubeId,
       });
       // Resume video on error
       if (this.videoWasPlaying) {
@@ -188,6 +192,7 @@ class SafePlayContentScript {
         this.videoWasPlaying = false;
       }
       this.isProcessing = false;
+      this.filteringVideoId = null;
     }
   }
 
@@ -196,6 +201,8 @@ class SafePlayContentScript {
     const maxAttempts = 180; // 6 minutes max (2s intervals)
     const pollInterval = 2000;
     let attempts = 0;
+    // Capture the video ID being filtered at the start
+    const videoId = this.filteringVideoId;
 
     // Initialize smooth progress animator
     this.progressAnimator = new SmoothProgressAnimator(
@@ -204,6 +211,7 @@ class SafePlayContentScript {
           state: 'processing',
           text,
           progress,
+          videoId: videoId || undefined,
         });
       },
       'Analyzing'
@@ -281,8 +289,10 @@ class SafePlayContentScript {
           state: 'error',
           text: 'Error',
           error: errorMessage,
+          videoId: videoId || undefined,
         });
         this.isProcessing = false;
+        this.filteringVideoId = null;
         return;
       }
     }
@@ -296,8 +306,10 @@ class SafePlayContentScript {
       state: 'error',
       text: 'Timeout',
       error: 'Processing took too long. Please try again.',
+      videoId: videoId || undefined,
     });
     this.isProcessing = false;
+    this.filteringVideoId = null;
   }
 
   // Apply the filter using the transcript
@@ -306,7 +318,8 @@ class SafePlayContentScript {
       throw new Error('Video controller not initialized');
     }
 
-    const videoId = this.currentVideoId;
+    // Use filteringVideoId which tracks the video being filtered
+    const videoId = this.filteringVideoId || this.currentVideoId;
     if (!videoId) {
       throw new Error('No video ID');
     }
@@ -351,6 +364,7 @@ class SafePlayContentScript {
         state: 'filtering',
         text: `Censored (${intervalCount})`,
         intervalCount,
+        videoId,
       });
 
       log(`Filter applied successfully. ${intervalCount} profanity instances will be muted.`);
@@ -386,6 +400,7 @@ class SafePlayContentScript {
       throw error;
     } finally {
       this.isProcessing = false;
+      this.filteringVideoId = null;
     }
   }
 

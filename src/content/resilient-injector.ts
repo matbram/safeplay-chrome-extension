@@ -690,9 +690,10 @@ export class ResilientInjector {
     // Update regular watch page button
     this.updateWatchPageButton(stateInfo);
 
-    // Update Shorts button for current video
-    if (this.currentVideoId) {
-      this.updateShortsButton(this.currentVideoId, stateInfo);
+    // Update Shorts button - use videoId from stateInfo if provided, otherwise currentVideoId
+    const targetVideoId = stateInfo.videoId || this.currentVideoId;
+    if (targetVideoId) {
+      this.updateShortsButton(targetVideoId, stateInfo);
     }
   }
 

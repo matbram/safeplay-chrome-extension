@@ -59,6 +59,7 @@ export interface ButtonStateInfo {
   progress?: number;
   intervalCount?: number;
   error?: string;
+  videoId?: string; // Track which video this state belongs to (for Shorts)
 }
 
 // Profanity Types
