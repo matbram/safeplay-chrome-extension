@@ -232,7 +232,7 @@ export const SAFE_WORDS: Set<string> = new Set([
   'hellenic', 'hellenistic',
 
   // Words containing "damn"
-  'goddamn', // This IS profanity, but "adam" is not
+  // Note: "goddamn" is NOT here - it IS profanity
   'amsterdam',
   'macadam', 'madame', 'madam',
 
