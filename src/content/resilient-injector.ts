@@ -226,7 +226,7 @@ export class ResilientInjector {
 
   // Get video ID from a Shorts renderer element
   private getShortsVideoIdFromRenderer(renderer: Element): string | null {
-    // Try to get from URL in the renderer
+    // Try to get from URL/link in the renderer
     const link = renderer.querySelector('a[href*="/shorts/"]');
     if (link) {
       const href = link.getAttribute('href');
@@ -234,14 +234,9 @@ export class ResilientInjector {
       if (match) return match[1];
     }
 
-    // Try to get from the current URL if this is the active short
-    const currentId = this.getShortsVideoId();
-    if (currentId) return currentId;
-
-    // Try to extract from any data attributes
+    // Try to extract from video source
     const videoElement = renderer.querySelector('video');
     if (videoElement) {
-      // Check for video source or other identifiers
       const src = videoElement.src || videoElement.currentSrc;
       if (src) {
         const match = src.match(/\/([a-zA-Z0-9_-]{11})\//);
@@ -249,6 +244,8 @@ export class ResilientInjector {
       }
     }
 
+    // DO NOT fall back to URL - it may have stale video ID when scrolling
+    // Only injectIntoVisibleShort should use the URL
     return null;
   }
 
@@ -937,6 +934,20 @@ export class ResilientInjector {
     if (this.retryInterval !== null) {
       clearInterval(this.retryInterval);
       this.retryInterval = null;
+    }
+
+    // Clear processed attribute on Shorts renderers so they can be re-processed
+    // This is needed because scrolling in Shorts triggers navigation events
+    if (this.isShortsPage()) {
+      document.querySelectorAll(`[${PROCESSED_ATTR}]`).forEach(el => {
+        el.removeAttribute(PROCESSED_ATTR);
+      });
+      // Remove all existing Shorts buttons - they'll be re-injected with correct state
+      document.querySelectorAll(`.${SHORTS_BUTTON_CLASS}`).forEach(el => {
+        el.remove();
+      });
+      // Clear button states for fresh start
+      this.shortsButtonStates.clear();
     }
 
     setTimeout(() => {
