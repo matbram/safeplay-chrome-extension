@@ -548,14 +548,32 @@ class SafePlayContentScript {
 
   // Check if we should auto-enable filter for this video
   private async checkAutoEnable(): Promise<void> {
-    if (!this.currentVideoId || !this.preferences.autoEnableForFilteredVideos) {
+    log('Checking auto-enable for video:', this.currentVideoId);
+    log('Auto-enable setting:', this.preferences.autoEnableForFilteredVideos);
+
+    if (!this.currentVideoId) {
+      log('No video ID, skipping auto-enable check');
+      return;
+    }
+
+    // Default to true if undefined (for backwards compatibility with old preferences)
+    if (this.preferences.autoEnableForFilteredVideos === false) {
+      log('Auto-enable is disabled in preferences');
+      return;
+    }
+
+    // Don't auto-enable if already processing
+    if (this.isProcessing) {
+      log('Already processing, skipping auto-enable');
       return;
     }
 
     try {
       const wasFiltered = await isVideoFiltered(this.currentVideoId);
+      log(`Video ${this.currentVideoId} was previously filtered:`, wasFiltered);
+
       if (wasFiltered) {
-        log(`Video ${this.currentVideoId} was previously filtered, auto-enabling filter`);
+        log(`Auto-enabling filter for video: ${this.currentVideoId}`);
         // Automatically trigger filter
         this.onFilterButtonClick(this.currentVideoId);
       }

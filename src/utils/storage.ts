@@ -96,23 +96,44 @@ export async function isAuthenticated(): Promise<boolean> {
 
 // Filtered Videos Storage - tracks which videos have been filtered
 export async function getFilteredVideos(): Promise<string[]> {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.FILTERED_VIDEOS);
-  return result[STORAGE_KEYS.FILTERED_VIDEOS] || [];
+  try {
+    const result = await chrome.storage.local.get(STORAGE_KEYS.FILTERED_VIDEOS);
+    const videos = result[STORAGE_KEYS.FILTERED_VIDEOS] || [];
+    console.log('[SafePlay Storage] getFilteredVideos:', videos.length, 'videos');
+    return videos;
+  } catch (error) {
+    console.error('[SafePlay Storage] Error getting filtered videos:', error);
+    return [];
+  }
 }
 
 export async function addFilteredVideo(youtubeId: string): Promise<void> {
-  const videos = await getFilteredVideos();
-  if (!videos.includes(youtubeId)) {
-    videos.push(youtubeId);
-    // Keep only last 500 videos to prevent storage bloat
-    const trimmedVideos = videos.slice(-500);
-    await chrome.storage.local.set({ [STORAGE_KEYS.FILTERED_VIDEOS]: trimmedVideos });
+  try {
+    const videos = await getFilteredVideos();
+    if (!videos.includes(youtubeId)) {
+      videos.push(youtubeId);
+      // Keep only last 500 videos to prevent storage bloat
+      const trimmedVideos = videos.slice(-500);
+      await chrome.storage.local.set({ [STORAGE_KEYS.FILTERED_VIDEOS]: trimmedVideos });
+      console.log('[SafePlay Storage] Added video to filtered list:', youtubeId, 'Total:', trimmedVideos.length);
+    } else {
+      console.log('[SafePlay Storage] Video already in filtered list:', youtubeId);
+    }
+  } catch (error) {
+    console.error('[SafePlay Storage] Error adding filtered video:', error);
   }
 }
 
 export async function isVideoFiltered(youtubeId: string): Promise<boolean> {
-  const videos = await getFilteredVideos();
-  return videos.includes(youtubeId);
+  try {
+    const videos = await getFilteredVideos();
+    const isFiltered = videos.includes(youtubeId);
+    console.log('[SafePlay Storage] isVideoFiltered:', youtubeId, '=', isFiltered);
+    return isFiltered;
+  } catch (error) {
+    console.error('[SafePlay Storage] Error checking if video filtered:', error);
+    return false;
+  }
 }
 
 export async function removeFilteredVideo(youtubeId: string): Promise<void> {
