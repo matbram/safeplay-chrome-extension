@@ -15,38 +15,42 @@ export interface CaptionFilterOptions {
 }
 
 // Patterns for YouTube's pre-censored words (e.g., f******, s***, b****)
+// Note: We use (?=\s|[.,!?;:'")\-]|$) instead of \b at the end because
+// word boundaries don't work after non-word characters like * or #
+const WORD_END = '(?=\\s|[.,!?;:\'"\\)\\-]|$)';
+
 const CENSORED_PATTERNS: { pattern: RegExp; severity: SeverityLevel }[] = [
-  // F-word variations
-  { pattern: /\bf+[\*\#\-\_]+(?:ck|ck(?:ing|ed|er|ers|s)?)?\b/gi, severity: 'severe' },
-  { pattern: /\bf+u+[\*\#\-\_]+k*(?:ing|ed|er|ers|s)?\b/gi, severity: 'severe' },
-  { pattern: /\bf[\*\#\-\_]{2,}(?:ing|ed|er|ers|s)?\b/gi, severity: 'severe' },
+  // F-word variations (f***, f**k, f**king, f******)
+  { pattern: new RegExp(`\\bf+[\\*\\#\\-\\_]+(?:ck(?:ing|ed|er|ers|s)?)?${WORD_END}`, 'gi'), severity: 'severe' },
+  { pattern: new RegExp(`\\bf+u+[\\*\\#\\-\\_]+k*(?:ing|ed|er|ers|s)?${WORD_END}`, 'gi'), severity: 'severe' },
+  { pattern: new RegExp(`\\bf[\\*\\#\\-\\_]{2,}(?:ing|ed|er|ers|s)?${WORD_END}`, 'gi'), severity: 'severe' },
 
-  // S-word variations
-  { pattern: /\bs+h+[\*\#\-\_]+t*(?:ty|s|head|heads)?\b/gi, severity: 'moderate' },
-  { pattern: /\bs[\*\#\-\_]{2,}t?\b/gi, severity: 'moderate' },
+  // S-word variations (s***, sh*t, s**t)
+  { pattern: new RegExp(`\\bs+h+[\\*\\#\\-\\_]+t*(?:ty|s|head|heads)?${WORD_END}`, 'gi'), severity: 'moderate' },
+  { pattern: new RegExp(`\\bs[\\*\\#\\-\\_]{2,}t?${WORD_END}`, 'gi'), severity: 'moderate' },
 
-  // B-word variations
-  { pattern: /\bb+[\*\#\-\_]+(?:tch|tch(?:es|y)?)?\b/gi, severity: 'moderate' },
-  { pattern: /\bb[\*\#\-\_]{2,}(?:es|y)?\b/gi, severity: 'moderate' },
+  // B-word variations (b**ch, b****)
+  { pattern: new RegExp(`\\bb+[\\*\\#\\-\\_]+(?:tch(?:es|y)?)?${WORD_END}`, 'gi'), severity: 'moderate' },
+  { pattern: new RegExp(`\\bb[\\*\\#\\-\\_]{2,}(?:es|y)?${WORD_END}`, 'gi'), severity: 'moderate' },
 
-  // A-word variations
-  { pattern: /\ba+[\*\#\-\_]+(?:ss|ss(?:hole|holes)?)?\b/gi, severity: 'moderate' },
-  { pattern: /\ba[\*\#\-\_]{1,}(?:hole|holes)?\b/gi, severity: 'moderate' },
+  // A-word variations (a**, a**hole)
+  { pattern: new RegExp(`\\ba+[\\*\\#\\-\\_]+(?:ss(?:hole|holes)?)?${WORD_END}`, 'gi'), severity: 'moderate' },
+  { pattern: new RegExp(`\\ba[\\*\\#\\-\\_]{1,}(?:hole|holes)?${WORD_END}`, 'gi'), severity: 'moderate' },
 
-  // C-word variations (severe)
-  { pattern: /\bc+[\*\#\-\_]+(?:nt|nts)?\b/gi, severity: 'severe' },
+  // C-word variations (c**t)
+  { pattern: new RegExp(`\\bc+[\\*\\#\\-\\_]+(?:nt|nts)?${WORD_END}`, 'gi'), severity: 'severe' },
 
-  // D-word variations
-  { pattern: /\bd+[\*\#\-\_]+(?:ck|cks|ckhead)?\b/gi, severity: 'moderate' },
+  // D-word variations (d**k, d*ck)
+  { pattern: new RegExp(`\\bd+[\\*\\#\\-\\_]+(?:ck|cks|ckhead)?${WORD_END}`, 'gi'), severity: 'moderate' },
 
-  // P-word variations
-  { pattern: /\bp+[\*\#\-\_]+(?:ssy|ss(?:ies|y)?)?\b/gi, severity: 'moderate' },
+  // P-word variations (p***y)
+  { pattern: new RegExp(`\\bp+[\\*\\#\\-\\_]+(?:ssy|ss(?:ies|y)?)?${WORD_END}`, 'gi'), severity: 'moderate' },
 
-  // N-word variations (severe)
-  { pattern: /\bn+[\*\#\-\_]+(?:gg|gga|gger|ggers|ggas)?\b/gi, severity: 'severe' },
+  // N-word variations (n****r) - severe
+  { pattern: new RegExp(`\\bn+[\\*\\#\\-\\_]+(?:gg|gga|gger|ggers|ggas)?${WORD_END}`, 'gi'), severity: 'severe' },
 
   // Generic asterisk patterns (3+ asterisks likely profanity)
-  { pattern: /\b\w[\*\#]{3,}\w*\b/gi, severity: 'moderate' },
+  { pattern: new RegExp(`\\b\\w[\\*\\#]{3,}\\w*${WORD_END}`, 'gi'), severity: 'moderate' },
 ];
 
 export class CaptionFilter {
