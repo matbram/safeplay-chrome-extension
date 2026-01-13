@@ -341,13 +341,8 @@ class SafePlayContentScript {
       log(`Filter applied successfully. ${intervalCount} profanity instances will be muted.`);
 
       // Store this video as filtered for auto-enable feature
-      log(`About to save video ID for auto-enable: videoId=${videoId}, this.currentVideoId=${this.currentVideoId}`);
       if (videoId) {
-        log(`Calling addFilteredVideo with: ${videoId}`);
         await addFilteredVideo(videoId);
-        log(`Video ${videoId} added to filtered videos list`);
-      } else {
-        log('WARNING: videoId is null/undefined, not saving to filtered list');
       }
 
       // Resume video if it was playing before
@@ -552,33 +547,14 @@ class SafePlayContentScript {
 
   // Check if we should auto-enable filter for this video
   private async checkAutoEnable(): Promise<void> {
-    log('Checking auto-enable for video:', this.currentVideoId);
-    log('Auto-enable setting:', this.preferences.autoEnableForFilteredVideos);
-
-    if (!this.currentVideoId) {
-      log('No video ID, skipping auto-enable check');
-      return;
-    }
-
-    // Default to true if undefined (for backwards compatibility with old preferences)
-    if (this.preferences.autoEnableForFilteredVideos === false) {
-      log('Auto-enable is disabled in preferences');
-      return;
-    }
-
-    // Don't auto-enable if already processing
-    if (this.isProcessing) {
-      log('Already processing, skipping auto-enable');
-      return;
-    }
+    if (!this.currentVideoId) return;
+    if (this.preferences.autoEnableForFilteredVideos === false) return;
+    if (this.isProcessing) return;
 
     try {
       const wasFiltered = await isVideoFiltered(this.currentVideoId);
-      log(`Video ${this.currentVideoId} was previously filtered:`, wasFiltered);
-
       if (wasFiltered) {
-        log(`Auto-enabling filter for video: ${this.currentVideoId}`);
-        // Automatically trigger filter
+        log(`Auto-enabling filter for previously filtered video: ${this.currentVideoId}`);
         this.onFilterButtonClick(this.currentVideoId);
       }
     } catch (error) {
