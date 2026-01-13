@@ -14,12 +14,47 @@ export interface CaptionFilterOptions {
   debug?: boolean;
 }
 
+// Patterns for YouTube's pre-censored words (e.g., f******, s***, b****)
+const CENSORED_PATTERNS: { pattern: RegExp; severity: SeverityLevel }[] = [
+  // F-word variations
+  { pattern: /\bf+[\*\#\-\_]+(?:ck|ck(?:ing|ed|er|ers|s)?)?\b/gi, severity: 'severe' },
+  { pattern: /\bf+u+[\*\#\-\_]+k*(?:ing|ed|er|ers|s)?\b/gi, severity: 'severe' },
+  { pattern: /\bf[\*\#\-\_]{2,}(?:ing|ed|er|ers|s)?\b/gi, severity: 'severe' },
+
+  // S-word variations
+  { pattern: /\bs+h+[\*\#\-\_]+t*(?:ty|s|head|heads)?\b/gi, severity: 'moderate' },
+  { pattern: /\bs[\*\#\-\_]{2,}t?\b/gi, severity: 'moderate' },
+
+  // B-word variations
+  { pattern: /\bb+[\*\#\-\_]+(?:tch|tch(?:es|y)?)?\b/gi, severity: 'moderate' },
+  { pattern: /\bb[\*\#\-\_]{2,}(?:es|y)?\b/gi, severity: 'moderate' },
+
+  // A-word variations
+  { pattern: /\ba+[\*\#\-\_]+(?:ss|ss(?:hole|holes)?)?\b/gi, severity: 'moderate' },
+  { pattern: /\ba[\*\#\-\_]{1,}(?:hole|holes)?\b/gi, severity: 'moderate' },
+
+  // C-word variations (severe)
+  { pattern: /\bc+[\*\#\-\_]+(?:nt|nts)?\b/gi, severity: 'severe' },
+
+  // D-word variations
+  { pattern: /\bd+[\*\#\-\_]+(?:ck|cks|ckhead)?\b/gi, severity: 'moderate' },
+
+  // P-word variations
+  { pattern: /\bp+[\*\#\-\_]+(?:ssy|ss(?:ies|y)?)?\b/gi, severity: 'moderate' },
+
+  // N-word variations (severe)
+  { pattern: /\bn+[\*\#\-\_]+(?:gg|gga|gger|ggers|ggas)?\b/gi, severity: 'severe' },
+
+  // Generic asterisk patterns (3+ asterisks likely profanity)
+  { pattern: /\b\w[\*\#]{3,}\w*\b/gi, severity: 'moderate' },
+];
+
 export class CaptionFilter {
   private observer: MutationObserver | null = null;
   private preferences: UserPreferences | null = null;
   private isActive = false;
   private censoredWordCount = 0;
-  private processedNodes = new WeakSet<Node>();
+  private lastProcessedTexts = new Map<Node, string>();
 
   constructor(_options: CaptionFilterOptions = {}) {
     // Options for future use
@@ -45,7 +80,7 @@ export class CaptionFilter {
     log('Starting caption filter - hijacking YouTube captions');
     this.isActive = true;
     this.censoredWordCount = 0;
-    this.processedNodes = new WeakSet();
+    this.lastProcessedTexts.clear();
 
     // Set up mutation observer on the caption container
     this.setupCaptionObserver();
@@ -64,6 +99,8 @@ export class CaptionFilter {
       this.observer.disconnect();
       this.observer = null;
     }
+
+    this.lastProcessedTexts.clear();
   }
 
   /**
@@ -110,6 +147,8 @@ export class CaptionFilter {
 
     // Create observer that intercepts caption text changes
     this.observer = new MutationObserver((mutations) => {
+      if (!this.isActive) return;
+
       for (const mutation of mutations) {
         // Handle added nodes (new caption segments appear)
         if (mutation.type === 'childList') {
@@ -121,7 +160,7 @@ export class CaptionFilter {
         // Handle direct text changes in caption segments
         if (mutation.type === 'characterData') {
           const target = mutation.target;
-          if (target.parentElement && this.isCaptionElement(target.parentElement)) {
+          if (target.nodeType === Node.TEXT_NODE) {
             this.filterTextNode(target as Text);
           }
         }
@@ -135,7 +174,20 @@ export class CaptionFilter {
       characterData: true,
     });
 
+    // Also do an initial scan
+    this.scanForCaptions(container);
+
     log('Caption observer active on container');
+  }
+
+  /**
+   * Scan container for existing captions
+   */
+  private scanForCaptions(container: Element): void {
+    const segments = container.querySelectorAll('.ytp-caption-segment');
+    segments.forEach((segment) => {
+      this.filterCaptionElement(segment);
+    });
   }
 
   /**
@@ -144,15 +196,9 @@ export class CaptionFilter {
   private processCaptionNode(node: Node): void {
     if (!this.isActive) return;
 
-    // Skip if already processed
-    if (this.processedNodes.has(node)) return;
-
-    // If it's a text node inside a caption element, filter it
+    // If it's a text node, filter it directly
     if (node.nodeType === Node.TEXT_NODE) {
-      const parent = node.parentElement;
-      if (parent && this.isCaptionElement(parent)) {
-        this.filterTextNode(node as Text);
-      }
+      this.filterTextNode(node as Text);
       return;
     }
 
@@ -160,7 +206,7 @@ export class CaptionFilter {
     if (node.nodeType === Node.ELEMENT_NODE) {
       const element = node as Element;
 
-      // Check if this element or its children contain caption text
+      // Check if this element is or contains caption text
       if (this.isCaptionElement(element)) {
         this.filterCaptionElement(element);
       }
@@ -198,7 +244,6 @@ export class CaptionFilter {
    */
   private filterCaptionElement(element: Element): void {
     if (!this.preferences) return;
-    if (this.processedNodes.has(element)) return;
 
     // Get all text nodes within the element
     const walker = document.createTreeWalker(
@@ -217,8 +262,6 @@ export class CaptionFilter {
     textNodes.forEach((textNode) => {
       this.filterTextNode(textNode);
     });
-
-    this.processedNodes.add(element);
   }
 
   /**
@@ -226,20 +269,24 @@ export class CaptionFilter {
    */
   private filterTextNode(textNode: Text): void {
     if (!this.preferences) return;
-    if (this.processedNodes.has(textNode)) return;
 
     const originalText = textNode.textContent || '';
     if (!originalText.trim()) return;
+
+    // Skip if already fully processed (contains only bleeps or same text)
+    const lastText = this.lastProcessedTexts.get(textNode);
+    if (lastText === originalText) return;
 
     const filteredText = this.censorText(originalText);
 
     if (filteredText !== originalText) {
       // Directly modify the text node's content
       textNode.textContent = filteredText;
+      this.lastProcessedTexts.set(textNode, filteredText);
       log('Censored:', originalText, '->', filteredText);
+    } else {
+      this.lastProcessedTexts.set(textNode, originalText);
     }
-
-    this.processedNodes.add(textNode);
   }
 
   /**
@@ -248,21 +295,35 @@ export class CaptionFilter {
   private censorText(text: string): string {
     if (!this.preferences) return text;
 
-    // Split by word boundaries while keeping delimiters
-    const tokens = text.split(/(\s+|[.,!?;:'"()-])/);
-    let result = '';
+    let result = text;
     let modified = false;
 
+    // First, handle YouTube's pre-censored words (e.g., f******, s***)
+    result = this.replaceCensoredPatterns(result);
+    if (result !== text) {
+      modified = true;
+    }
+
+    // Then handle regular profanity word by word
+    const tokens = result.split(/(\s+)/);
+    let newResult = '';
+
     for (const token of tokens) {
-      // Skip whitespace and punctuation
-      if (!token || /^[\s.,!?;:'"()-]+$/.test(token)) {
-        result += token;
+      // Skip whitespace
+      if (!token || /^\s+$/.test(token)) {
+        newResult += token;
+        continue;
+      }
+
+      // Skip if already (bleep)
+      if (token === '(bleep)') {
+        newResult += token;
         continue;
       }
 
       // Check if it's a safe word
       if (isSafeWord(token)) {
-        result += token;
+        newResult += token;
         continue;
       }
 
@@ -277,7 +338,7 @@ export class CaptionFilter {
         });
 
         if (enabledMatches.length > 0) {
-          result += '(bleep)';
+          newResult += '(bleep)';
           this.censoredWordCount += enabledMatches.length;
           modified = true;
           continue;
@@ -285,18 +346,47 @@ export class CaptionFilter {
       }
 
       // Check custom blacklist
+      const tokenLower = token.toLowerCase().replace(/[.,!?;:'"()-]/g, '');
       if (this.preferences.customBlacklist.some(
-        (banned) => token.toLowerCase() === banned.toLowerCase()
+        (banned) => tokenLower === banned.toLowerCase()
       )) {
-        result += '(bleep)';
+        newResult += '(bleep)';
         this.censoredWordCount++;
         modified = true;
         continue;
       }
 
-      result += token;
+      newResult += token;
     }
 
-    return modified ? result : text;
+    return modified ? newResult : text;
+  }
+
+  /**
+   * Replace YouTube's pre-censored patterns (f******, s***, etc.)
+   */
+  private replaceCensoredPatterns(text: string): string {
+    if (!this.preferences) return text;
+
+    let result = text;
+
+    for (const { pattern, severity } of CENSORED_PATTERNS) {
+      // Check if this severity level is enabled
+      if (!this.preferences.severityLevels[severity]) continue;
+
+      // Reset regex state
+      pattern.lastIndex = 0;
+
+      if (pattern.test(result)) {
+        pattern.lastIndex = 0;
+        const matches = result.match(pattern);
+        if (matches) {
+          this.censoredWordCount += matches.length;
+        }
+        result = result.replace(pattern, '(bleep)');
+      }
+    }
+
+    return result;
   }
 }
