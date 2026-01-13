@@ -2,6 +2,7 @@
 import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
 import { SmoothProgressAnimator } from './smooth-progress';
+import { CaptionFilter } from './caption-filter';
 import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo } from '../types';
 import './styles.css';
 
@@ -16,6 +17,7 @@ function log(...args: unknown[]): void {
 class SafePlayContentScript {
   private injector: ResilientInjector;
   private videoController: VideoController | null = null;
+  private captionFilter: CaptionFilter;
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private currentVideoId: string | null = null;
   private isProcessing = false;
@@ -34,6 +36,9 @@ class SafePlayContentScript {
       onStateChange: (state) => this.onVideoStateChange(state),
       debug: DEBUG,
     });
+
+    // Initialize caption filter
+    this.captionFilter = new CaptionFilter({ debug: DEBUG });
   }
 
   async initialize(): Promise<void> {
@@ -303,9 +308,15 @@ class SafePlayContentScript {
       // Apply the filter
       await this.videoController.applyFilter();
 
-      // Get the interval count for display
+      // Get the interval count and mute intervals for display
       const state = this.videoController.getState();
       const intervalCount = state.intervalCount || 0;
+      const muteIntervals = this.videoController.getMuteIntervals();
+
+      // Start caption filtering as well
+      this.captionFilter.initialize(this.preferences, muteIntervals);
+      this.captionFilter.start();
+      log('Caption filter started');
 
       // Update button to filtering state
       this.updateButtonState({
@@ -392,12 +403,14 @@ class SafePlayContentScript {
 
     if (state.status === 'active') {
       this.videoController.stop();
+      this.captionFilter.stop();
       playerButton?.classList.remove('safeplay-active');
       playerButton?.setAttribute('title', 'SafePlay Filter Paused - Click to resume');
       this.updateButtonState({ state: 'idle', text: 'SafePlay' });
     } else if (this.currentVideoId) {
       // Resume filtering
       this.videoController.resume();
+      this.captionFilter.start();
       playerButton?.classList.add('safeplay-active');
       playerButton?.setAttribute('title', 'SafePlay Filter Active - Click to toggle');
 
@@ -435,6 +448,7 @@ class SafePlayContentScript {
         const newPrefs = message.payload as UserPreferences;
         this.preferences = newPrefs;
         this.videoController?.updatePreferences(newPrefs);
+        this.captionFilter.updatePreferences(newPrefs);
         return { success: true };
       }
 
@@ -468,6 +482,9 @@ class SafePlayContentScript {
     if (this.videoController) {
       this.videoController.stop();
     }
+
+    // Stop caption filter
+    this.captionFilter.stop();
 
     // Reset state
     this.currentVideoId = null;

@@ -200,6 +200,11 @@ export class VideoController {
     };
   }
 
+  // Get mute intervals for caption filtering
+  getMuteIntervals(): MuteInterval[] {
+    return this.muteIntervals;
+  }
+
   // Find the YouTube video element
   private findVideoElement(): HTMLVideoElement | null {
     // Main player video
