@@ -1,4 +1,4 @@
-// SafePlay Caption Filter - Real-time caption text censoring
+// SafePlay Caption Filter - Hijacks YouTube's native captions
 import { UserPreferences, MuteInterval, SeverityLevel } from '../types';
 import { findEmbeddedProfanity, isSafeWord } from '../filter/profanity-list';
 
@@ -19,22 +19,14 @@ export class CaptionFilter {
   private preferences: UserPreferences | null = null;
   private isActive = false;
   private censoredWordCount = 0;
-
-  // YouTube caption selectors (they change occasionally, so we try multiple)
-  private readonly CAPTION_SELECTORS = [
-    '.ytp-caption-segment',           // Individual caption segments
-    '.captions-text',                  // Alternative caption text
-    '.ytp-caption-window-container',   // Caption window
-    '.caption-window',                 // Another variant
-    '.ytp-caption-window-bottom',      // Bottom caption window
-  ];
+  private processedNodes = new WeakSet<Node>();
 
   constructor(_options: CaptionFilterOptions = {}) {
     // Options for future use
   }
 
   /**
-   * Initialize the caption filter with user preferences and mute intervals
+   * Initialize the caption filter with user preferences
    */
   initialize(preferences: UserPreferences, _muteIntervals: MuteInterval[]): void {
     this.preferences = preferences;
@@ -42,7 +34,7 @@ export class CaptionFilter {
   }
 
   /**
-   * Start watching and filtering captions
+   * Start hijacking YouTube captions
    */
   start(): void {
     if (this.isActive) {
@@ -50,19 +42,17 @@ export class CaptionFilter {
       return;
     }
 
-    log('Starting caption filter');
+    log('Starting caption filter - hijacking YouTube captions');
     this.isActive = true;
     this.censoredWordCount = 0;
+    this.processedNodes = new WeakSet();
 
-    // Set up mutation observer to watch for caption changes
-    this.setupObserver();
-
-    // Also do an initial scan of any existing captions
-    this.scanExistingCaptions();
+    // Set up mutation observer on the caption container
+    this.setupCaptionObserver();
   }
 
   /**
-   * Stop watching captions
+   * Stop hijacking captions
    */
   stop(): void {
     if (!this.isActive) return;
@@ -77,7 +67,7 @@ export class CaptionFilter {
   }
 
   /**
-   * Update preferences (e.g., when user changes severity levels)
+   * Update preferences
    */
   updatePreferences(preferences: UserPreferences): void {
     this.preferences = preferences;
@@ -91,162 +81,193 @@ export class CaptionFilter {
   }
 
   /**
-   * Set up MutationObserver to watch for caption text changes
+   * Set up observer specifically on YouTube's caption container
    */
-  private setupObserver(): void {
-    // Find the player container to observe
-    const playerContainer = document.querySelector('#movie_player') ||
-                           document.querySelector('.html5-video-player') ||
-                           document.querySelector('ytd-player');
+  private setupCaptionObserver(): void {
+    // YouTube uses these containers for captions
+    const captionContainerSelectors = [
+      '.ytp-caption-window-container',
+      '.caption-window',
+      '#movie_player .ytp-caption-window-bottom',
+      '#movie_player',
+    ];
 
-    if (!playerContainer) {
-      log('Player container not found, retrying in 500ms');
-      setTimeout(() => this.setupObserver(), 500);
+    let container: Element | null = null;
+    for (const selector of captionContainerSelectors) {
+      container = document.querySelector(selector);
+      if (container) break;
+    }
+
+    if (!container) {
+      log('Caption container not found, retrying in 500ms');
+      setTimeout(() => {
+        if (this.isActive) this.setupCaptionObserver();
+      }, 500);
       return;
     }
 
-    // Create observer that watches for caption changes
+    log('Found caption container, setting up observer');
+
+    // Create observer that intercepts caption text changes
     this.observer = new MutationObserver((mutations) => {
-      this.handleMutations(mutations);
+      for (const mutation of mutations) {
+        // Handle added nodes (new caption segments appear)
+        if (mutation.type === 'childList') {
+          mutation.addedNodes.forEach((node) => {
+            this.processCaptionNode(node);
+          });
+        }
+
+        // Handle direct text changes in caption segments
+        if (mutation.type === 'characterData') {
+          const target = mutation.target;
+          if (target.parentElement && this.isCaptionElement(target.parentElement)) {
+            this.filterTextNode(target as Text);
+          }
+        }
+      }
     });
 
-    // Observe the player for any DOM changes (captions are dynamically added)
-    this.observer.observe(playerContainer, {
+    // Watch for all changes in the container
+    this.observer.observe(container, {
       childList: true,
       subtree: true,
       characterData: true,
-      characterDataOldValue: true,
     });
 
-    log('Caption observer set up on player container');
+    log('Caption observer active on container');
   }
 
   /**
-   * Handle DOM mutations - look for caption text changes
+   * Process a node that was added to the caption container
    */
-  private handleMutations(mutations: MutationRecord[]): void {
+  private processCaptionNode(node: Node): void {
     if (!this.isActive) return;
 
-    for (const mutation of mutations) {
-      // Handle text content changes
-      if (mutation.type === 'characterData' && mutation.target.parentElement) {
-        const parent = mutation.target.parentElement;
-        if (this.isCaptionElement(parent)) {
-          this.filterCaptionElement(parent);
-        }
+    // Skip if already processed
+    if (this.processedNodes.has(node)) return;
+
+    // If it's a text node inside a caption element, filter it
+    if (node.nodeType === Node.TEXT_NODE) {
+      const parent = node.parentElement;
+      if (parent && this.isCaptionElement(parent)) {
+        this.filterTextNode(node as Text);
+      }
+      return;
+    }
+
+    // If it's an element, check if it's a caption segment
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const element = node as Element;
+
+      // Check if this element or its children contain caption text
+      if (this.isCaptionElement(element)) {
+        this.filterCaptionElement(element);
       }
 
-      // Handle new nodes being added (new caption segments)
-      if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
-        mutation.addedNodes.forEach((node) => {
-          if (node instanceof Element) {
-            // Check if this is a caption element
-            if (this.isCaptionElement(node)) {
-              this.filterCaptionElement(node);
-            }
-            // Also check children
-            const captionElements = this.findCaptionElements(node);
-            captionElements.forEach((el) => this.filterCaptionElement(el));
-          }
-        });
-      }
+      // Also process any caption segments within this element
+      const segments = element.querySelectorAll('.ytp-caption-segment');
+      segments.forEach((segment) => {
+        this.filterCaptionElement(segment);
+      });
     }
   }
 
   /**
-   * Check if an element is a caption element
+   * Check if element is a YouTube caption element
    */
   private isCaptionElement(element: Element): boolean {
-    for (const selector of this.CAPTION_SELECTORS) {
-      if (element.matches(selector) || element.closest(selector)) {
-        return true;
-      }
-    }
-    // Also check class names that might indicate caption content
+    if (!element) return false;
+
     const className = element.className || '';
-    return className.includes('caption') || className.includes('ytp-caption');
+
+    // Check for YouTube caption classes
+    if (className.includes('ytp-caption-segment')) return true;
+    if (className.includes('captions-text')) return true;
+    if (className.includes('caption-visual-line')) return true;
+
+    // Check if it's inside a caption window
+    if (element.closest('.ytp-caption-window-container')) return true;
+    if (element.closest('.caption-window')) return true;
+
+    return false;
   }
 
   /**
-   * Find caption elements within a container
-   */
-  private findCaptionElements(container: Element): Element[] {
-    const elements: Element[] = [];
-    for (const selector of this.CAPTION_SELECTORS) {
-      const found = container.querySelectorAll(selector);
-      found.forEach((el) => elements.push(el));
-    }
-    return elements;
-  }
-
-  /**
-   * Scan for existing captions on the page
-   */
-  private scanExistingCaptions(): void {
-    for (const selector of this.CAPTION_SELECTORS) {
-      const elements = document.querySelectorAll(selector);
-      elements.forEach((el) => this.filterCaptionElement(el));
-    }
-  }
-
-  /**
-   * Filter profanity from a caption element
+   * Filter text within a caption element by modifying its text nodes directly
    */
   private filterCaptionElement(element: Element): void {
     if (!this.preferences) return;
+    if (this.processedNodes.has(element)) return;
 
-    const originalText = element.textContent || '';
-    if (!originalText.trim()) return;
+    // Get all text nodes within the element
+    const walker = document.createTreeWalker(
+      element,
+      NodeFilter.SHOW_TEXT,
+      null
+    );
 
-    // Check if already processed
-    if (element.getAttribute('data-safeplay-filtered') === 'true') {
-      return;
+    const textNodes: Text[] = [];
+    let currentNode: Node | null;
+    while ((currentNode = walker.nextNode())) {
+      textNodes.push(currentNode as Text);
     }
+
+    // Filter each text node
+    textNodes.forEach((textNode) => {
+      this.filterTextNode(textNode);
+    });
+
+    this.processedNodes.add(element);
+  }
+
+  /**
+   * Filter a single text node by replacing profanity with (bleep)
+   */
+  private filterTextNode(textNode: Text): void {
+    if (!this.preferences) return;
+    if (this.processedNodes.has(textNode)) return;
+
+    const originalText = textNode.textContent || '';
+    if (!originalText.trim()) return;
 
     const filteredText = this.censorText(originalText);
 
     if (filteredText !== originalText) {
-      // Text was modified, update the element
-      element.textContent = filteredText;
-      element.setAttribute('data-safeplay-filtered', 'true');
-      log('Censored caption:', originalText, '->', filteredText);
+      // Directly modify the text node's content
+      textNode.textContent = filteredText;
+      log('Censored:', originalText, '->', filteredText);
     }
+
+    this.processedNodes.add(textNode);
   }
 
   /**
-   * Censor profanity in text
+   * Censor profanity in text string
    */
   private censorText(text: string): string {
     if (!this.preferences) return text;
 
-    // Check against safe words first
-    const words = text.split(/(\s+)/); // Split keeping whitespace
+    // Split by word boundaries while keeping delimiters
+    const tokens = text.split(/(\s+|[.,!?;:'"()-])/);
     let result = '';
+    let modified = false;
 
-    for (const word of words) {
-      if (/^\s+$/.test(word)) {
-        // It's whitespace, keep it
-        result += word;
+    for (const token of tokens) {
+      // Skip whitespace and punctuation
+      if (!token || /^[\s.,!?;:'"()-]+$/.test(token)) {
+        result += token;
         continue;
       }
-
-      // Strip punctuation for checking but preserve for output
-      const punctuationMatch = word.match(/^([^a-zA-Z]*)(.+?)([^a-zA-Z]*)$/);
-      if (!punctuationMatch) {
-        result += word;
-        continue;
-      }
-
-      const [, leadingPunct, coreWord, trailingPunct] = punctuationMatch;
 
       // Check if it's a safe word
-      if (isSafeWord(coreWord)) {
-        result += word;
+      if (isSafeWord(token)) {
+        result += token;
         continue;
       }
 
       // Check for profanity
-      const profanityMatches = findEmbeddedProfanity(coreWord);
+      const profanityMatches = findEmbeddedProfanity(token);
 
       if (profanityMatches.length > 0) {
         // Filter by enabled severity levels
@@ -256,25 +277,26 @@ export class CaptionFilter {
         });
 
         if (enabledMatches.length > 0) {
-          // Censor the word - replace with (bleep)
-          result += leadingPunct + '(bleep)' + trailingPunct;
+          result += '(bleep)';
           this.censoredWordCount += enabledMatches.length;
-        } else {
-          result += word;
-        }
-      } else {
-        // Also check custom blacklist
-        if (this.preferences.customBlacklist.some(
-          (banned) => coreWord.toLowerCase() === banned.toLowerCase()
-        )) {
-          result += leadingPunct + '(bleep)' + trailingPunct;
-          this.censoredWordCount++;
-        } else {
-          result += word;
+          modified = true;
+          continue;
         }
       }
+
+      // Check custom blacklist
+      if (this.preferences.customBlacklist.some(
+        (banned) => token.toLowerCase() === banned.toLowerCase()
+      )) {
+        result += '(bleep)';
+        this.censoredWordCount++;
+        modified = true;
+        continue;
+      }
+
+      result += token;
     }
 
-    return result;
+    return modified ? result : text;
   }
 }
