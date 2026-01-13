@@ -9,6 +9,7 @@ import {
 import {
   PROFANITY_MAP,
   findEmbeddedProfanity,
+  isSafeWord,
 } from './profanity-list';
 
 export class TranscriptParser {
@@ -57,13 +58,48 @@ export class TranscriptParser {
   private getWordSeverity(word: string): SeverityLevel | null {
     const lowerWord = word.toLowerCase();
 
-    // Check custom blacklist first
+    // Check custom blacklist first (takes priority over safe words)
     if (this.customBlacklistMap.has(lowerWord)) {
       return this.customBlacklistMap.get(lowerWord)!;
     }
 
+    // Check if it's a safe word (e.g., "class" contains "ass" but is not profane)
+    if (isSafeWord(lowerWord)) {
+      return null;
+    }
+
     // Check built-in profanity list
     return PROFANITY_MAP.get(lowerWord) || null;
+  }
+
+  // Get precise timing using character-level data
+  private getCharacterLevelTiming(
+    segment: TranscriptSegment,
+    startIndex: number,
+    endIndex: number
+  ): { startTime: number; endTime: number } {
+    let startTime = segment.start_time;
+    let endTime = segment.end_time;
+
+    if (segment.characters && segment.characters.length > 0) {
+      // Use character-level timing for precision
+      // Find the first character of the word
+      const startChar = segment.characters[startIndex];
+      // Find the last character of the word (endIndex is exclusive, so -1)
+      const endChar = segment.characters[Math.min(endIndex - 1, segment.characters.length - 1)];
+
+      if (startChar) {
+        startTime = startChar.start;
+      }
+      if (endChar) {
+        endTime = endChar.end;
+      }
+
+      console.log(`[SafePlay Parser] Character timing: "${segment.text.substring(startIndex, endIndex)}" ` +
+        `chars[${startIndex}..${endIndex-1}] -> ${startTime.toFixed(3)}s - ${endTime.toFixed(3)}s`);
+    }
+
+    return { startTime, endTime };
   }
 
   // Find profanity matches in transcript segments
@@ -77,12 +113,15 @@ export class TranscriptParser {
       // Check for exact word match first
       const exactSeverity = this.getWordSeverity(normalizedText);
       if (exactSeverity && this.shouldFilterWord(normalizedText, exactSeverity)) {
+        // Use character-level timing for precision even on exact matches
+        const { startTime, endTime } = this.getCharacterLevelTiming(segment, 0, segment.text.length);
+
         matches.push({
           segmentIndex: i,
           word: segment.text,
           severity: exactSeverity,
-          startTime: segment.start_time,
-          endTime: segment.end_time,
+          startTime,
+          endTime,
           isPartialMatch: false,
         });
         continue;
@@ -109,22 +148,12 @@ export class TranscriptParser {
           continue;
         }
 
-        // Calculate timing using character-level data if available
-        let startTime = segment.start_time;
-        let endTime = segment.end_time;
-
-        if (segment.characters && segment.characters.length > 0) {
-          // Use character-level timing for precision
-          const startChar = segment.characters[embedded.startIndex];
-          const endChar = segment.characters[embedded.endIndex - 1];
-
-          if (startChar) {
-            startTime = startChar.start_time;
-          }
-          if (endChar) {
-            endTime = endChar.end_time;
-          }
-        }
+        // Use character-level timing for precision
+        const { startTime, endTime } = this.getCharacterLevelTiming(
+          segment,
+          embedded.startIndex,
+          embedded.endIndex
+        );
 
         matches.push({
           segmentIndex: i,
@@ -143,14 +172,24 @@ export class TranscriptParser {
 
   // Convert profanity matches to mute intervals with padding
   createMuteIntervals(matches: ProfanityMatch[]): MuteInterval[] {
-    const paddingSeconds = this.preferences.paddingMs / 1000;
+    // Use asymmetric padding if available, otherwise fall back to symmetric
+    const paddingBeforeSeconds = (this.preferences.paddingBeforeMs ?? this.preferences.paddingMs) / 1000;
+    const paddingAfterSeconds = (this.preferences.paddingAfterMs ?? this.preferences.paddingMs) / 1000;
 
-    return matches.map((match) => ({
-      start: Math.max(0, match.startTime - paddingSeconds),
-      end: match.endTime + paddingSeconds,
-      word: match.word,
-      severity: match.severity,
-    }));
+    return matches.map((match) => {
+      const interval = {
+        start: Math.max(0, match.startTime - paddingBeforeSeconds),
+        end: match.endTime + paddingAfterSeconds,
+        word: match.word,
+        severity: match.severity,
+      };
+
+      console.log(`[SafePlay Parser] Mute interval: "${match.word}" ` +
+        `${interval.start.toFixed(3)}s - ${interval.end.toFixed(3)}s ` +
+        `(padding: -${paddingBeforeSeconds * 1000}ms / +${paddingAfterSeconds * 1000}ms)`);
+
+      return interval;
+    });
   }
 
   // Merge overlapping or close intervals
@@ -192,8 +231,9 @@ export class TranscriptParser {
   private severityRank(severity: SeverityLevel): number {
     const ranks: Record<SeverityLevel, number> = {
       mild: 1,
-      moderate: 2,
-      severe: 3,
+      religious: 2,
+      moderate: 3,
+      severe: 4,
     };
     return ranks[severity];
   }

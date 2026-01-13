@@ -1,5 +1,9 @@
 import { MuteInterval, FilterMode } from '../types';
 
+// Fade duration in seconds for smooth transitions
+const FADE_DURATION = 0.05; // 50ms fade - fast but smooth
+const FADE_BUFFER = 0.08; // 80ms - start fading before interval begins
+
 export class AudioFilter {
   private video: HTMLVideoElement | null = null;
   private muteIntervals: MuteInterval[] = [];
@@ -7,11 +11,19 @@ export class AudioFilter {
   private isActive = false;
   private checkIntervalId: number | null = null;
   private isMuted = false;
+  private isFading = false;
 
-  // Audio context for bleep sound
+  // Web Audio API for smooth volume control
   private audioContext: AudioContext | null = null;
+  private sourceNode: MediaElementAudioSourceNode | null = null;
+  private gainNode: GainNode | null = null;
+
+  // Bleep sound nodes
   private bleepOscillator: OscillatorNode | null = null;
   private bleepGain: GainNode | null = null;
+
+  // Track current gain target to avoid redundant fades
+  private currentGainTarget = 1;
 
   // Callbacks
   private onMuteStart?: (interval: MuteInterval) => void;
@@ -38,20 +50,38 @@ export class AudioFilter {
     // Sort intervals by start time for efficient lookup
     this.muteIntervals.sort((a, b) => a.start - b.start);
 
-    // Initialize audio context for bleep mode
-    if (mode === 'bleep') {
-      this.initializeAudioContext();
-    }
+    // Initialize Web Audio API for smooth volume control
+    this.initializeAudioContext();
   }
 
   private initializeAudioContext(): void {
+    if (!this.video || this.audioContext) return;
+
     try {
       this.audioContext = new AudioContext();
-      this.bleepGain = this.audioContext.createGain();
-      this.bleepGain.gain.value = 0; // Start silent
-      this.bleepGain.connect(this.audioContext.destination);
+
+      // Create source from video element
+      this.sourceNode = this.audioContext.createMediaElementSource(this.video);
+
+      // Create gain node for volume control
+      this.gainNode = this.audioContext.createGain();
+      this.gainNode.gain.value = 1; // Start at full volume
+
+      // Connect: video -> gain -> destination (speakers)
+      this.sourceNode.connect(this.gainNode);
+      this.gainNode.connect(this.audioContext.destination);
+
+      // Setup bleep gain for bleep mode
+      if (this.filterMode === 'bleep') {
+        this.bleepGain = this.audioContext.createGain();
+        this.bleepGain.gain.value = 0;
+        this.bleepGain.connect(this.audioContext.destination);
+      }
+
+      console.log('[SafePlay] Audio context initialized with smooth fading');
     } catch (error) {
       console.error('[SafePlay] Failed to initialize audio context:', error);
+      // Fallback: will use video.muted instead
     }
   }
 
@@ -63,12 +93,17 @@ export class AudioFilter {
 
     this.isActive = true;
 
-    // Check every 10ms for precise timing
+    // Resume audio context if suspended (browser autoplay policy)
+    if (this.audioContext?.state === 'suspended') {
+      this.audioContext.resume();
+    }
+
+    // Check every 5ms for precise timing
     this.checkIntervalId = window.setInterval(() => {
       this.checkCurrentTime();
-    }, 10);
+    }, 5);
 
-    console.log('[SafePlay] Audio filter started with', this.muteIntervals.length, 'intervals');
+    console.log('[SafePlay] Audio filter started with', this.muteIntervals.length, 'intervals (smooth fading enabled)');
   }
 
   // Stop monitoring
@@ -84,71 +119,121 @@ export class AudioFilter {
       this.checkIntervalId = null;
     }
 
-    // Restore audio state
-    this.unmute();
+    // Restore full volume
+    this.fadeToVolume(1);
 
-    // Clean up audio context
+    // Stop bleep if playing
     if (this.bleepOscillator) {
       this.bleepOscillator.stop();
       this.bleepOscillator = null;
+    }
+
+    console.log('[SafePlay] Audio filter stopped');
+  }
+
+  // Clean up resources
+  destroy(): void {
+    this.stop();
+
+    if (this.sourceNode) {
+      this.sourceNode.disconnect();
+      this.sourceNode = null;
+    }
+
+    if (this.gainNode) {
+      this.gainNode.disconnect();
+      this.gainNode = null;
     }
 
     if (this.audioContext) {
       this.audioContext.close();
       this.audioContext = null;
     }
-
-    console.log('[SafePlay] Audio filter stopped');
   }
 
-  // Check if current time falls within any mute interval
+  // Check if current time falls within or is approaching any mute interval
   private checkCurrentTime(): void {
     if (!this.video || !this.isActive) {
       return;
     }
 
     const currentTime = this.video.currentTime;
-    const activeInterval = this.findActiveInterval(currentTime);
 
-    if (activeInterval && !this.isMuted) {
-      this.mute(activeInterval);
-    } else if (!activeInterval && this.isMuted) {
-      this.unmute();
+    // Check if we're in an interval OR approaching one (within fade buffer)
+    const activeInterval = this.findActiveInterval(currentTime);
+    const approachingInterval = this.findApproachingInterval(currentTime);
+
+    if (activeInterval) {
+      // We're inside a mute interval - ensure volume is 0
+      if (!this.isMuted) {
+        this.startMute(activeInterval);
+      }
+    } else if (approachingInterval) {
+      // We're approaching an interval - start fading out
+      if (!this.isMuted && !this.isFading) {
+        this.startFadeOut(approachingInterval);
+      }
+    } else {
+      // We're outside all intervals - ensure volume is restored
+      if (this.isMuted) {
+        this.endMute();
+      }
     }
   }
 
-  // Binary search for active interval (optimized for sorted intervals)
+  // Find if we're currently inside a mute interval
   private findActiveInterval(time: number): MuteInterval | null {
-    let low = 0;
-    let high = this.muteIntervals.length - 1;
-
-    while (low <= high) {
-      const mid = Math.floor((low + high) / 2);
-      const interval = this.muteIntervals[mid];
-
+    for (const interval of this.muteIntervals) {
       if (time >= interval.start && time <= interval.end) {
         return interval;
-      } else if (time < interval.start) {
-        high = mid - 1;
-      } else {
-        low = mid + 1;
+      }
+      // Since sorted, we can break early
+      if (interval.start > time + FADE_BUFFER) {
+        break;
       }
     }
-
     return null;
   }
 
-  private mute(interval: MuteInterval): void {
-    if (!this.video) return;
+  // Find if we're approaching a mute interval (within fade buffer)
+  private findApproachingInterval(time: number): MuteInterval | null {
+    for (const interval of this.muteIntervals) {
+      // Check if we're within the fade buffer before the interval starts
+      const fadeStartTime = interval.start - FADE_BUFFER;
+      if (time >= fadeStartTime && time < interval.start) {
+        return interval;
+      }
+      // Since sorted, we can break early
+      if (interval.start > time + FADE_BUFFER) {
+        break;
+      }
+    }
+    return null;
+  }
 
+  // Start fading out before the interval
+  private startFadeOut(interval: MuteInterval): void {
+    this.isFading = true;
+    this.fadeToVolume(0, () => {
+      this.isFading = false;
+      this.isMuted = true;
+      if (this.onMuteStart) {
+        this.onMuteStart(interval);
+      }
+    });
+
+    // Start bleep if in bleep mode
+    if (this.filterMode === 'bleep') {
+      this.startBleep();
+    }
+  }
+
+  // Immediately mute (when we enter an interval without approaching it first, e.g., seeking)
+  private startMute(interval: MuteInterval): void {
     this.isMuted = true;
+    this.fadeToVolume(0);
 
-    if (this.filterMode === 'mute') {
-      // Simple mute - set volume to 0
-      this.video.muted = true;
-    } else if (this.filterMode === 'bleep') {
-      // Bleep mode - mute video and play bleep tone
-      this.video.muted = true;
+    if (this.filterMode === 'bleep') {
       this.startBleep();
     }
 
@@ -157,11 +242,10 @@ export class AudioFilter {
     }
   }
 
-  private unmute(): void {
-    if (!this.video) return;
-
+  // End mute - fade back in
+  private endMute(): void {
     this.isMuted = false;
-    this.video.muted = false;
+    this.fadeToVolume(1);
 
     if (this.filterMode === 'bleep') {
       this.stopBleep();
@@ -172,6 +256,47 @@ export class AudioFilter {
     }
   }
 
+  // Smooth fade to target volume
+  private fadeToVolume(target: number, onComplete?: () => void): void {
+    // Skip if already at target
+    if (this.currentGainTarget === target) {
+      onComplete?.();
+      return;
+    }
+
+    this.currentGainTarget = target;
+
+    if (this.gainNode && this.audioContext) {
+      const now = this.audioContext.currentTime;
+
+      // Cancel any ongoing transitions
+      this.gainNode.gain.cancelScheduledValues(now);
+
+      // Set current value
+      this.gainNode.gain.setValueAtTime(this.gainNode.gain.value, now);
+
+      // Ramp to target over fade duration
+      this.gainNode.gain.linearRampToValueAtTime(target, now + FADE_DURATION);
+
+      // Call completion callback after fade
+      if (onComplete) {
+        setTimeout(onComplete, FADE_DURATION * 1000);
+      }
+    } else {
+      // Fallback to hard mute if no audio context
+      if (this.video) {
+        this.video.muted = target === 0;
+      }
+      onComplete?.();
+    }
+  }
+
+  // Classic TV censor bleep settings
+  private readonly BLEEP_FREQUENCY = 1000; // 1kHz - the classic censor bleep frequency
+  private readonly BLEEP_VOLUME = 0.35; // Volume level (0-1)
+  private readonly BLEEP_ATTACK = 0.008; // 8ms attack - very fast like real censor bleeps
+  private readonly BLEEP_RELEASE = 0.025; // 25ms release - slightly slower to avoid clicks
+
   private startBleep(): void {
     if (!this.audioContext || !this.bleepGain) return;
 
@@ -180,33 +305,69 @@ export class AudioFilter {
       this.audioContext.resume();
     }
 
-    // Create oscillator for bleep sound
+    // Create main oscillator for classic censor bleep
     this.bleepOscillator = this.audioContext.createOscillator();
-    this.bleepOscillator.type = 'sine';
-    this.bleepOscillator.frequency.value = 1000; // 1kHz bleep
+    this.bleepOscillator.type = 'sine'; // Pure sine wave for clean bleep
+    this.bleepOscillator.frequency.value = this.BLEEP_FREQUENCY;
+
+    // Create a subtle second oscillator slightly detuned for richness (optional TV effect)
+    const oscillator2 = this.audioContext.createOscillator();
+    oscillator2.type = 'sine';
+    oscillator2.frequency.value = this.BLEEP_FREQUENCY * 1.001; // Slight detune for thickness
+
+    // Create a mixer for the two oscillators
+    const mixer = this.audioContext.createGain();
+    mixer.gain.value = 0.5;
+
+    // Connect oscillators
     this.bleepOscillator.connect(this.bleepGain);
+    oscillator2.connect(mixer);
+    mixer.connect(this.bleepGain);
 
-    // Fade in
-    this.bleepGain.gain.setValueAtTime(0, this.audioContext.currentTime);
-    this.bleepGain.gain.linearRampToValueAtTime(0.3, this.audioContext.currentTime + 0.01);
+    // Fast attack envelope - classic censor bleep snaps on quickly
+    const now = this.audioContext.currentTime;
+    this.bleepGain.gain.setValueAtTime(0, now);
+    this.bleepGain.gain.linearRampToValueAtTime(this.BLEEP_VOLUME, now + this.BLEEP_ATTACK);
 
-    this.bleepOscillator.start();
+    // Start both oscillators
+    this.bleepOscillator.start(now);
+    oscillator2.start(now);
+
+    // Store reference to second oscillator for cleanup
+    (this.bleepOscillator as any)._secondOscillator = oscillator2;
+    (this.bleepOscillator as any)._mixer = mixer;
   }
 
   private stopBleep(): void {
     if (!this.audioContext || !this.bleepGain || !this.bleepOscillator) return;
 
-    // Fade out
-    this.bleepGain.gain.linearRampToValueAtTime(0, this.audioContext.currentTime + 0.01);
+    // Smooth release to avoid clicks
+    const now = this.audioContext.currentTime;
+    this.bleepGain.gain.setValueAtTime(this.bleepGain.gain.value, now);
+    this.bleepGain.gain.linearRampToValueAtTime(0, now + this.BLEEP_RELEASE);
 
-    // Stop and disconnect
+    // Stop and disconnect after release completes
+    const oscillator = this.bleepOscillator;
+    const oscillator2 = (oscillator as any)._secondOscillator;
+    const mixer = (oscillator as any)._mixer;
+
     setTimeout(() => {
-      if (this.bleepOscillator) {
-        this.bleepOscillator.stop();
-        this.bleepOscillator.disconnect();
-        this.bleepOscillator = null;
+      try {
+        oscillator.stop();
+        oscillator.disconnect();
+        if (oscillator2) {
+          oscillator2.stop();
+          oscillator2.disconnect();
+        }
+        if (mixer) {
+          mixer.disconnect();
+        }
+      } catch (e) {
+        // Already stopped
       }
-    }, 20);
+    }, this.BLEEP_RELEASE * 1000 + 10);
+
+    this.bleepOscillator = null;
   }
 
   // Update intervals (e.g., when preferences change)
@@ -219,9 +380,11 @@ export class AudioFilter {
   updateMode(mode: FilterMode): void {
     this.filterMode = mode;
 
-    // Initialize audio context if switching to bleep mode
-    if (mode === 'bleep' && !this.audioContext) {
-      this.initializeAudioContext();
+    // Initialize bleep gain if switching to bleep mode
+    if (mode === 'bleep' && this.audioContext && !this.bleepGain) {
+      this.bleepGain = this.audioContext.createGain();
+      this.bleepGain.gain.value = 0;
+      this.bleepGain.connect(this.audioContext.destination);
     }
   }
 

@@ -11,6 +11,7 @@ module.exports = (env, argv) => {
       background: './src/background/index.ts',
       content: './src/content/index.ts',
       popup: './src/popup/index.ts',
+      options: './src/options/index.ts',
     },
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -50,6 +51,11 @@ module.exports = (env, argv) => {
         template: './src/popup/popup.html',
         filename: 'popup.html',
         chunks: ['popup'],
+      }),
+      new HtmlWebpackPlugin({
+        template: './src/options/options.html',
+        filename: 'options.html',
+        chunks: ['options'],
       }),
     ],
     devtool: isDev ? 'inline-source-map' : 'source-map',

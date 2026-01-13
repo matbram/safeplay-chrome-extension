@@ -1,26 +1,81 @@
-// Resilient YouTube Button Injector for SafePlay
-// Based on pattern recognition rather than brittle class selectors
+// SafePlay Video Page Button Injector
+// Injects the SafePlay button next to the Subscribe button on YouTube watch pages
+
+import { ButtonState, ButtonStateInfo } from '../types';
 
 export interface InjectorOptions {
-  onButtonClick: (youtubeId: string, container: HTMLElement) => void;
+  onButtonClick: (youtubeId: string) => void;
+  onToggleFilter?: () => void; // Called when user clicks to toggle filter on/off
   debug?: boolean;
 }
 
-interface DetectedContainer {
-  element: HTMLElement;
-  youtubeId: string;
-  thumbnail: HTMLElement | null;
-}
-
 const PROCESSED_ATTR = 'data-safeplay-processed';
-const BUTTON_CLASS = 'safeplay-filter-btn';
+const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
+
+// Button state configurations with YouTube theme colors
+// Water fill uses blue (#3b82f6) that fills from bottom to top during processing
+const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: string; shadow: string; useWater?: boolean }> = {
+  idle: {
+    bg: '#ff0000', // YouTube red
+    hoverBg: '#cc0000',
+    text: 'SafePlay',
+    shadow: 'rgba(255, 0, 0, 0.3)',
+  },
+  connecting: {
+    bg: '#3f3f3f', // YouTube dark gray
+    hoverBg: '#4f4f4f',
+    text: 'Connecting...',
+    shadow: 'rgba(63, 63, 63, 0.3)',
+  },
+  downloading: {
+    bg: '#212121', // Dark background for water contrast
+    hoverBg: '#2a2a2a',
+    text: 'Filtering...',
+    shadow: 'rgba(59, 130, 246, 0.4)',
+    useWater: true,
+  },
+  transcribing: {
+    bg: '#212121', // Dark background for water contrast
+    hoverBg: '#2a2a2a',
+    text: 'Filtering...',
+    shadow: 'rgba(59, 130, 246, 0.4)',
+    useWater: true,
+  },
+  processing: {
+    bg: '#212121', // Dark background for water contrast
+    hoverBg: '#2a2a2a',
+    text: 'Filtering...',
+    shadow: 'rgba(59, 130, 246, 0.4)',
+    useWater: true,
+  },
+  filtering: {
+    bg: '#3b82f6', // Blue - fully filled with water
+    hoverBg: '#2563eb',
+    text: 'Censored',
+    shadow: 'rgba(59, 130, 246, 0.4)',
+  },
+  paused: {
+    bg: '#6b7280', // Gray - paused state
+    hoverBg: '#4b5563',
+    text: 'Paused',
+    shadow: 'rgba(107, 114, 128, 0.4)',
+  },
+  error: {
+    bg: '#ff4e45', // YouTube error red-orange
+    hoverBg: '#e63e35',
+    text: 'Retry',
+    shadow: 'rgba(255, 78, 69, 0.4)',
+  },
+};
 
 export class ResilientInjector {
   private options: InjectorOptions;
   private observer: MutationObserver | null = null;
-  private intersectionObserver: IntersectionObserver | null = null;
-  private debounceTimer: number | null = null;
-  private processedContainers = new WeakSet<HTMLElement>();
+  private currentVideoId: string | null = null;
+  private injectionAttempts = 0;
+  private maxAttempts = 50;
+  private retryInterval: number | null = null;
+  private currentState: ButtonState = 'idle';
 
   constructor(options: InjectorOptions) {
     this.options = options;
@@ -28,16 +83,13 @@ export class ResilientInjector {
 
   // Start observing and injecting
   start(): void {
-    this.log('Starting resilient injector');
+    this.log('Starting video page injector');
 
-    // Initial injection
-    this.injectButtons();
+    // Initial injection attempt
+    this.attemptInjection();
 
-    // Set up mutation observer for dynamic content
+    // Set up mutation observer for SPA navigation
     this.setupMutationObserver();
-
-    // Set up intersection observer for lazy-loaded content
-    this.setupIntersectionObserver();
 
     // Listen for YouTube SPA navigation
     this.setupNavigationListener();
@@ -50,275 +102,372 @@ export class ResilientInjector {
       this.observer = null;
     }
 
-    if (this.intersectionObserver) {
-      this.intersectionObserver.disconnect();
-      this.intersectionObserver = null;
+    if (this.retryInterval !== null) {
+      clearInterval(this.retryInterval);
+      this.retryInterval = null;
     }
 
-    this.log('Stopped resilient injector');
+    this.log('Stopped video page injector');
+  }
+
+  private isWatchPage(): boolean {
+    return window.location.pathname === '/watch' &&
+           window.location.search.includes('v=');
+  }
+
+  private getVideoId(): string | null {
+    const urlParams = new URLSearchParams(window.location.search);
+    return urlParams.get('v');
   }
 
   // Main injection function
-  injectButtons(): void {
-    const containers = this.detectVideoContainers();
-    this.log(`Found ${containers.length} video containers`);
-
-    for (const container of containers) {
-      this.injectButton(container);
+  private attemptInjection(): void {
+    if (!this.isWatchPage()) {
+      return;
     }
-  }
 
-  // Detect video containers using multiple strategies
-  private detectVideoContainers(): DetectedContainer[] {
-    const containers: DetectedContainer[] = [];
-    const seen = new Set<HTMLElement>();
+    const videoId = this.getVideoId();
+    if (!videoId) {
+      this.log('No video ID found');
+      return;
+    }
 
-    // Strategy 1: Find by video link pattern
-    const videoLinks = document.querySelectorAll<HTMLAnchorElement>(
-      'a[href*="/watch?v="], a[href*="/shorts/"]'
-    );
+    // Check if already injected for this video
+    if (this.currentVideoId === videoId && this.isButtonPresent()) {
+      this.log('Button already present for this video');
+      return;
+    }
 
-    for (const link of videoLinks) {
-      const youtubeId = this.extractYoutubeId(link.href);
-      if (!youtubeId) continue;
+    // Try to find the subscribe button container
+    const subscribeButton = this.findSubscribeButton();
 
-      const container = this.findContainerFromLink(link);
-      if (container && !seen.has(container) && !this.isProcessed(container)) {
-        seen.add(container);
-        containers.push({
-          element: container,
-          youtubeId,
-          thumbnail: this.findThumbnail(container),
-        });
+    if (subscribeButton) {
+      this.injectButton(subscribeButton, videoId);
+      this.currentVideoId = videoId;
+      this.injectionAttempts = 0;
+      if (this.retryInterval !== null) {
+        clearInterval(this.retryInterval);
+        this.retryInterval = null;
+      }
+    } else {
+      this.injectionAttempts++;
+      this.log(`Subscribe button not found, attempt ${this.injectionAttempts}/${this.maxAttempts}`);
+
+      // Retry with interval
+      if (this.injectionAttempts < this.maxAttempts && this.retryInterval === null) {
+        this.retryInterval = window.setInterval(() => {
+          this.attemptInjection();
+        }, 200);
       }
     }
-
-    // Strategy 2: Find by thumbnail image pattern
-    const thumbnails = document.querySelectorAll<HTMLImageElement>(
-      'img[src*="ytimg.com"], img[src*="i.ytimg.com"]'
-    );
-
-    for (const img of thumbnails) {
-      const container = this.findContainerFromThumbnail(img);
-      if (!container || seen.has(container) || this.isProcessed(container)) continue;
-
-      const link = container.querySelector<HTMLAnchorElement>('a[href*="/watch?v="], a[href*="/shorts/"]');
-      const youtubeId = link ? this.extractYoutubeId(link.href) : null;
-      if (!youtubeId) continue;
-
-      seen.add(container);
-      containers.push({
-        element: container,
-        youtubeId,
-        thumbnail: img.closest('[class*="thumbnail"]') as HTMLElement || img.parentElement,
-      });
-    }
-
-    return containers;
   }
 
-  // Extract YouTube video ID from URL
-  private extractYoutubeId(url: string): string | null {
-    // Handle /watch?v= format
-    const watchMatch = url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-    if (watchMatch) return watchMatch[1];
+  private findSubscribeButton(): HTMLElement | null {
+    const selectors = [
+      '#subscribe-button.ytd-watch-metadata',
+      'ytd-watch-metadata #subscribe-button',
+      '#owner #subscribe-button',
+      '#subscribe-button',
+    ];
 
-    // Handle /shorts/ format
-    const shortsMatch = url.match(/\/shorts\/([a-zA-Z0-9_-]{11})/);
-    if (shortsMatch) return shortsMatch[1];
+    for (const selector of selectors) {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (element) {
+        this.log(`Found subscribe button with selector: ${selector}`);
+        return element;
+      }
+    }
 
     return null;
   }
 
-  // Find the container element from a video link
-  private findContainerFromLink(link: HTMLAnchorElement): HTMLElement | null {
-    // Walk up the DOM to find a suitable container
-    let element: HTMLElement | null = link;
-    let lastValidContainer: HTMLElement | null = null;
+  private isButtonPresent(): boolean {
+    return document.querySelector(`.${BUTTON_CONTAINER_CLASS}`) !== null;
+  }
 
-    while (element && element !== document.body) {
-      // Check for common container patterns
-      if (this.looksLikeVideoContainer(element)) {
-        lastValidContainer = element;
-      }
-
-      // Stop if we've gone too far up
-      if (this.isTooHighInDOM(element)) {
-        break;
-      }
-
-      element = element.parentElement;
+  private injectButton(subscribeButton: HTMLElement, videoId: string): void {
+    // Remove any existing SafePlay button
+    const existingButton = document.querySelector(`.${BUTTON_CONTAINER_CLASS}`);
+    if (existingButton) {
+      existingButton.remove();
     }
 
-    return lastValidContainer;
-  }
+    // Reset state for new video
+    this.currentState = 'idle';
 
-  // Find container from a thumbnail image
-  private findContainerFromThumbnail(img: HTMLImageElement): HTMLElement | null {
-    let element: HTMLElement | null = img;
-    let lastValidContainer: HTMLElement | null = null;
+    // Create button container
+    const container = document.createElement('div');
+    container.className = `${BUTTON_CONTAINER_CLASS} style-scope ytd-watch-metadata`;
+    container.style.cssText = 'display: inline-flex; align-items: center; margin-left: 8px;';
+    container.setAttribute(PROCESSED_ATTR, 'true');
 
-    while (element && element !== document.body) {
-      if (this.looksLikeVideoContainer(element)) {
-        lastValidContainer = element;
-      }
-
-      if (this.isTooHighInDOM(element)) {
-        break;
-      }
-
-      element = element.parentElement;
-    }
-
-    return lastValidContainer;
-  }
-
-  // Check if an element looks like a video container
-  private looksLikeVideoContainer(element: HTMLElement): boolean {
-    const rect = element.getBoundingClientRect();
-
-    // Must have reasonable dimensions
-    if (rect.width < 100 || rect.height < 80) return false;
-
-    // Check for video-related attributes/classes
-    const className = element.className.toLowerCase();
-    const tagName = element.tagName.toLowerCase();
-
-    // Common YouTube container patterns
-    const containerPatterns = [
-      'video', 'item', 'renderer', 'content', 'card', 'tile', 'entry'
-    ];
-
-    const hasContainerPattern = containerPatterns.some(
-      (pattern) => className.includes(pattern) || tagName.includes(pattern)
-    );
-
-    // Must contain both a link and an image
-    const hasLink = element.querySelector('a[href*="/watch"], a[href*="/shorts"]') !== null;
-    const hasImage = element.querySelector('img[src*="ytimg.com"]') !== null;
-
-    return hasContainerPattern || (hasLink && hasImage);
-  }
-
-  // Check if we've gone too high in the DOM tree
-  private isTooHighInDOM(element: HTMLElement): boolean {
-    const className = element.className.toLowerCase();
-    const id = element.id.toLowerCase();
-
-    const stopPatterns = [
-      'page', 'content', 'main', 'body', 'app', 'root',
-      'feed', 'browse', 'results', 'grid', 'list'
-    ];
-
-    return stopPatterns.some(
-      (pattern) => className.includes(pattern) || id.includes(pattern)
-    );
-  }
-
-  // Find thumbnail element within container
-  private findThumbnail(container: HTMLElement): HTMLElement | null {
-    // Look for thumbnail wrapper
-    const thumbnailSelectors = [
-      '[class*="thumbnail"]',
-      '[id*="thumbnail"]',
-      'ytd-thumbnail',
-      '.ytd-thumbnail',
-    ];
-
-    for (const selector of thumbnailSelectors) {
-      const thumb = container.querySelector<HTMLElement>(selector);
-      if (thumb) return thumb;
-    }
-
-    // Fallback: find the element containing the img
-    const img = container.querySelector<HTMLImageElement>('img[src*="ytimg.com"]');
-    return img?.parentElement || null;
-  }
-
-  // Check if container is already processed
-  private isProcessed(container: HTMLElement): boolean {
-    return (
-      this.processedContainers.has(container) ||
-      container.hasAttribute(PROCESSED_ATTR) ||
-      container.querySelector(`.${BUTTON_CLASS}`) !== null
-    );
-  }
-
-  // Inject button into a container
-  private injectButton(detected: DetectedContainer): void {
-    if (this.isProcessed(detected.element)) return;
-
-    // Mark as processed
-    detected.element.setAttribute(PROCESSED_ATTR, 'true');
-    this.processedContainers.add(detected.element);
-
-    // Create button
-    const button = this.createButton(detected.youtubeId);
-
-    // Find injection point (prefer after thumbnail)
-    const injectionPoint = detected.thumbnail || detected.element.firstElementChild;
-
-    if (injectionPoint) {
-      injectionPoint.parentElement?.insertBefore(
-        button,
-        injectionPoint.nextSibling
-      );
-    } else {
-      detected.element.appendChild(button);
-    }
-
-    this.log(`Injected button for video: ${detected.youtubeId}`);
-  }
-
-  // Create the SafePlay button element
-  private createButton(youtubeId: string): HTMLElement {
+    // Create the button matching YouTube's style
     const button = document.createElement('button');
-    button.className = BUTTON_CLASS;
-    button.setAttribute('data-youtube-id', youtubeId);
-    button.innerHTML = `
-      <svg class="safeplay-icon" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-      </svg>
-      <span class="safeplay-text">SafePlay</span>
+    button.className = 'safeplay-main-button yt-spec-button-shape-next yt-spec-button-shape-next--tonal yt-spec-button-shape-next--mono yt-spec-button-shape-next--size-m yt-spec-button-shape-next--icon-leading';
+    button.title = 'Filter profanity with SafePlay';
+    button.setAttribute('aria-label', 'SafePlay Filter');
+    button.setAttribute('data-video-id', videoId);
+
+    const stateConfig = BUTTON_STATES.idle;
+    button.style.cssText = `
+      border: none;
+      background: ${stateConfig.bg};
+      color: #ffffff;
+      border-radius: 18px;
+      padding: 0 16px;
+      height: 36px;
+      font-family: "Roboto", "Arial", sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      line-height: 36px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      min-width: 120px;
+      box-shadow: 0 2px 4px ${stateConfig.shadow};
+      position: relative;
+      overflow: hidden;
     `;
 
+    // Create water fill element (for progress animation)
+    const waterFill = document.createElement('div');
+    waterFill.className = 'safeplay-water-fill';
+    waterFill.style.cssText = `
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 0%;
+      background: linear-gradient(to top, #3b82f6, #60a5fa);
+      transition: height 0.3s ease-out;
+      overflow: hidden;
+      border-radius: 18px;
+      z-index: 0;
+    `;
+
+    // Add icon (z-index to appear above water)
+    const iconWrapper = document.createElement('div');
+    iconWrapper.className = 'safeplay-icon';
+    iconWrapper.style.cssText = 'display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0; position: relative; z-index: 1;';
+    iconWrapper.innerHTML = this.getIconSVG('idle');
+
+    // Add text (z-index to appear above water)
+    const textSpan = document.createElement('span');
+    textSpan.className = 'safeplay-text';
+    textSpan.style.cssText = 'color: currentColor; font-size: 14px; font-weight: 500; line-height: 1; white-space: nowrap; position: relative; z-index: 1;';
+    textSpan.textContent = stateConfig.text;
+
+    button.appendChild(waterFill);
+    button.appendChild(iconWrapper);
+    button.appendChild(textSpan);
+
+    // Add hover effects
+    button.addEventListener('mouseenter', () => {
+      const config = BUTTON_STATES[this.currentState];
+      button.style.background = config.hoverBg;
+      button.style.boxShadow = `0 4px 8px ${config.shadow}`;
+      button.style.transform = 'translateY(-1px)';
+    });
+
+    button.addEventListener('mouseleave', () => {
+      const config = BUTTON_STATES[this.currentState];
+      button.style.background = config.bg;
+      button.style.boxShadow = `0 2px 4px ${config.shadow}`;
+      button.style.transform = 'translateY(0)';
+    });
+
+    // Add click handler
     button.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
 
-      const container = button.closest(`[${PROCESSED_ATTR}]`) as HTMLElement;
-      this.options.onButtonClick(youtubeId, container);
+      // Allow click in idle, error, filtering (censored), or paused state
+      if (this.currentState === 'idle' || this.currentState === 'error') {
+        this.options.onButtonClick(videoId);
+      } else if (this.currentState === 'filtering' || this.currentState === 'paused') {
+        // Toggle filter on/off
+        if (this.options.onToggleFilter) {
+          this.options.onToggleFilter();
+        }
+      }
     });
 
-    return button;
+    container.appendChild(button);
+
+    // Insert after subscribe button
+    subscribeButton.parentElement?.insertBefore(container, subscribeButton.nextSibling);
+
+    this.log(`Injected SafePlay button for video: ${videoId}`);
   }
 
-  // Set up mutation observer for dynamic content
+  private getIconSVG(state: ButtonState): string {
+    switch (state) {
+      case 'connecting':
+      case 'downloading':
+      case 'transcribing':
+      case 'processing':
+        // Spinning loader icon
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="safeplay-spinner">
+            <style>.safeplay-spinner { animation: safeplay-spin 1s linear infinite; } @keyframes safeplay-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }</style>
+            <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
+            <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+          </svg>
+        `;
+      case 'filtering':
+        // Active shield icon with checkmark
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
+          </svg>
+        `;
+      case 'paused':
+        // Paused - shield with pause bars
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 14H9V9h2v6zm4 0h-2V9h2v6z"/>
+          </svg>
+        `;
+      case 'error':
+        // Error icon
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+          </svg>
+        `;
+      default:
+        // Default checkmark icon
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+          </svg>
+        `;
+    }
+  }
+
+  // Update button state with detailed info
+  updateButtonState(stateInfo: ButtonStateInfo): void {
+    const container = document.querySelector(`.${BUTTON_CONTAINER_CLASS}`);
+    if (!container) return;
+
+    const button = container.querySelector<HTMLButtonElement>('.safeplay-main-button');
+    const textSpan = container.querySelector<HTMLSpanElement>('.safeplay-text');
+    const iconWrapper = container.querySelector<HTMLDivElement>('.safeplay-icon');
+    const waterFill = container.querySelector<HTMLDivElement>('.safeplay-water-fill');
+
+    if (!button || !textSpan || !iconWrapper) return;
+
+    this.currentState = stateInfo.state;
+    const config = BUTTON_STATES[stateInfo.state];
+
+    // Update colors
+    button.style.background = config.bg;
+    button.style.boxShadow = `0 2px 4px ${config.shadow}`;
+
+    // Update icon
+    iconWrapper.innerHTML = this.getIconSVG(stateInfo.state);
+
+    // Update text
+    let displayText = stateInfo.text || config.text;
+
+    // Add progress percentage for processing states
+    if (stateInfo.progress !== undefined && stateInfo.progress > 0) {
+      if (stateInfo.state === 'downloading' || stateInfo.state === 'transcribing' || stateInfo.state === 'processing') {
+        displayText = `${config.text.replace('...', '')} ${Math.round(stateInfo.progress)}%`;
+      }
+    }
+
+    // Add interval count for filtering state (completed)
+    if (stateInfo.state === 'filtering' && stateInfo.intervalCount !== undefined) {
+      displayText = `Censored (${stateInfo.intervalCount})`;
+    }
+
+    textSpan.textContent = displayText;
+
+    // Update water fill effect
+    if (waterFill) {
+      if (config.useWater && stateInfo.progress !== undefined && stateInfo.progress > 0) {
+        // Show water filling up during processing states
+        waterFill.style.height = `${stateInfo.progress}%`;
+        waterFill.classList.remove('safeplay-water-full');
+      } else if (stateInfo.state === 'filtering') {
+        // Fully filled when complete - solid blue
+        waterFill.style.height = '100%';
+        waterFill.classList.add('safeplay-water-full');
+      } else if (stateInfo.state === 'paused') {
+        // Paused - drain the water (animate to empty)
+        waterFill.style.height = '0%';
+        waterFill.classList.remove('safeplay-water-full');
+      } else {
+        // Reset water for other states
+        waterFill.style.height = '0%';
+        waterFill.classList.remove('safeplay-water-full');
+      }
+    }
+
+    // Update cursor - clickable in idle, error, filtering, and paused states
+    if (stateInfo.state === 'idle' || stateInfo.state === 'error' ||
+        stateInfo.state === 'filtering' || stateInfo.state === 'paused') {
+      button.style.cursor = 'pointer';
+    } else {
+      button.style.cursor = 'default';
+    }
+
+    // Update title/tooltip
+    switch (stateInfo.state) {
+      case 'connecting':
+        button.title = 'Connecting to SafePlay service...';
+        break;
+      case 'downloading':
+        button.title = `Filtering: Downloading audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
+        break;
+      case 'transcribing':
+        button.title = `Filtering: Transcribing audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
+        break;
+      case 'processing':
+        button.title = 'Filtering: Processing transcript...';
+        break;
+      case 'filtering':
+        button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''} - Click to disable`;
+        break;
+      case 'paused':
+        button.title = 'Filter paused - Click to re-enable';
+        break;
+      case 'error':
+        button.title = stateInfo.error || 'An error occurred. Click to retry.';
+        break;
+      default:
+        button.title = 'Click to filter profanity with SafePlay';
+    }
+
+    this.log(`Button state updated to: ${stateInfo.state}`, stateInfo);
+  }
+
+  // Convenience method for simple state updates
+  setButtonState(state: ButtonState, text?: string, progress?: number): void {
+    this.updateButtonState({ state, text: text || '', progress });
+  }
+
+  // Set up mutation observer for dynamic content changes
   private setupMutationObserver(): void {
     this.observer = new MutationObserver((mutations) => {
-      let shouldInject = false;
-
       for (const mutation of mutations) {
-        if (mutation.addedNodes.length > 0) {
+        if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
           for (const node of mutation.addedNodes) {
             if (node instanceof HTMLElement) {
-              // Check if the added node or its children might contain videos
-              if (
-                node.querySelector?.('a[href*="/watch"], a[href*="/shorts"]') ||
-                node.querySelector?.('img[src*="ytimg.com"]')
-              ) {
-                shouldInject = true;
-                break;
+              if (node.id === 'subscribe-button' ||
+                  node.querySelector?.('#subscribe-button') ||
+                  node.closest?.('ytd-watch-metadata')) {
+                this.log('Subscribe button area changed, re-injecting');
+                this.attemptInjection();
+                return;
               }
             }
           }
         }
-
-        if (shouldInject) break;
-      }
-
-      if (shouldInject) {
-        this.debouncedInject();
       }
     });
 
@@ -328,36 +477,8 @@ export class ResilientInjector {
     });
   }
 
-  // Set up intersection observer for lazy loading
-  private setupIntersectionObserver(): void {
-    this.intersectionObserver = new IntersectionObserver(
-      (entries) => {
-        const hasVisibleUnprocessed = entries.some(
-          (entry) =>
-            entry.isIntersecting &&
-            !this.isProcessed(entry.target as HTMLElement)
-        );
-
-        if (hasVisibleUnprocessed) {
-          this.debouncedInject();
-        }
-      },
-      { rootMargin: '200px' }
-    );
-
-    // Observe potential video containers
-    const containers = document.querySelectorAll<HTMLElement>(
-      'ytd-video-renderer, ytd-grid-video-renderer, ytd-compact-video-renderer, ytd-rich-item-renderer'
-    );
-
-    containers.forEach((container) => {
-      this.intersectionObserver?.observe(container);
-    });
-  }
-
   // Listen for YouTube SPA navigation
   private setupNavigationListener(): void {
-    // YouTube uses History API for navigation
     const originalPushState = history.pushState;
     const originalReplaceState = history.replaceState;
 
@@ -375,28 +496,35 @@ export class ResilientInjector {
       this.onNavigation();
     });
 
-    // Also listen for YouTube's custom navigation event
     document.addEventListener('yt-navigate-finish', () => {
+      this.onNavigation();
+    });
+
+    document.addEventListener('yt-page-data-updated', () => {
+      this.log('Page data updated');
       this.onNavigation();
     });
   }
 
   private onNavigation(): void {
-    this.log('Navigation detected, re-injecting buttons');
-    // Wait for DOM to update
-    setTimeout(() => this.injectButtons(), 500);
-  }
+    this.log('Navigation detected');
+    this.currentVideoId = null;
+    this.currentState = 'idle';
+    this.injectionAttempts = 0;
 
-  // Debounced injection to prevent excessive processing
-  private debouncedInject(): void {
-    if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
+    if (this.retryInterval !== null) {
+      clearInterval(this.retryInterval);
+      this.retryInterval = null;
     }
 
-    this.debounceTimer = window.setTimeout(() => {
-      this.injectButtons();
-      this.debounceTimer = null;
-    }, 100);
+    setTimeout(() => {
+      this.attemptInjection();
+    }, 300);
+  }
+
+  // Get current video ID
+  getCurrentVideoId(): string | null {
+    return this.currentVideoId;
   }
 
   // Debug logging

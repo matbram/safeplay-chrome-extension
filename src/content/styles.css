@@ -1,6 +1,93 @@
-/* SafePlay Content Script Styles */
+/* SafePlay Content Script Styles - YouTube Theme */
 
-/* Thumbnail Button */
+/* CSS Variables for YouTube theme */
+:root {
+  --sp-yt-red: #ff0000;
+  --sp-yt-red-hover: #cc0000;
+  --sp-yt-red-dark: #aa0000;
+  --sp-yt-dark-bg: #0f0f0f;
+  --sp-yt-card-bg: #212121;
+  --sp-yt-card-hover: #3f3f3f;
+  --sp-yt-text: #f1f1f1;
+  --sp-yt-text-secondary: #aaaaaa;
+  --sp-yt-success: #2ba640;
+  --sp-yt-error: #ff4e45;
+  --sp-yt-processing: #a855f7;
+  --sp-yt-water: #3b82f6;
+  --sp-yt-water-light: #60a5fa;
+}
+
+/* Water wave animation */
+@keyframes safeplay-wave {
+  0% { transform: translateX(0) translateY(0); }
+  50% { transform: translateX(-25%) translateY(-2px); }
+  100% { transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes safeplay-wave-reverse {
+  0% { transform: translateX(-50%) translateY(0); }
+  50% { transform: translateX(-25%) translateY(-3px); }
+  100% { transform: translateX(0) translateY(0); }
+}
+
+/* Water fill container for button */
+.safeplay-water-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 0%;
+  background: linear-gradient(to top, var(--sp-yt-water), var(--sp-yt-water-light));
+  transition: height 0.3s ease-out;
+  overflow: hidden;
+  border-radius: 18px;
+  z-index: 0;
+}
+
+/* Wave effect on top of water */
+.safeplay-water-fill::before,
+.safeplay-water-fill::after {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: -50%;
+  width: 200%;
+  height: 16px;
+  background: radial-gradient(ellipse at center, transparent 0%, transparent 40%, var(--sp-yt-water-light) 40%, var(--sp-yt-water-light) 45%, transparent 45%);
+  background-size: 20px 16px;
+  animation: safeplay-wave 2s ease-in-out infinite;
+}
+
+.safeplay-water-fill::after {
+  top: -6px;
+  background: radial-gradient(ellipse at center, transparent 0%, transparent 45%, var(--sp-yt-water) 45%, var(--sp-yt-water) 50%, transparent 50%);
+  background-size: 24px 14px;
+  animation: safeplay-wave-reverse 2.5s ease-in-out infinite;
+  opacity: 0.7;
+}
+
+/* When water is full (100%), smooth out the waves */
+.safeplay-water-fill.safeplay-water-full {
+  height: 100% !important;
+  background: var(--sp-yt-water);
+  transition: height 0.3s ease-out, background 0.3s ease;
+}
+
+.safeplay-water-fill.safeplay-water-full::before,
+.safeplay-water-fill.safeplay-water-full::after {
+  animation: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* Button content needs to be above water */
+.safeplay-main-button .safeplay-icon,
+.safeplay-main-button .safeplay-text {
+  position: relative;
+  z-index: 1;
+}
+
+/* Thumbnail Button - YouTube Red Theme */
 .safeplay-filter-btn {
   display: flex;
   align-items: center;
@@ -11,25 +98,26 @@
   margin-top: 8px;
   border: none;
   border-radius: 8px;
-  background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+  background: var(--sp-yt-red);
   color: white;
   font-family: 'Roboto', 'YouTube Sans', sans-serif;
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .safeplay-filter-btn:hover {
-  background: linear-gradient(135deg, #45a049 0%, #3d8b40 100%);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+  background: var(--sp-yt-red-hover);
+  box-shadow: 0 4px 8px rgba(255, 0, 0, 0.3);
   transform: translateY(-1px);
 }
 
 .safeplay-filter-btn:active {
   transform: translateY(0);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  background: var(--sp-yt-red-dark);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
 }
 
 .safeplay-filter-btn .safeplay-icon {
@@ -42,14 +130,61 @@
   white-space: nowrap;
 }
 
+/* Processing state - Purple/Violet */
+.safeplay-filter-btn.safeplay-processing {
+  background: var(--sp-yt-processing);
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.4);
+}
+
+.safeplay-filter-btn.safeplay-processing:hover {
+  background: var(--sp-yt-processing);
+  transform: none;
+}
+
 /* Loading state */
 .safeplay-filter-btn.safeplay-loading {
+  background: var(--sp-yt-card-hover);
   pointer-events: none;
-  opacity: 0.8;
+  opacity: 0.9;
 }
 
 .safeplay-filter-btn.safeplay-loading .safeplay-icon {
   animation: safeplay-spin 1s linear infinite;
+}
+
+/* Active/Filtered state - Green Success */
+.safeplay-filter-btn.safeplay-active {
+  background: var(--sp-yt-success);
+  box-shadow: 0 2px 8px rgba(43, 166, 64, 0.3);
+}
+
+.safeplay-filter-btn.safeplay-active:hover {
+  background: #239a36;
+  box-shadow: 0 4px 12px rgba(43, 166, 64, 0.4);
+}
+
+/* Error state - Red Error */
+.safeplay-filter-btn.safeplay-error {
+  background: var(--sp-yt-error);
+  box-shadow: 0 2px 8px rgba(255, 78, 69, 0.3);
+}
+
+.safeplay-filter-btn.safeplay-error:hover {
+  background: #e63e35;
+}
+
+/* Disabled state */
+.safeplay-filter-btn.safeplay-disabled {
+  background: var(--sp-yt-card-bg);
+  color: var(--sp-yt-text-secondary);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.safeplay-filter-btn.safeplay-disabled:hover {
+  transform: none;
+  box-shadow: none;
 }
 
 @keyframes safeplay-spin {
@@ -57,17 +192,23 @@
   to { transform: rotate(360deg); }
 }
 
-/* Dark mode support */
+/* Dark mode support - same colors work for dark mode */
 html[dark] .safeplay-filter-btn,
 [dark] .safeplay-filter-btn,
 ytd-app[darker-dark-theme] .safeplay-filter-btn {
-  background: linear-gradient(135deg, #4CAF50 0%, #388E3C 100%);
+  background: var(--sp-yt-red);
 }
 
 html[dark] .safeplay-filter-btn:hover,
 [dark] .safeplay-filter-btn:hover,
 ytd-app[darker-dark-theme] .safeplay-filter-btn:hover {
-  background: linear-gradient(135deg, #388E3C 0%, #2E7D32 100%);
+  background: var(--sp-yt-red-hover);
+}
+
+html[dark] .safeplay-filter-btn.safeplay-active,
+[dark] .safeplay-filter-btn.safeplay-active,
+ytd-app[darker-dark-theme] .safeplay-filter-btn.safeplay-active {
+  background: var(--sp-yt-success);
 }
 
 /* Player Controls Button */
@@ -91,7 +232,7 @@ ytd-app[darker-dark-theme] .safeplay-filter-btn:hover {
 }
 
 .safeplay-player-controls.safeplay-active svg {
-  fill: #4CAF50;
+  fill: var(--sp-yt-red);
   opacity: 1;
 }
 
@@ -110,7 +251,7 @@ ytd-app[darker-dark-theme] .safeplay-filter-btn:hover {
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
-  background: rgba(76, 175, 80, 0.95);
+  background: rgba(43, 166, 64, 0.95);
   color: white;
   border-radius: 20px;
   font-family: 'Roboto', sans-serif;
@@ -183,26 +324,28 @@ ytd-shorts .safeplay-filter-btn {
   }
 }
 
-/* Processing indicator */
+/* Processing indicator - Purple theme */
 .safeplay-processing-indicator {
   position: absolute;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 100;
-  background: rgba(0, 0, 0, 0.85);
+  background: rgba(15, 15, 15, 0.95);
   padding: 20px 30px;
   border-radius: 12px;
   text-align: center;
   color: white;
   font-family: 'Roboto', sans-serif;
+  border: 1px solid rgba(168, 85, 247, 0.3);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
 }
 
 .safeplay-processing-indicator .safeplay-spinner {
   width: 40px;
   height: 40px;
-  border: 3px solid rgba(255, 255, 255, 0.3);
-  border-top-color: #4CAF50;
+  border: 3px solid rgba(168, 85, 247, 0.3);
+  border-top-color: var(--sp-yt-processing);
   border-radius: 50%;
   animation: safeplay-spin 1s linear infinite;
   margin: 0 auto 12px;
@@ -211,12 +354,13 @@ ytd-shorts .safeplay-filter-btn {
 .safeplay-processing-indicator .safeplay-progress-text {
   font-size: 14px;
   opacity: 0.9;
+  color: var(--sp-yt-text);
 }
 
 .safeplay-processing-indicator .safeplay-progress-bar {
   width: 200px;
   height: 4px;
-  background: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
   border-radius: 2px;
   margin-top: 12px;
   overflow: hidden;
@@ -224,7 +368,25 @@ ytd-shorts .safeplay-filter-btn {
 
 .safeplay-processing-indicator .safeplay-progress-fill {
   height: 100%;
-  background: #4CAF50;
+  background: linear-gradient(90deg, var(--sp-yt-processing), #c084fc);
   border-radius: 2px;
   transition: width 0.3s ease;
+}
+
+/* Progress bar on button */
+.safeplay-filter-btn .safeplay-progress-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 0 0 8px 8px;
+  overflow: hidden;
+}
+
+.safeplay-filter-btn .safeplay-progress-fill {
+  height: 100%;
+  background: rgba(255, 255, 255, 0.8);
+  transition: width 0.15s ease-out;
 }

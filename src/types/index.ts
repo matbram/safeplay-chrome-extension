@@ -1,9 +1,9 @@
 // API Response Types
 
 export interface CharacterTiming {
-  character: string;
-  start_time: number;
-  end_time: number;
+  char: string;
+  start: number;
+  end: number;
 }
 
 export interface TranscriptSegment {
@@ -14,30 +14,56 @@ export interface TranscriptSegment {
 }
 
 export interface Transcript {
-  youtube_id: string;
+  id: string;
+  youtube_id?: string; // May be set from context
+  full_text?: string;
   segments: TranscriptSegment[];
-  duration: number;
-  language: string;
-  created_at: string;
+  duration?: number;
+  language?: string;
+  created_at?: string;
 }
 
 export interface FilterResponse {
-  status: 'cached' | 'processing';
+  status: 'completed' | 'processing';
+  cached?: boolean;
   transcript?: Transcript;
   job_id?: string;
   message?: string;
 }
 
 export interface JobStatusResponse {
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: 'pending' | 'downloading' | 'transcribing' | 'completed' | 'failed';
   progress: number;
   transcript?: Transcript;
+  error?: string;
+  video?: {
+    youtube_id: string;
+    title?: string;
+  };
+}
+
+// Button state for UX
+export type ButtonState =
+  | 'idle'
+  | 'connecting'
+  | 'downloading'
+  | 'transcribing'
+  | 'processing'
+  | 'filtering'
+  | 'paused'  // Filter is paused (user can re-enable)
+  | 'error';
+
+export interface ButtonStateInfo {
+  state: ButtonState;
+  text: string;
+  progress?: number;
+  intervalCount?: number;
   error?: string;
 }
 
 // Profanity Types
 
-export type SeverityLevel = 'mild' | 'moderate' | 'severe';
+export type SeverityLevel = 'mild' | 'moderate' | 'severe' | 'religious';
 
 export interface ProfanityWord {
   word: string;
@@ -72,11 +98,15 @@ export interface UserPreferences {
     mild: boolean;
     moderate: boolean;
     severe: boolean;
+    religious: boolean;
   };
   customBlacklist: string[];
   customWhitelist: string[];
-  paddingMs: number;
+  paddingMs: number; // Legacy/fallback symmetric padding
+  paddingBeforeMs?: number; // Padding before word starts (catches attack)
+  paddingAfterMs?: number; // Padding after word ends (catches release)
   mergeThresholdMs: number;
+  autoEnableForFilteredVideos: boolean; // Auto-enable filter for previously filtered videos
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -86,11 +116,15 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
     mild: false,
     moderate: true,
     severe: true,
+    religious: false, // Off by default - user opt-in
   },
   customBlacklist: [],
   customWhitelist: [],
-  paddingMs: 50,
+  paddingMs: 50, // Legacy/fallback symmetric padding
+  paddingBeforeMs: 100, // Padding before word - smooth fade adds ~130ms effective lead time
+  paddingAfterMs: 30, // Padding after word ends
   mergeThresholdMs: 100,
+  autoEnableForFilteredVideos: true, // Auto-enable filter for previously filtered videos
 };
 
 // Storage Types

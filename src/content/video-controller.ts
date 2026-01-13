@@ -161,6 +161,16 @@ export class VideoController {
     this.updateStatus('idle');
   }
 
+  // Resume filtering (re-start audio filter)
+  resume(): void {
+    if (!this.video || this.muteIntervals.length === 0) {
+      return;
+    }
+    this.audioFilter.start();
+    this.updateStatus('active');
+    this.showStatusOverlay();
+  }
+
   // Update preferences
   updatePreferences(preferences: UserPreferences): void {
     this.preferences = preferences;
@@ -188,6 +198,11 @@ export class VideoController {
       intervalCount: filterState.intervalCount,
       currentlyMuting: filterState.isMuted,
     };
+  }
+
+  // Get mute intervals for caption filtering
+  getMuteIntervals(): MuteInterval[] {
+    return this.muteIntervals;
   }
 
   // Find the YouTube video element
