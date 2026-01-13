@@ -12,7 +12,8 @@ const PROCESSED_ATTR = 'data-safeplay-processed';
 const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
 
 // Button state configurations with YouTube theme colors
-const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: string; shadow: string }> = {
+// Water fill uses blue (#3b82f6) that fills from bottom to top during processing
+const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: string; shadow: string; useWater?: boolean }> = {
   idle: {
     bg: '#ff0000', // YouTube red
     hoverBg: '#cc0000',
@@ -26,28 +27,31 @@ const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: st
     shadow: 'rgba(63, 63, 63, 0.3)',
   },
   downloading: {
-    bg: '#a855f7', // Purple processing
-    hoverBg: '#9333ea',
-    text: 'Analyzing...',
-    shadow: 'rgba(168, 85, 247, 0.4)',
+    bg: '#212121', // Dark background for water contrast
+    hoverBg: '#2a2a2a',
+    text: 'Filtering...',
+    shadow: 'rgba(59, 130, 246, 0.4)',
+    useWater: true,
   },
   transcribing: {
-    bg: '#a855f7', // Purple processing
-    hoverBg: '#9333ea',
-    text: 'Analyzing...',
-    shadow: 'rgba(168, 85, 247, 0.4)',
+    bg: '#212121', // Dark background for water contrast
+    hoverBg: '#2a2a2a',
+    text: 'Filtering...',
+    shadow: 'rgba(59, 130, 246, 0.4)',
+    useWater: true,
   },
   processing: {
-    bg: '#a855f7', // Purple processing
-    hoverBg: '#9333ea',
-    text: 'Analyzing...',
-    shadow: 'rgba(168, 85, 247, 0.4)',
+    bg: '#212121', // Dark background for water contrast
+    hoverBg: '#2a2a2a',
+    text: 'Filtering...',
+    shadow: 'rgba(59, 130, 246, 0.4)',
+    useWater: true,
   },
   filtering: {
-    bg: '#2ba640', // YouTube success green
-    hoverBg: '#239a36',
-    text: 'Active',
-    shadow: 'rgba(43, 166, 64, 0.4)',
+    bg: '#3b82f6', // Blue - fully filled with water
+    hoverBg: '#2563eb',
+    text: 'Censored',
+    shadow: 'rgba(59, 130, 246, 0.4)',
   },
   error: {
     bg: '#ff4e45', // YouTube error red-orange
@@ -221,35 +225,37 @@ export class ResilientInjector {
       overflow: hidden;
     `;
 
-    // Create progress bar (hidden initially)
-    const progressBar = document.createElement('div');
-    progressBar.className = 'safeplay-progress-bar';
-    progressBar.style.cssText = `
+    // Create water fill element (for progress animation)
+    const waterFill = document.createElement('div');
+    waterFill.className = 'safeplay-water-fill';
+    waterFill.style.cssText = `
       position: absolute;
       bottom: 0;
       left: 0;
-      height: 3px;
-      width: 0%;
-      background: rgba(255, 255, 255, 0.5);
-      transition: width 0.3s ease;
-      border-radius: 0 0 18px 18px;
+      right: 0;
+      height: 0%;
+      background: linear-gradient(to top, #3b82f6, #60a5fa);
+      transition: height 0.3s ease-out;
+      overflow: hidden;
+      border-radius: 18px;
+      z-index: 0;
     `;
 
-    // Add icon
+    // Add icon (z-index to appear above water)
     const iconWrapper = document.createElement('div');
     iconWrapper.className = 'safeplay-icon';
-    iconWrapper.style.cssText = 'display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0;';
+    iconWrapper.style.cssText = 'display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; flex-shrink: 0; position: relative; z-index: 1;';
     iconWrapper.innerHTML = this.getIconSVG('idle');
 
-    // Add text
+    // Add text (z-index to appear above water)
     const textSpan = document.createElement('span');
     textSpan.className = 'safeplay-text';
-    textSpan.style.cssText = 'color: currentColor; font-size: 14px; font-weight: 500; line-height: 1; white-space: nowrap;';
+    textSpan.style.cssText = 'color: currentColor; font-size: 14px; font-weight: 500; line-height: 1; white-space: nowrap; position: relative; z-index: 1;';
     textSpan.textContent = stateConfig.text;
 
+    button.appendChild(waterFill);
     button.appendChild(iconWrapper);
     button.appendChild(textSpan);
-    button.appendChild(progressBar);
 
     // Add hover effects
     button.addEventListener('mouseenter', () => {
@@ -331,7 +337,7 @@ export class ResilientInjector {
     const button = container.querySelector<HTMLButtonElement>('.safeplay-main-button');
     const textSpan = container.querySelector<HTMLSpanElement>('.safeplay-text');
     const iconWrapper = container.querySelector<HTMLDivElement>('.safeplay-icon');
-    const progressBar = container.querySelector<HTMLDivElement>('.safeplay-progress-bar');
+    const waterFill = container.querySelector<HTMLDivElement>('.safeplay-water-fill');
 
     if (!button || !textSpan || !iconWrapper) return;
 
@@ -355,21 +361,27 @@ export class ResilientInjector {
       }
     }
 
-    // Add interval count for filtering state
+    // Add interval count for filtering state (completed)
     if (stateInfo.state === 'filtering' && stateInfo.intervalCount !== undefined) {
-      displayText = `Filtering (${stateInfo.intervalCount})`;
+      displayText = `Censored (${stateInfo.intervalCount})`;
     }
 
     textSpan.textContent = displayText;
 
-    // Update progress bar
-    if (progressBar) {
-      if (stateInfo.progress !== undefined && stateInfo.progress > 0 && stateInfo.progress < 100) {
-        progressBar.style.width = `${stateInfo.progress}%`;
-        progressBar.style.display = 'block';
+    // Update water fill effect
+    if (waterFill) {
+      if (config.useWater && stateInfo.progress !== undefined && stateInfo.progress > 0) {
+        // Show water filling up during processing states
+        waterFill.style.height = `${stateInfo.progress}%`;
+        waterFill.classList.remove('safeplay-water-full');
+      } else if (stateInfo.state === 'filtering') {
+        // Fully filled when complete - solid blue
+        waterFill.style.height = '100%';
+        waterFill.classList.add('safeplay-water-full');
       } else {
-        progressBar.style.width = '0%';
-        progressBar.style.display = 'none';
+        // Reset water for other states
+        waterFill.style.height = '0%';
+        waterFill.classList.remove('safeplay-water-full');
       }
     }
 
@@ -386,16 +398,16 @@ export class ResilientInjector {
         button.title = 'Connecting to SafePlay service...';
         break;
       case 'downloading':
-        button.title = `Downloading video audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
+        button.title = `Filtering: Downloading audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
         break;
       case 'transcribing':
-        button.title = `Transcribing audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
+        button.title = `Filtering: Transcribing audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
         break;
       case 'processing':
-        button.title = 'Processing transcript...';
+        button.title = 'Filtering: Processing transcript...';
         break;
       case 'filtering':
-        button.title = `Filtering profanity${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} instances found` : ''}`;
+        button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''}`;
         break;
       case 'error':
         button.title = stateInfo.error || 'An error occurred. Click to retry.';

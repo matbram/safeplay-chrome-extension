@@ -13,6 +13,78 @@
   --sp-yt-success: #2ba640;
   --sp-yt-error: #ff4e45;
   --sp-yt-processing: #a855f7;
+  --sp-yt-water: #3b82f6;
+  --sp-yt-water-light: #60a5fa;
+}
+
+/* Water wave animation */
+@keyframes safeplay-wave {
+  0% { transform: translateX(0) translateY(0); }
+  50% { transform: translateX(-25%) translateY(-2px); }
+  100% { transform: translateX(-50%) translateY(0); }
+}
+
+@keyframes safeplay-wave-reverse {
+  0% { transform: translateX(-50%) translateY(0); }
+  50% { transform: translateX(-25%) translateY(-3px); }
+  100% { transform: translateX(0) translateY(0); }
+}
+
+/* Water fill container for button */
+.safeplay-water-fill {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 0%;
+  background: linear-gradient(to top, var(--sp-yt-water), var(--sp-yt-water-light));
+  transition: height 0.3s ease-out;
+  overflow: hidden;
+  border-radius: 18px;
+  z-index: 0;
+}
+
+/* Wave effect on top of water */
+.safeplay-water-fill::before,
+.safeplay-water-fill::after {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: -50%;
+  width: 200%;
+  height: 16px;
+  background: radial-gradient(ellipse at center, transparent 0%, transparent 40%, var(--sp-yt-water-light) 40%, var(--sp-yt-water-light) 45%, transparent 45%);
+  background-size: 20px 16px;
+  animation: safeplay-wave 2s ease-in-out infinite;
+}
+
+.safeplay-water-fill::after {
+  top: -6px;
+  background: radial-gradient(ellipse at center, transparent 0%, transparent 45%, var(--sp-yt-water) 45%, var(--sp-yt-water) 50%, transparent 50%);
+  background-size: 24px 14px;
+  animation: safeplay-wave-reverse 2.5s ease-in-out infinite;
+  opacity: 0.7;
+}
+
+/* When water is full (100%), smooth out the waves */
+.safeplay-water-fill.safeplay-water-full {
+  height: 100% !important;
+  background: var(--sp-yt-water);
+  transition: height 0.3s ease-out, background 0.3s ease;
+}
+
+.safeplay-water-fill.safeplay-water-full::before,
+.safeplay-water-fill.safeplay-water-full::after {
+  animation: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* Button content needs to be above water */
+.safeplay-main-button .safeplay-icon,
+.safeplay-main-button .safeplay-text {
+  position: relative;
+  z-index: 1;
 }
 
 /* Thumbnail Button - YouTube Red Theme */
