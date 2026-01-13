@@ -225,7 +225,10 @@ export class CaptionFilter {
   private isCaptionElement(element: Element): boolean {
     if (!element) return false;
 
-    const className = element.className || '';
+    // Handle className safely - it can be SVGAnimatedString for SVG elements
+    const className = typeof element.className === 'string'
+      ? element.className
+      : (element.className as SVGAnimatedString)?.baseVal || '';
 
     // Check for YouTube caption classes
     if (className.includes('ytp-caption-segment')) return true;
