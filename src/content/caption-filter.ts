@@ -49,6 +49,10 @@ const CENSORED_PATTERNS: { pattern: RegExp; severity: SeverityLevel }[] = [
   // N-word variations (n****r) - severe
   { pattern: new RegExp(`\\bn+[\\*\\#\\-\\_]+(?:gg|gga|gger|ggers|ggas)?${WORD_END}`, 'gi'), severity: 'severe' },
 
+  // Religious profanity - goddamn variations (godd***, g*ddamn, etc.)
+  { pattern: new RegExp(`\\bgodd?[\\*\\#\\-\\_]+(?:mn|amn|ammit)?${WORD_END}`, 'gi'), severity: 'religious' },
+  { pattern: new RegExp(`\\bg[\\*\\#\\-\\_]+d+(?:amn|ammit)?${WORD_END}`, 'gi'), severity: 'religious' },
+
   // Generic asterisk patterns (3+ asterisks likely profanity)
   { pattern: new RegExp(`\\b\\w[\\*\\#]{3,}\\w*${WORD_END}`, 'gi'), severity: 'moderate' },
 ];
