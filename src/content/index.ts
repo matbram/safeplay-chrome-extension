@@ -51,11 +51,11 @@ class SafePlayContentScript {
     // Load user preferences
     await this.loadPreferences();
 
-    // Start injector - it handles watch page detection internally
+    // Start injector - it handles watch page and Shorts detection internally
     this.injector.start();
 
-    // Check if we're on a watch page
-    if (this.isWatchPage()) {
+    // Check if we're on a watch page or Shorts page
+    if (this.isWatchPage() || this.isShortsPage()) {
       this.currentVideoId = this.getVideoIdFromUrl();
 
       // Check for auto-enable after a short delay (allow button to inject first)
@@ -91,9 +91,24 @@ class SafePlayContentScript {
     return window.location.pathname === '/watch';
   }
 
+  private isShortsPage(): boolean {
+    return window.location.pathname.startsWith('/shorts');
+  }
+
   private getVideoIdFromUrl(): string | null {
-    const params = new URLSearchParams(window.location.search);
-    return params.get('v');
+    // Check for regular watch page
+    if (this.isWatchPage()) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('v');
+    }
+
+    // Check for Shorts page
+    if (this.isShortsPage()) {
+      const match = window.location.pathname.match(/\/shorts\/([a-zA-Z0-9_-]+)/);
+      return match ? match[1] : null;
+    }
+
+    return null;
   }
 
   private updateButtonState(stateInfo: ButtonStateInfo): void {
@@ -534,8 +549,8 @@ class SafePlayContentScript {
       playerButton.remove();
     }
 
-    // Update video ID if on watch page
-    if (this.isWatchPage()) {
+    // Update video ID if on watch page or Shorts page
+    if (this.isWatchPage() || this.isShortsPage()) {
       this.currentVideoId = this.getVideoIdFromUrl();
 
       // Check for auto-enable after a short delay (allow button to inject first)
