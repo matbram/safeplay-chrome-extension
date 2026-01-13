@@ -109,13 +109,27 @@ export async function getFilteredVideos(): Promise<string[]> {
 
 export async function addFilteredVideo(youtubeId: string): Promise<void> {
   try {
+    console.log('[SafePlay Storage] addFilteredVideo called with:', youtubeId);
     const videos = await getFilteredVideos();
+    console.log('[SafePlay Storage] Current videos before add:', videos);
     if (!videos.includes(youtubeId)) {
       videos.push(youtubeId);
       // Keep only last 500 videos to prevent storage bloat
       const trimmedVideos = videos.slice(-500);
+      console.log('[SafePlay Storage] Saving videos:', trimmedVideos);
       await chrome.storage.local.set({ [STORAGE_KEYS.FILTERED_VIDEOS]: trimmedVideos });
-      console.log('[SafePlay Storage] Added video to filtered list:', youtubeId, 'Total:', trimmedVideos.length);
+      console.log('[SafePlay Storage] Save completed, verifying...');
+
+      // Verify the save worked
+      const verifyResult = await chrome.storage.local.get(STORAGE_KEYS.FILTERED_VIDEOS);
+      const verified = verifyResult[STORAGE_KEYS.FILTERED_VIDEOS] || [];
+      console.log('[SafePlay Storage] Verified saved videos:', verified);
+
+      if (verified.includes(youtubeId)) {
+        console.log('[SafePlay Storage] ✓ Successfully added video:', youtubeId, 'Total:', verified.length);
+      } else {
+        console.error('[SafePlay Storage] ✗ FAILED to save video:', youtubeId, 'Storage returned:', verified);
+      }
     } else {
       console.log('[SafePlay Storage] Video already in filtered list:', youtubeId);
     }
@@ -129,6 +143,9 @@ export async function isVideoFiltered(youtubeId: string): Promise<boolean> {
     const videos = await getFilteredVideos();
     const isFiltered = videos.includes(youtubeId);
     console.log('[SafePlay Storage] isVideoFiltered:', youtubeId, '=', isFiltered);
+    if (!isFiltered && videos.length > 0) {
+      console.log('[SafePlay Storage] Stored video IDs:', videos.slice(-10)); // Show last 10
+    }
     return isFiltered;
   } catch (error) {
     console.error('[SafePlay Storage] Error checking if video filtered:', error);

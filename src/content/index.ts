@@ -341,9 +341,13 @@ class SafePlayContentScript {
       log(`Filter applied successfully. ${intervalCount} profanity instances will be muted.`);
 
       // Store this video as filtered for auto-enable feature
+      log(`About to save video ID for auto-enable: videoId=${videoId}, this.currentVideoId=${this.currentVideoId}`);
       if (videoId) {
+        log(`Calling addFilteredVideo with: ${videoId}`);
         await addFilteredVideo(videoId);
         log(`Video ${videoId} added to filtered videos list`);
+      } else {
+        log('WARNING: videoId is null/undefined, not saving to filtered list');
       }
 
       // Resume video if it was playing before
