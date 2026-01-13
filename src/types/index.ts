@@ -50,6 +50,7 @@ export type ButtonState =
   | 'transcribing'
   | 'processing'
   | 'filtering'
+  | 'paused'  // Filter is paused (user can re-enable)
   | 'error';
 
 export interface ButtonStateInfo {
@@ -105,6 +106,7 @@ export interface UserPreferences {
   paddingBeforeMs?: number; // Padding before word starts (catches attack)
   paddingAfterMs?: number; // Padding after word ends (catches release)
   mergeThresholdMs: number;
+  autoEnableForFilteredVideos: boolean; // Auto-enable filter for previously filtered videos
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -122,6 +124,7 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   paddingBeforeMs: 100, // Padding before word - smooth fade adds ~130ms effective lead time
   paddingAfterMs: 30, // Padding after word ends
   mergeThresholdMs: 100,
+  autoEnableForFilteredVideos: true, // Auto-enable filter for previously filtered videos
 };
 
 // Storage Types

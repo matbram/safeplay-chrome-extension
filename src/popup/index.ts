@@ -38,6 +38,7 @@ class PopupController {
   private wordPreviewArrow!: HTMLElement;
   private wordPreviewContent!: HTMLElement;
   private wordTags!: HTMLElement;
+  private autoEnableToggle!: HTMLInputElement;
 
   async initialize(): Promise<void> {
     // Calculate word counts
@@ -66,6 +67,7 @@ class PopupController {
     this.wordPreviewArrow = document.getElementById('wordPreviewArrow') as HTMLElement;
     this.wordPreviewContent = document.getElementById('wordPreviewContent') as HTMLElement;
     this.wordTags = document.getElementById('wordTags') as HTMLElement;
+    this.autoEnableToggle = document.getElementById('autoEnableToggle') as HTMLInputElement;
 
     // Display word counts
     this.displayWordCounts();
@@ -145,6 +147,11 @@ class PopupController {
     this.severitySevere.checked = this.preferences.severityLevels.severe;
     this.severityReligious.checked = this.preferences.severityLevels.religious;
 
+    // Update auto-enable toggle
+    if (this.autoEnableToggle) {
+      this.autoEnableToggle.checked = this.preferences.autoEnableForFilteredVideos ?? true;
+    }
+
     // Update total word count
     this.updateTotalWordCount();
 
@@ -209,6 +216,13 @@ class PopupController {
     this.wordPreviewToggle.addEventListener('click', () => {
       this.toggleWordPreview();
     });
+
+    // Auto-enable toggle
+    if (this.autoEnableToggle) {
+      this.autoEnableToggle.addEventListener('change', () => {
+        this.savePreferences({ autoEnableForFilteredVideos: this.autoEnableToggle.checked });
+      });
+    }
 
     // Settings link
     const settingsLink = document.getElementById('settingsLink');

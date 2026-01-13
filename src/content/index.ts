@@ -4,6 +4,7 @@ import { VideoController } from './video-controller';
 import { SmoothProgressAnimator } from './smooth-progress';
 import { CaptionFilter } from './caption-filter';
 import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo } from '../types';
+import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
 import './styles.css';
 
 const DEBUG = true;
@@ -23,11 +24,14 @@ class SafePlayContentScript {
   private isProcessing = false;
   private videoWasPlaying = false; // Track if video was playing before we paused it
   private progressAnimator: SmoothProgressAnimator | null = null;
+  private lastIntervalCount = 0; // Store interval count for toggle restore
+  private isFilterActive = false; // Track if filter is currently active
 
   constructor() {
     // Initialize resilient injector for video watch page
     this.injector = new ResilientInjector({
       onButtonClick: (youtubeId) => this.onFilterButtonClick(youtubeId),
+      onToggleFilter: () => this.toggleFilterFromButton(),
       debug: DEBUG,
     });
 
@@ -53,6 +57,11 @@ class SafePlayContentScript {
     // Check if we're on a watch page
     if (this.isWatchPage()) {
       this.currentVideoId = this.getVideoIdFromUrl();
+
+      // Check for auto-enable after a short delay (allow button to inject first)
+      if (this.currentVideoId) {
+        setTimeout(() => this.checkAutoEnable(), 1000);
+      }
     }
 
     // Listen for messages from background/popup
@@ -313,6 +322,10 @@ class SafePlayContentScript {
       const intervalCount = state.intervalCount || 0;
       const muteIntervals = this.videoController.getMuteIntervals();
 
+      // Store interval count for toggle restore
+      this.lastIntervalCount = intervalCount;
+      this.isFilterActive = true;
+
       // Start caption filtering as well
       this.captionFilter.initialize(this.preferences, muteIntervals);
       this.captionFilter.start();
@@ -321,11 +334,17 @@ class SafePlayContentScript {
       // Update button to filtering state
       this.updateButtonState({
         state: 'filtering',
-        text: `Filtering (${intervalCount})`,
+        text: `Censored (${intervalCount})`,
         intervalCount,
       });
 
       log(`Filter applied successfully. ${intervalCount} profanity instances will be muted.`);
+
+      // Store this video as filtered for auto-enable feature
+      if (videoId) {
+        await addFilteredVideo(videoId);
+        log(`Video ${videoId} added to filtered videos list`);
+      }
 
       // Resume video if it was playing before
       if (this.videoWasPlaying) {
@@ -395,31 +414,49 @@ class SafePlayContentScript {
     }
   }
 
+  // Toggle filter from player controls button
   private async toggleFilter(): Promise<void> {
+    await this.toggleFilterFromButton();
+  }
+
+  // Toggle filter on/off - called from main button or player controls
+  private async toggleFilterFromButton(): Promise<void> {
     if (!this.videoController) return;
 
-    const state = this.videoController.getState();
     const playerButton = document.querySelector('.safeplay-player-controls');
 
-    if (state.status === 'active') {
+    if (this.isFilterActive) {
+      // Disable filter
       this.videoController.stop();
       this.captionFilter.stop();
+      this.isFilterActive = false;
+
       playerButton?.classList.remove('safeplay-active');
       playerButton?.setAttribute('title', 'SafePlay Filter Paused - Click to resume');
-      this.updateButtonState({ state: 'idle', text: 'SafePlay' });
-    } else if (this.currentVideoId) {
-      // Resume filtering
+
+      this.updateButtonState({
+        state: 'paused',
+        text: 'Paused',
+        intervalCount: this.lastIntervalCount,
+      });
+
+      log('Filter paused by user');
+    } else if (this.currentVideoId && this.lastIntervalCount > 0) {
+      // Resume filtering (we have data from before)
       this.videoController.resume();
       this.captionFilter.start();
+      this.isFilterActive = true;
+
       playerButton?.classList.add('safeplay-active');
       playerButton?.setAttribute('title', 'SafePlay Filter Active - Click to toggle');
 
-      const intervalCount = state.intervalCount || 0;
       this.updateButtonState({
         state: 'filtering',
-        text: `Filtering (${intervalCount})`,
-        intervalCount,
+        text: `Censored (${this.lastIntervalCount})`,
+        intervalCount: this.lastIntervalCount,
       });
+
+      log('Filter resumed by user');
     }
   }
 
@@ -489,6 +526,8 @@ class SafePlayContentScript {
     // Reset state
     this.currentVideoId = null;
     this.isProcessing = false;
+    this.isFilterActive = false;
+    this.lastIntervalCount = 0;
 
     // Remove player button
     const playerButton = document.querySelector('.safeplay-player-controls');
@@ -499,6 +538,29 @@ class SafePlayContentScript {
     // Update video ID if on watch page
     if (this.isWatchPage()) {
       this.currentVideoId = this.getVideoIdFromUrl();
+
+      // Check for auto-enable after a short delay (allow button to inject first)
+      if (this.currentVideoId) {
+        setTimeout(() => this.checkAutoEnable(), 500);
+      }
+    }
+  }
+
+  // Check if we should auto-enable filter for this video
+  private async checkAutoEnable(): Promise<void> {
+    if (!this.currentVideoId || !this.preferences.autoEnableForFilteredVideos) {
+      return;
+    }
+
+    try {
+      const wasFiltered = await isVideoFiltered(this.currentVideoId);
+      if (wasFiltered) {
+        log(`Video ${this.currentVideoId} was previously filtered, auto-enabling filter`);
+        // Automatically trigger filter
+        this.onFilterButtonClick(this.currentVideoId);
+      }
+    } catch (error) {
+      log('Error checking auto-enable:', error);
     }
   }
 }

@@ -580,6 +580,78 @@ body {
   transition: width 0.3s ease;
 }
 
+/* Quick Settings */
+.quick-setting {
+  padding: 10px 14px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.setting-info {
+  flex: 1;
+}
+
+.setting-name {
+  display: block;
+  font-size: 13px;
+  color: var(--yt-text-primary);
+  font-weight: 500;
+}
+
+.setting-desc {
+  display: block;
+  font-size: 11px;
+  color: var(--yt-text-muted);
+  margin-top: 2px;
+}
+
+/* Mini Toggle (smaller version for inline settings) */
+.mini-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.mini-toggle input {
+  display: none;
+}
+
+.mini-toggle-track {
+  width: 36px;
+  height: 20px;
+  background: var(--yt-dark-bg);
+  border-radius: var(--radius-full);
+  position: relative;
+  transition: var(--transition);
+  cursor: pointer;
+}
+
+.mini-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: var(--yt-text-muted);
+  border-radius: 50%;
+  transition: var(--transition);
+}
+
+.mini-toggle input:checked + .mini-toggle-track {
+  background: var(--yt-red);
+}
+
+.mini-toggle input:checked + .mini-toggle-track .mini-toggle-thumb {
+  left: 18px;
+  background: #fff;
+}
+
 /* Footer */
 .popup-footer {
   display: flex;

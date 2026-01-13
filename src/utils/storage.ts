@@ -11,6 +11,7 @@ const STORAGE_KEYS = {
   USER_ID: 'safeplay_user_id',
   SUBSCRIPTION_TIER: 'safeplay_subscription_tier',
   CACHED_TRANSCRIPTS: 'safeplay_cached_transcripts',
+  FILTERED_VIDEOS: 'safeplay_filtered_videos',
 } as const;
 
 export async function getPreferences(): Promise<UserPreferences> {
@@ -91,4 +92,35 @@ export async function clearAllData(): Promise<void> {
 export async function isAuthenticated(): Promise<boolean> {
   const token = await getAuthToken();
   return token !== null;
+}
+
+// Filtered Videos Storage - tracks which videos have been filtered
+export async function getFilteredVideos(): Promise<string[]> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.FILTERED_VIDEOS);
+  return result[STORAGE_KEYS.FILTERED_VIDEOS] || [];
+}
+
+export async function addFilteredVideo(youtubeId: string): Promise<void> {
+  const videos = await getFilteredVideos();
+  if (!videos.includes(youtubeId)) {
+    videos.push(youtubeId);
+    // Keep only last 500 videos to prevent storage bloat
+    const trimmedVideos = videos.slice(-500);
+    await chrome.storage.local.set({ [STORAGE_KEYS.FILTERED_VIDEOS]: trimmedVideos });
+  }
+}
+
+export async function isVideoFiltered(youtubeId: string): Promise<boolean> {
+  const videos = await getFilteredVideos();
+  return videos.includes(youtubeId);
+}
+
+export async function removeFilteredVideo(youtubeId: string): Promise<void> {
+  const videos = await getFilteredVideos();
+  const filtered = videos.filter(id => id !== youtubeId);
+  await chrome.storage.local.set({ [STORAGE_KEYS.FILTERED_VIDEOS]: filtered });
+}
+
+export async function clearFilteredVideos(): Promise<void> {
+  await chrome.storage.local.remove(STORAGE_KEYS.FILTERED_VIDEOS);
 }

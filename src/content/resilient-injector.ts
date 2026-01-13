@@ -5,6 +5,7 @@ import { ButtonState, ButtonStateInfo } from '../types';
 
 export interface InjectorOptions {
   onButtonClick: (youtubeId: string) => void;
+  onToggleFilter?: () => void; // Called when user clicks to toggle filter on/off
   debug?: boolean;
 }
 
@@ -52,6 +53,12 @@ const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: st
     hoverBg: '#2563eb',
     text: 'Censored',
     shadow: 'rgba(59, 130, 246, 0.4)',
+  },
+  paused: {
+    bg: '#6b7280', // Gray - paused state
+    hoverBg: '#4b5563',
+    text: 'Paused',
+    shadow: 'rgba(107, 114, 128, 0.4)',
   },
   error: {
     bg: '#ff4e45', // YouTube error red-orange
@@ -277,9 +284,14 @@ export class ResilientInjector {
       e.preventDefault();
       e.stopPropagation();
 
-      // Only allow click in idle or error state
+      // Allow click in idle, error, filtering (censored), or paused state
       if (this.currentState === 'idle' || this.currentState === 'error') {
         this.options.onButtonClick(videoId);
+      } else if (this.currentState === 'filtering' || this.currentState === 'paused') {
+        // Toggle filter on/off
+        if (this.options.onToggleFilter) {
+          this.options.onToggleFilter();
+        }
       }
     });
 
@@ -306,10 +318,17 @@ export class ResilientInjector {
           </svg>
         `;
       case 'filtering':
-        // Active shield icon
+        // Active shield icon with checkmark
         return `
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
+          </svg>
+        `;
+      case 'paused':
+        // Paused - shield with pause bars
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-1 14H9V9h2v6zm4 0h-2V9h2v6z"/>
           </svg>
         `;
       case 'error':
@@ -378,6 +397,10 @@ export class ResilientInjector {
         // Fully filled when complete - solid blue
         waterFill.style.height = '100%';
         waterFill.classList.add('safeplay-water-full');
+      } else if (stateInfo.state === 'paused') {
+        // Paused - drain the water (animate to empty)
+        waterFill.style.height = '0%';
+        waterFill.classList.remove('safeplay-water-full');
       } else {
         // Reset water for other states
         waterFill.style.height = '0%';
@@ -385,8 +408,9 @@ export class ResilientInjector {
       }
     }
 
-    // Update cursor
-    if (stateInfo.state === 'idle' || stateInfo.state === 'error') {
+    // Update cursor - clickable in idle, error, filtering, and paused states
+    if (stateInfo.state === 'idle' || stateInfo.state === 'error' ||
+        stateInfo.state === 'filtering' || stateInfo.state === 'paused') {
       button.style.cursor = 'pointer';
     } else {
       button.style.cursor = 'default';
@@ -407,7 +431,10 @@ export class ResilientInjector {
         button.title = 'Filtering: Processing transcript...';
         break;
       case 'filtering':
-        button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''}`;
+        button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''} - Click to disable`;
+        break;
+      case 'paused':
+        button.title = 'Filter paused - Click to re-enable';
         break;
       case 'error':
         button.title = stateInfo.error || 'An error occurred. Click to retry.';
