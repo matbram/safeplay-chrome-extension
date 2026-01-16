@@ -68,6 +68,12 @@ const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: st
     text: 'Retry',
     shadow: 'rgba(255, 78, 69, 0.4)',
   },
+  'age-restricted': {
+    bg: '#f59e0b', // Amber/warning color (not error red)
+    hoverBg: '#d97706',
+    text: 'Age-Restricted',
+    shadow: 'rgba(245, 158, 11, 0.4)',
+  },
 };
 
 export class ResilientInjector {
@@ -441,6 +447,14 @@ export class ResilientInjector {
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
           </svg>
         `;
+      case 'age-restricted':
+        // Shield with 18+ symbol for age-restricted content
+        return `
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+            <text x="12" y="15" text-anchor="middle" fill="#f59e0b" font-size="8" font-weight="bold" font-family="Arial">18</text>
+          </svg>
+        `;
       default:
         // Shield icon for idle state
         return `
@@ -672,6 +686,14 @@ export class ResilientInjector {
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
           </svg>
         `;
+      case 'age-restricted':
+        // Shield with 18+ symbol for age-restricted content
+        return `
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/>
+            <text x="12" y="15" text-anchor="middle" fill="#f59e0b" font-size="8" font-weight="bold" font-family="Arial">18</text>
+          </svg>
+        `;
       default:
         // Default checkmark icon
         return `
@@ -755,6 +777,7 @@ export class ResilientInjector {
     }
 
     // Update cursor - clickable in idle, error, filtering, and paused states
+    // Age-restricted is NOT clickable since retry won't help
     if (stateInfo.state === 'idle' || stateInfo.state === 'error' ||
         stateInfo.state === 'filtering' || stateInfo.state === 'paused') {
       button.style.cursor = 'pointer';
@@ -784,6 +807,9 @@ export class ResilientInjector {
         break;
       case 'error':
         button.title = stateInfo.error || 'An error occurred. Click to retry.';
+        break;
+      case 'age-restricted':
+        button.title = stateInfo.error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.';
         break;
       default:
         button.title = 'Click to filter profanity with SafePlay';
@@ -838,7 +864,7 @@ export class ResilientInjector {
       label.textContent = labelText;
     }
 
-    // Update cursor
+    // Update cursor - age-restricted is NOT clickable since retry won't help
     if (stateInfo.state === 'idle' || stateInfo.state === 'error' ||
         stateInfo.state === 'filtering' || stateInfo.state === 'paused') {
       button.style.cursor = 'pointer';

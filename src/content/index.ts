@@ -159,7 +159,29 @@ class SafePlayContentScript {
         throw new Error(response.error || 'Failed to request filter');
       }
 
-      const { status, transcript, jobId } = response.data;
+      const { status, transcript, jobId, error_code, error } = response.data;
+
+      // Handle immediate failure with error_code (e.g., age-restricted detected quickly)
+      if (status === 'failed' && error_code === 'AGE_RESTRICTED') {
+        this.updateButtonState({
+          state: 'age-restricted',
+          text: 'Age-Restricted',
+          error: error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.',
+          videoId: youtubeId,
+        });
+        // Resume video since we can't filter
+        if (this.videoWasPlaying) {
+          const video = this.getVideoElement();
+          if (video) {
+            video.play();
+            log('Video resumed after age-restricted detection');
+          }
+          this.videoWasPlaying = false;
+        }
+        this.isProcessing = false;
+        this.filteringVideoId = null;
+        return;
+      }
 
       if ((status === 'cached' || status === 'completed') && transcript) {
         // Transcript was cached (locally or on server), skip to processing
@@ -229,7 +251,7 @@ class SafePlayContentScript {
           throw new Error(response.error || 'Failed to check job status');
         }
 
-        const { status, progress, transcript, error } = response.data;
+        const { status, progress, transcript, error, error_code } = response.data;
 
         log(`Job status: ${status}, progress: ${progress}%`);
 
@@ -267,6 +289,33 @@ class SafePlayContentScript {
             }
 
           case 'failed':
+            // Check for specific error codes that need special handling
+            if (error_code === 'AGE_RESTRICTED') {
+              // Stop animator
+              if (this.progressAnimator) {
+                this.progressAnimator.stop();
+                this.progressAnimator = null;
+              }
+              // Show age-restricted state with helpful message
+              this.updateButtonState({
+                state: 'age-restricted',
+                text: 'Age-Restricted',
+                error: error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.',
+                videoId: videoId || undefined,
+              });
+              this.isProcessing = false;
+              this.filteringVideoId = null;
+              // Resume video since we can't filter
+              if (this.videoWasPlaying) {
+                const video = this.getVideoElement();
+                if (video) {
+                  video.play();
+                  log('Video resumed after age-restricted detection');
+                }
+                this.videoWasPlaying = false;
+              }
+              return;
+            }
             throw new Error(error || 'Processing failed');
 
           default:

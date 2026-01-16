@@ -167,6 +167,11 @@ body {
   color: var(--danger);
 }
 
+.status-banner.warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
 .status-icon {
   width: 8px;
   height: 8px;
@@ -179,7 +184,8 @@ body {
 }
 
 .status-banner.inactive .status-icon,
-.status-banner.error .status-icon {
+.status-banner.error .status-icon,
+.status-banner.warning .status-icon {
   animation: none;
 }
 

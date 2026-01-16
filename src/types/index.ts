@@ -24,11 +24,13 @@ export interface Transcript {
 }
 
 export interface FilterResponse {
-  status: 'completed' | 'processing';
+  status: 'completed' | 'processing' | 'failed';
   cached?: boolean;
   transcript?: Transcript;
   job_id?: string;
   message?: string;
+  error?: string;
+  error_code?: string;  // 'AGE_RESTRICTED', 'VIDEO_UNAVAILABLE', etc.
 }
 
 export interface JobStatusResponse {
@@ -36,6 +38,7 @@ export interface JobStatusResponse {
   progress: number;
   transcript?: Transcript;
   error?: string;
+  error_code?: string;  // 'AGE_RESTRICTED', 'VIDEO_UNAVAILABLE', etc.
   video?: {
     youtube_id: string;
     title?: string;
@@ -51,7 +54,8 @@ export type ButtonState =
   | 'processing'
   | 'filtering'
   | 'paused'  // Filter is paused (user can re-enable)
-  | 'error';
+  | 'error'
+  | 'age-restricted';  // Video is age-restricted and cannot be filtered
 
 export interface ButtonStateInfo {
   state: ButtonState;

@@ -345,11 +345,23 @@ class PopupController {
       active: 'Filtering',
       error: 'Error',
       disabled: 'Disabled',
+      'age-restricted': 'Age-Restricted',
     };
 
     this.videoStatusValue.textContent = statusMap[state.status] || state.status;
 
-    if (state.status === 'error' && state.error) {
+    // Remove previous state classes
+    this.statusBanner.classList.remove('error', 'warning');
+
+    if (state.status === 'age-restricted') {
+      // Age-restricted is a warning, not an error
+      this.statusBanner.classList.add('warning');
+      this.statusText.textContent = 'Cannot Filter';
+      if (state.error) {
+        this.videoStatusValue.textContent = 'Age-Restricted';
+        this.videoStatusValue.title = state.error;
+      }
+    } else if (state.status === 'error' && state.error) {
       this.videoStatusValue.textContent = state.error;
       this.statusBanner.classList.add('error');
       this.statusText.textContent = 'Error Occurred';
