@@ -19,7 +19,8 @@ class ApiError extends Error {
   constructor(
     message: string,
     public statusCode: number,
-    public response?: unknown
+    public response?: unknown,
+    public errorCode?: string  // 'AGE_RESTRICTED', 'VIDEO_UNAVAILABLE', etc.
   ) {
     super(message);
     this.name = 'ApiError';
@@ -134,11 +135,12 @@ export async function pollForTranscript(
     }
 
     if (status.status === 'failed') {
-      logApi('Poll failed:', status.error);
+      logApi('Poll failed:', status.error, 'error_code:', status.error_code);
       throw new ApiError(
         status.error || 'Transcription failed',
         500,
-        status
+        status,
+        status.error_code  // Pass through the error code
       );
     }
 

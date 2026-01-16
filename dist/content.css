@@ -12,6 +12,8 @@
   --sp-yt-text-secondary: #aaaaaa;
   --sp-yt-success: #2ba640;
   --sp-yt-error: #ff4e45;
+  --sp-yt-warning: #f59e0b;
+  --sp-yt-warning-hover: #d97706;
   --sp-yt-processing: #a855f7;
   --sp-yt-water: #3b82f6;
   --sp-yt-water-light: #60a5fa;
@@ -172,6 +174,18 @@
 
 .safeplay-filter-btn.safeplay-error:hover {
   background: #e63e35;
+}
+
+/* Age-restricted state - Amber Warning (not error) */
+.safeplay-filter-btn.safeplay-age-restricted {
+  background: var(--sp-yt-warning);
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3);
+  cursor: default;
+}
+
+.safeplay-filter-btn.safeplay-age-restricted:hover {
+  background: var(--sp-yt-warning-hover);
+  transform: none;
 }
 
 /* Disabled state */

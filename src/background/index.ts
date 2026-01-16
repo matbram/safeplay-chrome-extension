@@ -75,7 +75,7 @@ async function handleMessage(
 // Handle initial filter request - returns cached transcript or job_id for polling
 async function handleGetFilter(
   payload: { youtubeId: string }
-): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string }>> {
+): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string }>> {
   const { youtubeId } = payload;
   log('handleGetFilter called with youtubeId:', youtubeId);
 
@@ -139,6 +139,19 @@ async function handleGetFilter(
       return {
         success: true,
         data: { status: 'processing', jobId: response.job_id },
+      };
+    }
+
+    // Handle failed status (e.g., age-restricted videos)
+    if (response.status === 'failed') {
+      log('API returned failed status, error_code:', response.error_code);
+      return {
+        success: true,
+        data: {
+          status: 'failed',
+          error: response.error,
+          error_code: response.error_code,
+        },
       };
     }
 
