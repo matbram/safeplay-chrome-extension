@@ -232,6 +232,71 @@
       </section>
     </main>
 
+    <!-- Account Section -->
+    <section class="card account-card" id="accountSection">
+      <div class="card-header">
+        <h3 class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+          Account
+        </h3>
+      </div>
+      <!-- Logged Out State -->
+      <div class="account-logged-out" id="accountLoggedOut">
+        <div class="account-message">
+          <span class="account-message-text">Sign in to track your credits and sync settings</span>
+        </div>
+        <button class="account-signin-btn" id="signInBtn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+            <polyline points="10 17 15 12 10 7"/>
+            <line x1="15" y1="12" x2="3" y2="12"/>
+          </svg>
+          Sign In
+        </button>
+      </div>
+      <!-- Logged In State -->
+      <div class="account-logged-in" id="accountLoggedIn" style="display: none;">
+        <div class="account-user">
+          <div class="account-avatar" id="accountAvatar">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+              <circle cx="12" cy="7" r="4"/>
+            </svg>
+          </div>
+          <div class="account-info">
+            <span class="account-name" id="accountName">User</span>
+            <span class="account-email" id="accountEmail">user@example.com</span>
+          </div>
+        </div>
+        <div class="account-plan">
+          <span class="account-plan-badge" id="accountPlanBadge">Free</span>
+          <a href="https://astonishing-youthfulness-production.up.railway.app/billing" target="_blank" class="account-upgrade-link" id="accountUpgradeLink">Upgrade</a>
+        </div>
+        <div class="account-actions">
+          <a href="https://astonishing-youthfulness-production.up.railway.app/dashboard" target="_blank" class="account-action-btn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <rect x="3" y="3" width="7" height="7"/>
+              <rect x="14" y="3" width="7" height="7"/>
+              <rect x="14" y="14" width="7" height="7"/>
+              <rect x="3" y="14" width="7" height="7"/>
+            </svg>
+            Dashboard
+          </a>
+          <button class="account-action-btn logout-btn" id="signOutBtn">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            Sign Out
+          </button>
+        </div>
+      </div>
+    </section>
+
     <!-- Credits Section -->
     <section class="card credit-card" id="creditSection">
       <div class="card-header">
@@ -263,7 +328,7 @@
         </div>
         <div class="credit-error" id="creditError" style="display: none;">
           <span class="credit-error-text">Sign in to view credits</span>
-          <a href="https://astonishing-youthfulness-production.up.railway.app/login" target="_blank" class="credit-signin-link">Sign In</a>
+          <button class="credit-signin-link" id="creditSignInBtn">Sign In</button>
         </div>
       </div>
     </section>

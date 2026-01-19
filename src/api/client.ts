@@ -4,6 +4,7 @@ import {
   Transcript,
   PreviewResponse,
   CreditBalanceResponse,
+  UserProfileResponse,
 } from '../types';
 import { getAuthToken } from '../utils/storage';
 
@@ -116,6 +117,17 @@ export async function getPreview(youtubeId: string): Promise<PreviewResponse> {
 export async function getCreditBalance(): Promise<CreditBalanceResponse> {
   logApi('=== getCreditBalance ===');
   return request<CreditBalanceResponse>('/api/credits/balance', {
+    method: 'GET',
+    requiresAuth: true,
+  });
+}
+
+/**
+ * Get user profile including subscription and credits
+ */
+export async function getUserProfile(): Promise<UserProfileResponse> {
+  logApi('=== getUserProfile ===');
+  return request<UserProfileResponse>('/api/user/profile', {
     method: 'GET',
     requiresAuth: true,
   });

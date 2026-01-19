@@ -215,6 +215,9 @@ export type MessageType =
   | 'GET_PREFERENCES'
   | 'SET_PREFERENCES'
   | 'GET_AUTH_STATUS'
+  | 'GET_USER_PROFILE'
+  | 'LOGOUT'
+  | 'OPEN_LOGIN'
   | 'CLEAR_CACHE';
 
 export interface Message<T = unknown> {
@@ -242,4 +245,49 @@ export interface FilterConfirmPayload {
   youtubeId: string;
   filterType?: 'mute' | 'bleep';
   customWords?: string[];
+}
+
+// User Profile Types
+export interface UserProfile {
+  id: string;
+  email: string;
+  full_name?: string;
+  avatar_url?: string;
+  created_at?: string;
+}
+
+export interface UserSubscription {
+  id: string;
+  user_id: string;
+  plan_id: string;
+  status: 'active' | 'canceled' | 'past_due' | 'paused';
+  current_period_start?: string;
+  current_period_end?: string;
+  plans?: {
+    id: string;
+    name: string;
+    monthly_credits: number;
+  };
+}
+
+export interface UserCredits {
+  user_id: string;
+  available_credits: number;
+  used_this_period: number;
+  rollover_credits: number;
+  updated_at?: string;
+}
+
+export interface UserProfileResponse {
+  user: UserProfile;
+  subscription: UserSubscription | null;
+  credits: UserCredits | null;
+}
+
+export interface AuthState {
+  isAuthenticated: boolean;
+  user: UserProfile | null;
+  subscription: UserSubscription | null;
+  credits: UserCredits | null;
+  token: string | null;
 }

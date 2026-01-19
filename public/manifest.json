@@ -14,9 +14,18 @@
     "https://astonishing-youthfulness-production.up.railway.app/*",
     "https://safeplay.app/*",
     "https://api.safeplay.app/*",
+    "http://localhost:3000/*",
     "http://localhost:3001/*",
     "http://127.0.0.1:3001/*"
   ],
+  "externally_connectable": {
+    "matches": [
+      "https://astonishing-youthfulness-production.up.railway.app/*",
+      "https://safeplay.app/*",
+      "https://*.safeplay.app/*",
+      "http://localhost:3000/*"
+    ]
+  },
   "background": {
     "service_worker": "background.js",
     "type": "module"

@@ -8,6 +8,7 @@ import {
   CreditInfo,
   PreviewData,
   FilterConfirmPayload,
+  AuthState,
 } from '../types';
 import {
   getPreferences,
@@ -20,6 +21,11 @@ import {
   getCreditInfo,
   setCreditInfo,
   updateCreditsAfterFilter,
+  clearAuthData,
+  setUserProfile,
+  setUserSubscription,
+  setUserCredits,
+  getFullAuthState,
 } from '../utils/storage';
 import {
   requestFilter,
@@ -27,6 +33,7 @@ import {
   getPreview,
   startFilter,
   getCreditBalance,
+  getUserProfile,
 } from '../api/client';
 
 function log(...args: unknown[]): void {
@@ -79,6 +86,15 @@ async function handleMessage(
 
       case 'GET_AUTH_STATUS':
         return await handleGetAuthStatus();
+
+      case 'GET_USER_PROFILE':
+        return await handleGetUserProfile();
+
+      case 'LOGOUT':
+        return await handleLogout();
+
+      case 'OPEN_LOGIN':
+        return await handleOpenLogin();
 
       case 'CLEAR_CACHE':
         return await handleClearCache();
@@ -449,6 +465,137 @@ async function handleClearCache(): Promise<MessageResponse> {
   return { success: true };
 }
 
+// Handle get user profile request - fetches profile from API and caches it
+async function handleGetUserProfile(): Promise<MessageResponse<AuthState>> {
+  log('handleGetUserProfile called');
+
+  // First check if authenticated
+  const token = await getAuthToken();
+  if (!token) {
+    log('Not authenticated, returning empty auth state');
+    return {
+      success: true,
+      data: {
+        isAuthenticated: false,
+        user: null,
+        subscription: null,
+        credits: null,
+        token: null,
+      },
+    };
+  }
+
+  try {
+    // Fetch fresh profile from API
+    const response = await getUserProfile();
+    log('User profile response:', JSON.stringify(response).substring(0, 300));
+
+    // Store the profile data
+    if (response.user) {
+      await setUserProfile(response.user);
+    }
+    if (response.subscription) {
+      await setUserSubscription(response.subscription);
+    }
+    if (response.credits) {
+      await setUserCredits(response.credits);
+
+      // Also update the credit info for compatibility with existing credit display
+      const planName = response.subscription?.plans?.name?.toLowerCase() || 'free';
+      const planAllocation = response.subscription?.plans?.monthly_credits || 30;
+      const available = response.credits.available_credits;
+      const usedThisPeriod = response.credits.used_this_period;
+
+      await setCreditInfo({
+        available,
+        used_this_period: usedThisPeriod,
+        plan_allocation: planAllocation,
+        percent_consumed: planAllocation > 0 ? (usedThisPeriod / planAllocation) * 100 : 0,
+        plan: planName as 'free' | 'base' | 'professional' | 'unlimited',
+      });
+    }
+
+    return {
+      success: true,
+      data: {
+        isAuthenticated: true,
+        user: response.user,
+        subscription: response.subscription,
+        credits: response.credits,
+        token,
+      },
+    };
+  } catch (error) {
+    logError('handleGetUserProfile error:', error);
+
+    // If token is invalid, clear auth data
+    if (error instanceof Error && error.message.includes('401')) {
+      log('Token invalid, clearing auth data');
+      await clearAuthData();
+      return {
+        success: true,
+        data: {
+          isAuthenticated: false,
+          user: null,
+          subscription: null,
+          credits: null,
+          token: null,
+        },
+      };
+    }
+
+    // Return cached data on other errors
+    const cachedState = await getFullAuthState();
+    return {
+      success: true,
+      data: {
+        isAuthenticated: cachedState.isAuthenticated,
+        user: cachedState.profile,
+        subscription: cachedState.subscription,
+        credits: cachedState.credits,
+        token: cachedState.token,
+      },
+    };
+  }
+}
+
+// Handle logout - clears all auth data
+async function handleLogout(): Promise<MessageResponse> {
+  log('handleLogout called');
+
+  await clearAuthData();
+
+  // Broadcast logout to all tabs
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.id) {
+      chrome.tabs.sendMessage(tab.id, {
+        type: 'AUTH_STATE_CHANGED',
+        payload: { isAuthenticated: false },
+      }).catch(() => {});
+    }
+  }
+
+  return { success: true };
+}
+
+// Handle open login - opens the website login page
+const WEBSITE_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
+
+async function handleOpenLogin(): Promise<MessageResponse> {
+  log('handleOpenLogin called');
+
+  // Get the extension ID for the callback
+  const extensionId = chrome.runtime.id;
+
+  // Open the website login page with extension callback
+  const loginUrl = `${WEBSITE_BASE_URL}/login?extension=${extensionId}&callback=extension`;
+
+  await chrome.tabs.create({ url: loginUrl });
+
+  return { success: true };
+}
+
 // Handle extension icon click
 chrome.action.onClicked.addListener((_tab) => {
   log('Extension icon clicked');
@@ -467,17 +614,73 @@ chrome.runtime.onInstalled.addListener((details) => {
 // Handle auth callback from website (deep-link auth flow)
 chrome.runtime.onMessageExternal.addListener(
   (message, sender, sendResponse) => {
-    if (sender.origin === 'https://astonishing-youthfulness-production.up.railway.app' || sender.origin === 'https://safeplay.app') {
+    const allowedOrigins = [
+      'https://astonishing-youthfulness-production.up.railway.app',
+      'https://safeplay.app',
+      'http://localhost:3000', // Development
+    ];
+
+    if (allowedOrigins.includes(sender.origin || '')) {
       if (message.type === 'AUTH_TOKEN') {
-        import('../utils/storage').then(({ setAuthToken, setUserId, setSubscriptionTier, setCreditInfo }) => {
-          Promise.all([
-            setAuthToken(message.token),
-            setUserId(message.userId),
-            setSubscriptionTier(message.tier),
-            message.credits ? setCreditInfo(message.credits) : Promise.resolve(),
-          ]).then(() => {
+        log('Received AUTH_TOKEN from website');
+        import('../utils/storage').then(async ({
+          setAuthToken,
+          setUserId,
+          setSubscriptionTier,
+          setCreditInfo,
+          setUserProfile,
+          setUserSubscription,
+          setUserCredits,
+        }) => {
+          try {
+            // Store auth data
+            await setAuthToken(message.token);
+
+            if (message.userId) {
+              await setUserId(message.userId);
+            }
+
+            if (message.tier) {
+              await setSubscriptionTier(message.tier);
+            }
+
+            if (message.credits) {
+              await setCreditInfo(message.credits);
+            }
+
+            // Store user profile if provided
+            if (message.user) {
+              await setUserProfile(message.user);
+            }
+
+            if (message.subscription) {
+              await setUserSubscription(message.subscription);
+            }
+
+            if (message.userCredits) {
+              await setUserCredits(message.userCredits);
+            }
+
+            // Broadcast auth state change to all tabs
+            const tabs = await chrome.tabs.query({});
+            for (const tab of tabs) {
+              if (tab.id) {
+                chrome.tabs.sendMessage(tab.id, {
+                  type: 'AUTH_STATE_CHANGED',
+                  payload: {
+                    isAuthenticated: true,
+                    user: message.user,
+                  },
+                }).catch(() => {});
+              }
+            }
+
+            log('Auth data stored successfully');
             sendResponse({ success: true });
-          });
+          } catch (error) {
+            logError('Error storing auth data:', error);
+            sendResponse({ success: false, error: 'Failed to store auth data' });
+          }
         });
         return true;
       }
@@ -486,8 +689,28 @@ chrome.runtime.onMessageExternal.addListener(
       if (message.type === 'CREDIT_UPDATE') {
         import('../utils/storage').then(({ setCreditInfo }) => {
           setCreditInfo(message.credits).then(() => {
+            // Broadcast credit update
+            chrome.tabs.query({}).then(tabs => {
+              for (const tab of tabs) {
+                if (tab.id) {
+                  chrome.tabs.sendMessage(tab.id, {
+                    type: 'CREDIT_UPDATE',
+                    payload: message.credits,
+                  }).catch(() => {});
+                }
+              }
+            });
             sendResponse({ success: true });
           });
+        });
+        return true;
+      }
+
+      // Handle logout from website
+      if (message.type === 'LOGOUT') {
+        log('Received LOGOUT from website');
+        handleLogout().then(() => {
+          sendResponse({ success: true });
         });
         return true;
       }
