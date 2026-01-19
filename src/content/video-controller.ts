@@ -3,6 +3,15 @@ import { Transcript, MuteInterval, UserPreferences } from '../types';
 import { AudioFilter } from '../filter/audio-filter';
 import { parseTranscript } from '../filter/transcript-parser';
 
+// Check if the extension context is still valid
+function isExtensionContextValid(): boolean {
+  try {
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
+}
+
 export type FilterStatus =
   | 'idle'
   | 'loading'
@@ -84,11 +93,23 @@ export class VideoController {
     try {
       this.updateStatus('loading');
 
+      // Check if extension context is still valid
+      if (!isExtensionContextValid()) {
+        this.updateStatus('error', 0, 'Extension reloaded. Please refresh the page.');
+        return;
+      }
+
       // Request transcript from background script
       const response = await chrome.runtime.sendMessage({
         type: 'GET_FILTER',
         payload: { youtubeId: this.youtubeId },
       });
+
+      // Handle extension context invalidated during request
+      if (!response) {
+        this.updateStatus('error', 0, 'Extension reloaded. Please refresh the page.');
+        return;
+      }
 
       if (!response.success) {
         throw new Error(response.error || 'Failed to get transcript');
