@@ -1,11 +1,12 @@
 // SafePlay Popup Script
-import { UserPreferences, DEFAULT_PREFERENCES, FilterMode, SeverityLevel } from '../types';
+import { UserPreferences, DEFAULT_PREFERENCES, FilterMode, SeverityLevel, CreditInfo } from '../types';
 import { PROFANITY_LIST, getWordsBySeverity } from '../filter/profanity-list';
 import './popup.css';
 
 class PopupController {
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private wordPreviewExpanded = false;
+  private creditInfo: CreditInfo | null = null;
 
   // Word counts by severity
   private wordCounts: Record<SeverityLevel, number> = {
@@ -39,6 +40,14 @@ class PopupController {
   private wordPreviewContent!: HTMLElement;
   private wordTags!: HTMLElement;
   private autoEnableToggle!: HTMLInputElement;
+  // Credit elements
+  private creditLoading!: HTMLElement;
+  private creditContent!: HTMLElement;
+  private creditError!: HTMLElement;
+  private creditValue!: HTMLElement;
+  private creditProgressFill!: HTMLElement;
+  private creditUsed!: HTMLElement;
+  private creditPlan!: HTMLElement;
 
   async initialize(): Promise<void> {
     // Calculate word counts
@@ -68,6 +77,14 @@ class PopupController {
     this.wordPreviewContent = document.getElementById('wordPreviewContent') as HTMLElement;
     this.wordTags = document.getElementById('wordTags') as HTMLElement;
     this.autoEnableToggle = document.getElementById('autoEnableToggle') as HTMLInputElement;
+    // Credit elements
+    this.creditLoading = document.getElementById('creditLoading') as HTMLElement;
+    this.creditContent = document.getElementById('creditContent') as HTMLElement;
+    this.creditError = document.getElementById('creditError') as HTMLElement;
+    this.creditValue = document.getElementById('creditValue') as HTMLElement;
+    this.creditProgressFill = document.getElementById('creditProgressFill') as HTMLElement;
+    this.creditUsed = document.getElementById('creditUsed') as HTMLElement;
+    this.creditPlan = document.getElementById('creditPlan') as HTMLElement;
 
     // Display word counts
     this.displayWordCounts();
@@ -81,8 +98,77 @@ class PopupController {
     // Check current video status
     await this.checkVideoStatus();
 
+    // Load credits
+    await this.loadCredits();
+
     // Listen for status updates
     this.setupMessageListener();
+  }
+
+  private async loadCredits(): Promise<void> {
+    try {
+      // Show loading state
+      this.creditLoading.style.display = 'block';
+      this.creditContent.style.display = 'none';
+      this.creditError.style.display = 'none';
+
+      const response = await chrome.runtime.sendMessage({ type: 'GET_CREDITS' });
+
+      if (response.success && response.data) {
+        this.creditInfo = response.data;
+        this.displayCredits();
+      } else {
+        // Show error state (likely not authenticated)
+        this.creditLoading.style.display = 'none';
+        this.creditError.style.display = 'flex';
+      }
+    } catch (error) {
+      console.error('Failed to load credits:', error);
+      this.creditLoading.style.display = 'none';
+      this.creditError.style.display = 'flex';
+    }
+  }
+
+  private displayCredits(): void {
+    if (!this.creditInfo) return;
+
+    const { available, used_this_period, plan_allocation, percent_consumed, plan } = this.creditInfo;
+
+    // Show content, hide loading/error
+    this.creditLoading.style.display = 'none';
+    this.creditContent.style.display = 'flex';
+    this.creditError.style.display = 'none';
+
+    // Update credit value with color based on level
+    this.creditValue.textContent = available.toString();
+    this.creditValue.classList.remove('low', 'empty');
+    if (available === 0) {
+      this.creditValue.classList.add('empty');
+    } else if (available <= 5) {
+      this.creditValue.classList.add('low');
+    }
+
+    // Update progress bar
+    const usagePercent = Math.min(100, percent_consumed);
+    this.creditProgressFill.style.width = `${usagePercent}%`;
+    this.creditProgressFill.classList.remove('warning', 'danger');
+    if (usagePercent >= 90) {
+      this.creditProgressFill.classList.add('danger');
+    } else if (usagePercent >= 70) {
+      this.creditProgressFill.classList.add('warning');
+    }
+
+    // Update labels
+    this.creditUsed.textContent = `${used_this_period} of ${plan_allocation} used`;
+
+    // Format plan name
+    const planNames: Record<string, string> = {
+      free: 'Free Plan',
+      base: 'Base Plan',
+      professional: 'Pro Plan',
+      unlimited: 'Unlimited',
+    };
+    this.creditPlan.textContent = planNames[plan || 'free'] || 'Free Plan';
   }
 
   private calculateWordCounts(): void {
@@ -387,6 +473,10 @@ class PopupController {
       if (message.type === 'PREFERENCES_UPDATED' && message.payload) {
         this.preferences = message.payload;
         this.updateUI();
+      }
+      if (message.type === 'CREDIT_UPDATE' && message.payload) {
+        this.creditInfo = message.payload;
+        this.displayCredits();
       }
     });
   }

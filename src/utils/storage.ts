@@ -1,8 +1,9 @@
 import {
-  StorageData,
   UserPreferences,
   DEFAULT_PREFERENCES,
   Transcript,
+  CreditInfo,
+  SubscriptionTier,
 } from '../types';
 
 const STORAGE_KEYS = {
@@ -10,9 +11,14 @@ const STORAGE_KEYS = {
   AUTH_TOKEN: 'safeplay_auth_token',
   USER_ID: 'safeplay_user_id',
   SUBSCRIPTION_TIER: 'safeplay_subscription_tier',
+  CREDIT_INFO: 'safeplay_credit_info',
+  CREDIT_CACHE_TIME: 'safeplay_credit_cache_time',
   CACHED_TRANSCRIPTS: 'safeplay_cached_transcripts',
   FILTERED_VIDEOS: 'safeplay_filtered_videos',
 } as const;
+
+// Credit cache duration in milliseconds (5 minutes)
+const CREDIT_CACHE_DURATION = 5 * 60 * 1000;
 
 // Cache limits
 const MAX_CACHED_TRANSCRIPTS = 15; // Keep only 15 most recent transcripts
@@ -53,17 +59,75 @@ export async function setUserId(userId: string): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEYS.USER_ID]: userId });
 }
 
-export async function getSubscriptionTier(): Promise<
-  StorageData['subscriptionTier'] | null
-> {
+export async function getSubscriptionTier(): Promise<SubscriptionTier | null> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.SUBSCRIPTION_TIER);
   return result[STORAGE_KEYS.SUBSCRIPTION_TIER] || null;
 }
 
-export async function setSubscriptionTier(
-  tier: StorageData['subscriptionTier']
-): Promise<void> {
+export async function setSubscriptionTier(tier: SubscriptionTier): Promise<void> {
   await chrome.storage.local.set({ [STORAGE_KEYS.SUBSCRIPTION_TIER]: tier });
+}
+
+// Credit Info storage with caching
+export async function getCreditInfo(): Promise<CreditInfo | null> {
+  try {
+    const result = await chrome.storage.local.get([
+      STORAGE_KEYS.CREDIT_INFO,
+      STORAGE_KEYS.CREDIT_CACHE_TIME,
+    ]);
+
+    const cacheTime = result[STORAGE_KEYS.CREDIT_CACHE_TIME];
+    const creditInfo = result[STORAGE_KEYS.CREDIT_INFO];
+
+    // Check if cache is valid
+    if (cacheTime && creditInfo && Date.now() - cacheTime < CREDIT_CACHE_DURATION) {
+      return creditInfo;
+    }
+
+    return null; // Cache expired or not present
+  } catch (error) {
+    console.error('[SafePlay Storage] Error getting credit info:', error);
+    return null;
+  }
+}
+
+export async function setCreditInfo(creditInfo: CreditInfo): Promise<void> {
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.CREDIT_INFO]: creditInfo,
+      [STORAGE_KEYS.CREDIT_CACHE_TIME]: Date.now(),
+    });
+  } catch (error) {
+    console.error('[SafePlay Storage] Error setting credit info:', error);
+  }
+}
+
+export async function clearCreditInfo(): Promise<void> {
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.CREDIT_INFO,
+    STORAGE_KEYS.CREDIT_CACHE_TIME,
+  ]);
+}
+
+// Update credit info after a filter operation (optimistic update)
+export async function updateCreditsAfterFilter(creditCost: number): Promise<void> {
+  try {
+    const currentInfo = await getCreditInfo();
+    if (currentInfo) {
+      const updatedInfo: CreditInfo = {
+        ...currentInfo,
+        available: Math.max(0, currentInfo.available - creditCost),
+        used_this_period: currentInfo.used_this_period + creditCost,
+        percent_consumed: Math.min(
+          100,
+          ((currentInfo.used_this_period + creditCost) / currentInfo.plan_allocation) * 100
+        ),
+      };
+      await setCreditInfo(updatedInfo);
+    }
+  } catch (error) {
+    console.error('[SafePlay Storage] Error updating credits after filter:', error);
+  }
 }
 
 interface CachedTranscriptEntry {

@@ -3,7 +3,8 @@ import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
 import { SmoothProgressAnimator } from './smooth-progress';
 import { CaptionFilter } from './caption-filter';
-import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo } from '../types';
+import { CreditConfirmation, showAuthRequiredMessage } from './credit-confirmation';
+import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo, PreviewData } from '../types';
 import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
 import './styles.css';
 
@@ -134,7 +135,78 @@ class SafePlayContentScript {
     log('Filter button clicked for:', youtubeId);
     this.isProcessing = true;
     this.currentVideoId = youtubeId;
-    // Store the video ID being filtered so state updates go to the right button
+    this.filteringVideoId = youtubeId;
+
+    try {
+      // Step 1: Get preview (credit cost and video info)
+      this.updateButtonState({ state: 'connecting', text: 'Checking...', videoId: youtubeId });
+
+      const previewResponse = await chrome.runtime.sendMessage({
+        type: 'GET_PREVIEW',
+        payload: { youtubeId },
+      });
+
+      // Handle auth errors
+      if (!previewResponse.success) {
+        if (previewResponse.error?.includes('UNAUTHORIZED') || previewResponse.error?.includes('401')) {
+          this.isProcessing = false;
+          this.filteringVideoId = null;
+          this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
+          showAuthRequiredMessage();
+          return;
+        }
+        throw new Error(previewResponse.error || 'Failed to get preview');
+      }
+
+      const previewData: PreviewData = previewResponse.data;
+
+      // If cached and has sufficient credits (free), skip confirmation
+      if (previewData.isCached && previewData.creditCost === 0) {
+        log('Video is cached, skipping confirmation');
+        await this.proceedWithFiltering(youtubeId);
+        return;
+      }
+
+      // Show credit confirmation dialog
+      this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
+      this.isProcessing = false;
+
+      const confirmation = new CreditConfirmation({
+        onConfirm: async () => {
+          log('User confirmed filtering');
+          await this.proceedWithFiltering(youtubeId);
+        },
+        onCancel: () => {
+          log('User cancelled filtering');
+          this.filteringVideoId = null;
+        },
+        debug: DEBUG,
+      });
+
+      confirmation.show(previewData);
+    } catch (error) {
+      log('Preview request failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.updateButtonState({
+        state: 'error',
+        text: 'Error',
+        error: errorMessage,
+        videoId: youtubeId,
+      });
+      this.isProcessing = false;
+      this.filteringVideoId = null;
+    }
+  }
+
+  // Proceed with filtering after user confirmation or for cached videos
+  private async proceedWithFiltering(youtubeId: string): Promise<void> {
+    if (this.isProcessing) {
+      log('Already processing, ignoring');
+      return;
+    }
+
+    log('Proceeding with filtering for:', youtubeId);
+    this.isProcessing = true;
     this.filteringVideoId = youtubeId;
 
     // Pause video while we load the filter to prevent hearing profanity
@@ -149,10 +221,10 @@ class SafePlayContentScript {
       // Step 1: Connecting
       this.updateButtonState({ state: 'connecting', text: 'Connecting...', videoId: youtubeId });
 
-      // Request filter from background script (which calls the API)
+      // Request filter from background script (uses START_FILTER which deducts credits)
       const response = await chrome.runtime.sendMessage({
-        type: 'GET_FILTER',
-        payload: { youtubeId },
+        type: 'START_FILTER',
+        payload: { youtubeId, filterType: this.preferences.filterMode },
       });
 
       if (!response.success) {
@@ -161,20 +233,36 @@ class SafePlayContentScript {
 
       const { status, transcript, jobId, error_code, error } = response.data;
 
-      // Handle immediate failure with error_code (e.g., age-restricted detected quickly)
-      if (status === 'failed' && error_code === 'AGE_RESTRICTED') {
-        this.updateButtonState({
-          state: 'age-restricted',
-          text: 'Age-Restricted',
-          error: error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.',
-          videoId: youtubeId,
-        });
+      // Handle immediate failure with error_code
+      if (status === 'failed') {
+        if (error_code === 'AGE_RESTRICTED') {
+          this.updateButtonState({
+            state: 'age-restricted',
+            text: 'Age-Restricted',
+            error: error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.',
+            videoId: youtubeId,
+          });
+        } else if (error_code === 'INSUFFICIENT_CREDITS') {
+          this.updateButtonState({
+            state: 'error',
+            text: 'No Credits',
+            error: error || 'Insufficient credits. Please purchase more credits at safeplay.app',
+            videoId: youtubeId,
+          });
+        } else {
+          this.updateButtonState({
+            state: 'error',
+            text: 'Error',
+            error: error || 'Failed to filter video',
+            videoId: youtubeId,
+          });
+        }
         // Resume video since we can't filter
         if (this.videoWasPlaying) {
           const video = this.getVideoElement();
           if (video) {
             video.play();
-            log('Video resumed after age-restricted detection');
+            log('Video resumed after error');
           }
           this.videoWasPlaying = false;
         }
