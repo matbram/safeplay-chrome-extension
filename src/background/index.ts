@@ -579,7 +579,7 @@ async function handleLogout(): Promise<MessageResponse> {
   return { success: true };
 }
 
-// Handle open login - opens the website login page
+// Handle open login - opens the website extension auth page
 const WEBSITE_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
 
 async function handleOpenLogin(): Promise<MessageResponse> {
@@ -588,10 +588,13 @@ async function handleOpenLogin(): Promise<MessageResponse> {
   // Get the extension ID for the callback
   const extensionId = chrome.runtime.id;
 
-  // Open the website login page with extension callback
-  const loginUrl = `${WEBSITE_BASE_URL}/login?extension=${extensionId}&callback=extension`;
+  // Open the dedicated extension auth page
+  // This page will check if user is already logged in:
+  // - If logged in: sends token to extension immediately
+  // - If not logged in: redirects to login with extension callback
+  const authUrl = `${WEBSITE_BASE_URL}/extension/auth?extensionId=${extensionId}`;
 
-  await chrome.tabs.create({ url: loginUrl });
+  await chrome.tabs.create({ url: authUrl });
 
   return { success: true };
 }

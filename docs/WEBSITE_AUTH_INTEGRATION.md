@@ -4,11 +4,192 @@ This document describes the changes required on the SafePlay website to complete
 
 ## Overview
 
-The Chrome extension has been updated to support user authentication. When a user signs in via the extension, they are redirected to the website login page. After successful login, the website needs to send the authentication token and user data back to the extension.
+The Chrome extension has been updated to support user authentication. When a user signs in via the extension, they are redirected to a dedicated extension auth page on the website. This page checks if the user is already logged in:
+
+- **If already logged in**: Sends auth token to the extension immediately (no login required!)
+- **If not logged in**: Redirects to login page, then sends token after successful login
 
 ## Required Changes
 
-### 1. Update `/api/user/profile` Route to Support Bearer Token Authentication
+### 1. Create the Extension Auth Page (REQUIRED)
+
+This is the main entry point when users click "Sign In" in the extension. The extension opens:
+```
+https://your-website.com/extension/auth?extensionId={extensionId}
+```
+
+**File:** `src/app/extension/auth/page.tsx`
+
+```typescript
+'use client';
+
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/supabase/client';
+
+export default function ExtensionAuthPage() {
+  const [status, setStatus] = useState<'loading' | 'success' | 'error' | 'redirecting'>('loading');
+  const [message, setMessage] = useState('Checking authentication...');
+  const router = useRouter();
+
+  useEffect(() => {
+    async function handleAuth() {
+      const params = new URLSearchParams(window.location.search);
+      const extensionId = params.get('extensionId');
+
+      if (!extensionId) {
+        setStatus('error');
+        setMessage('No extension ID provided. Please try again from the extension.');
+        return;
+      }
+
+      const supabase = createClient();
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session) {
+        // Not logged in - redirect to login with callback
+        setStatus('redirecting');
+        setMessage('Redirecting to login...');
+        // Store extensionId in sessionStorage for after login
+        sessionStorage.setItem('extensionAuthId', extensionId);
+        router.push(`/login?redirect=/extension/auth?extensionId=${extensionId}`);
+        return;
+      }
+
+      // Already logged in - send token to extension immediately
+      setMessage('Connecting to extension...');
+      await sendAuthToExtension(extensionId, session);
+    }
+
+    async function sendAuthToExtension(extensionId: string, session: any) {
+      try {
+        // Fetch profile data
+        const profileResponse = await fetch('/api/user/profile');
+        if (!profileResponse.ok) {
+          throw new Error('Failed to fetch profile');
+        }
+        const profileData = await profileResponse.json();
+
+        // Check if chrome.runtime is available
+        if (typeof chrome === 'undefined' || !chrome.runtime) {
+          setStatus('error');
+          setMessage('Unable to communicate with extension. Make sure the SafePlay extension is installed.');
+          return;
+        }
+
+        // Send to extension
+        chrome.runtime.sendMessage(extensionId, {
+          type: 'AUTH_TOKEN',
+          token: session.access_token,
+          userId: session.user.id,
+          tier: profileData.subscription?.plans?.name?.toLowerCase() || 'free',
+          user: profileData.user,
+          subscription: profileData.subscription,
+          userCredits: profileData.credits,
+          credits: {
+            available: profileData.credits?.available_credits || 0,
+            used_this_period: profileData.credits?.used_this_period || 0,
+            plan_allocation: profileData.subscription?.plans?.monthly_credits || 30,
+            percent_consumed: profileData.subscription?.plans?.monthly_credits
+              ? (profileData.credits?.used_this_period / profileData.subscription.plans.monthly_credits) * 100
+              : 0,
+            plan: profileData.subscription?.plans?.name?.toLowerCase() || 'free',
+          }
+        }, (response) => {
+          if (chrome.runtime.lastError) {
+            setStatus('error');
+            setMessage('Failed to connect to extension. Please make sure the SafePlay extension is installed and try again.');
+            return;
+          }
+
+          if (response?.success) {
+            setStatus('success');
+            setMessage('Successfully connected! This tab will close automatically.');
+            // Auto-close after 2 seconds
+            setTimeout(() => window.close(), 2000);
+          } else {
+            setStatus('error');
+            setMessage('Failed to connect to extension. Please try again.');
+          }
+        });
+      } catch (error) {
+        console.error('Extension auth error:', error);
+        setStatus('error');
+        setMessage('An error occurred. Please try again.');
+      }
+    }
+
+    handleAuth();
+  }, [router]);
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+      <div className="text-center p-8 max-w-md">
+        {status === 'loading' && (
+          <>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500 mx-auto mb-4" />
+            <p className="text-gray-600 dark:text-gray-300">{message}</p>
+          </>
+        )}
+        {status === 'redirecting' && (
+          <>
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4" />
+            <p className="text-gray-600 dark:text-gray-300">{message}</p>
+          </>
+        )}
+        {status === 'success' && (
+          <>
+            <div className="text-green-500 text-6xl mb-4">✓</div>
+            <h2 className="text-xl font-semibold text-green-600 dark:text-green-400 mb-2">Connected!</h2>
+            <p className="text-gray-600 dark:text-gray-300">{message}</p>
+          </>
+        )}
+        {status === 'error' && (
+          <>
+            <div className="text-red-500 text-6xl mb-4">✗</div>
+            <h2 className="text-xl font-semibold text-red-600 dark:text-red-400 mb-2">Connection Failed</h2>
+            <p className="text-gray-600 dark:text-gray-300 mb-4">{message}</p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition"
+            >
+              Try Again
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+```
+
+### 2. Update Login Page to Handle Extension Callback
+
+After successful login, check if the user came from the extension and redirect back to the auth page:
+
+**In your login success handler or auth callback:**
+
+```typescript
+// After successful login
+useEffect(() => {
+  if (session) {
+    const params = new URLSearchParams(window.location.search);
+    const redirect = params.get('redirect');
+
+    // Check if this is an extension auth flow
+    if (redirect?.includes('/extension/auth')) {
+      // Redirect back to extension auth page which will send the token
+      router.push(redirect);
+      return;
+    }
+
+    // Normal login redirect
+    router.push('/dashboard');
+  }
+}, [session, router]);
+```
+
+### 3. Update `/api/user/profile` Route to Support Bearer Token Authentication
 
 The profile API route needs to accept Bearer token authentication (in addition to session cookies) so the extension can fetch user profile data.
 
@@ -99,170 +280,7 @@ export async function GET(request: NextRequest) {
 }
 ```
 
-### 2. Add Extension Authentication Callback
-
-After a user logs in on the website, if they came from the extension (indicated by query parameters), send the auth token back to the extension.
-
-**Option A: Add to existing login success handler**
-
-In your login page or auth callback, add this logic:
-
-```typescript
-// After successful login
-useEffect(() => {
-  async function handleExtensionAuth() {
-    const params = new URLSearchParams(window.location.search);
-    const extensionId = params.get('extension');
-    const callback = params.get('callback');
-
-    if (extensionId && callback === 'extension' && session) {
-      try {
-        // Get user profile data
-        const profileResponse = await fetch('/api/user/profile');
-        const profileData = await profileResponse.json();
-
-        // Send auth data to extension
-        chrome.runtime.sendMessage(extensionId, {
-          type: 'AUTH_TOKEN',
-          token: session.access_token,
-          userId: session.user.id,
-          tier: profileData.subscription?.plans?.name?.toLowerCase() || 'free',
-          user: profileData.user,
-          subscription: profileData.subscription,
-          userCredits: profileData.credits,
-          credits: {
-            available: profileData.credits?.available_credits || 0,
-            used_this_period: profileData.credits?.used_this_period || 0,
-            plan_allocation: profileData.subscription?.plans?.monthly_credits || 30,
-            percent_consumed: profileData.subscription?.plans?.monthly_credits
-              ? (profileData.credits?.used_this_period / profileData.subscription.plans.monthly_credits) * 100
-              : 0,
-            plan: profileData.subscription?.plans?.name?.toLowerCase() || 'free',
-          }
-        }, (response) => {
-          if (response?.success) {
-            // Optionally show success message or close tab
-            window.close();
-          }
-        });
-      } catch (error) {
-        console.error('Failed to send auth to extension:', error);
-      }
-    }
-  }
-
-  handleExtensionAuth();
-}, [session]);
-```
-
-**Option B: Create a dedicated extension callback page**
-
-**File:** `src/app/extension/page.tsx`
-
-```typescript
-'use client';
-
-import { useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
-
-export default function ExtensionAuthPage() {
-  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
-  const [message, setMessage] = useState('Connecting to extension...');
-
-  useEffect(() => {
-    async function sendAuthToExtension() {
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
-
-      if (!session) {
-        // Redirect to login with extension callback
-        const params = new URLSearchParams(window.location.search);
-        const extensionId = params.get('extension') || '';
-        window.location.href = `/login?extension=${extensionId}&callback=extension`;
-        return;
-      }
-
-      const params = new URLSearchParams(window.location.search);
-      const extensionId = params.get('extension');
-
-      if (!extensionId) {
-        setStatus('error');
-        setMessage('No extension ID provided');
-        return;
-      }
-
-      try {
-        // Fetch profile data
-        const profileResponse = await fetch('/api/user/profile');
-        const profileData = await profileResponse.json();
-
-        // Send to extension
-        chrome.runtime.sendMessage(extensionId, {
-          type: 'AUTH_TOKEN',
-          token: session.access_token,
-          userId: session.user.id,
-          tier: profileData.subscription?.plans?.name?.toLowerCase() || 'free',
-          user: profileData.user,
-          subscription: profileData.subscription,
-          userCredits: profileData.credits,
-          credits: {
-            available: profileData.credits?.available_credits || 0,
-            used_this_period: profileData.credits?.used_this_period || 0,
-            plan_allocation: profileData.subscription?.plans?.monthly_credits || 30,
-            percent_consumed: profileData.subscription?.plans?.monthly_credits
-              ? (profileData.credits?.used_this_period / profileData.subscription.plans.monthly_credits) * 100
-              : 0,
-            plan: profileData.subscription?.plans?.name?.toLowerCase() || 'free',
-          }
-        }, (response) => {
-          if (response?.success) {
-            setStatus('success');
-            setMessage('Successfully connected! You can close this tab.');
-            // Auto-close after 2 seconds
-            setTimeout(() => window.close(), 2000);
-          } else {
-            setStatus('error');
-            setMessage('Failed to connect to extension. Please try again.');
-          }
-        });
-      } catch (error) {
-        console.error('Extension auth error:', error);
-        setStatus('error');
-        setMessage('An error occurred. Please try again.');
-      }
-    }
-
-    sendAuthToExtension();
-  }, []);
-
-  return (
-    <div className="min-h-screen flex items-center justify-center">
-      <div className="text-center">
-        {status === 'loading' && (
-          <>
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-red-500 mx-auto mb-4" />
-            <p>{message}</p>
-          </>
-        )}
-        {status === 'success' && (
-          <>
-            <div className="text-green-500 text-5xl mb-4">✓</div>
-            <p className="text-green-600">{message}</p>
-          </>
-        )}
-        {status === 'error' && (
-          <>
-            <div className="text-red-500 text-5xl mb-4">✗</div>
-            <p className="text-red-600">{message}</p>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-```
-
-### 3. Handle Logout Sync (Optional but Recommended)
+### 4. Handle Logout Sync (Optional but Recommended)
 
 When a user logs out on the website, notify the extension:
 
@@ -283,7 +301,7 @@ async function handleLogout() {
 }
 ```
 
-### 4. Environment Variables
+### 5. Environment Variables
 
 Add the extension ID to your environment:
 
@@ -291,14 +309,54 @@ Add the extension ID to your environment:
 NEXT_PUBLIC_EXTENSION_ID=your-chrome-extension-id-here
 ```
 
-## Extension Authentication Flow
+## Authentication Flow Diagram
 
-1. User clicks "Sign In" in the extension popup
-2. Extension opens: `https://your-website.com/login?extension={extensionId}&callback=extension`
-3. User logs in on the website
-4. Website detects the extension parameters and sends auth data via `chrome.runtime.sendMessage()`
-5. Extension receives the token and stores it
-6. Extension can now make authenticated API requests with `Authorization: Bearer {token}`
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     User clicks "Sign In" in extension                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│            Extension opens: /extension/auth?extensionId={id}                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+                        ┌─────────────────────────┐
+                        │  User already logged in? │
+                        └─────────────────────────┘
+                           │                 │
+                          YES                NO
+                           │                 │
+                           ▼                 ▼
+              ┌────────────────────┐  ┌─────────────────────────┐
+              │ Send token to      │  │ Redirect to /login      │
+              │ extension via      │  │ with redirect param     │
+              │ chrome.runtime     │  └─────────────────────────┘
+              │ .sendMessage()     │              │
+              └────────────────────┘              ▼
+                           │         ┌─────────────────────────┐
+                           │         │ User logs in            │
+                           │         └─────────────────────────┘
+                           │                      │
+                           │                      ▼
+                           │         ┌─────────────────────────┐
+                           │         │ Redirect back to        │
+                           │         │ /extension/auth         │
+                           │         └─────────────────────────┘
+                           │                      │
+                           │                      ▼
+                           │         ┌─────────────────────────┐
+                           │         │ Send token to extension │
+                           │         └─────────────────────────┘
+                           │                      │
+                           ▼                      ▼
+              ┌─────────────────────────────────────────────────┐
+              │        Extension receives token & stores it      │
+              │        Shows user profile in popup               │
+              │        Tab auto-closes                           │
+              └─────────────────────────────────────────────────┘
+```
 
 ## Message Format
 
@@ -348,12 +406,21 @@ The extension expects this message format:
 1. Install the extension in Chrome (load unpacked from `dist/` folder)
 2. Note the extension ID from `chrome://extensions`
 3. Update your website's `NEXT_PUBLIC_EXTENSION_ID` environment variable
-4. Click "Sign In" in the extension popup
-5. Log in on the website
-6. Verify the extension shows your account info
+4. **Test Case 1 - Not logged in:**
+   - Click "Sign In" in the extension popup
+   - Should redirect to login page
+   - Log in on the website
+   - Should redirect back to /extension/auth and send token
+   - Extension should show your account info
+5. **Test Case 2 - Already logged in:**
+   - Log in on the website first
+   - Click "Sign In" in the extension popup
+   - Should immediately send token (no login required!)
+   - Extension should show your account info
 
 ## Security Notes
 
 - The extension only accepts messages from allowed origins (configured in `manifest.json` under `externally_connectable`)
 - Tokens are stored in `chrome.storage.local` (only accessible to the extension)
 - The website should verify the extension ID before sending sensitive data
+- Always use HTTPS in production
