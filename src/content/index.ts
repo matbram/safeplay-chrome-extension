@@ -215,6 +215,8 @@ class SafePlayContentScript {
       // If cached and has sufficient credits (free), skip confirmation
       if (previewData.isCached && previewData.creditCost === 0) {
         log('Video is cached, skipping confirmation');
+        // Reset isProcessing since proceedWithFiltering will set it again
+        this.isProcessing = false;
         await this.proceedWithFiltering(youtubeId);
         return;
       }
