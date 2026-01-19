@@ -77,10 +77,12 @@ export default function ExtensionAuthPage() {
           return;
         }
 
-        // Send to extension
+        // Send to extension (including refresh token for auto-refresh)
         chrome.runtime.sendMessage(extensionId, {
           type: 'AUTH_TOKEN',
           token: session.access_token,
+          refreshToken: session.refresh_token,           // For auto-refresh when token expires
+          expiresAt: session.expires_at,                 // Token expiry timestamp (seconds)
           userId: session.user.id,
           tier: profileData.subscription?.plans?.name?.toLowerCase() || 'free',
           user: profileData.user,
@@ -366,6 +368,8 @@ The extension expects this message format:
 {
   type: 'AUTH_TOKEN',
   token: string,           // Supabase access token
+  refreshToken: string,    // Supabase refresh token (for auto-refresh)
+  expiresAt: number,       // Token expiry timestamp in seconds (from session.expires_at)
   userId: string,          // User ID
   tier: string,            // Plan name lowercase (e.g., 'free', 'individual')
   user: {
@@ -400,6 +404,68 @@ The extension expects this message format:
   }
 }
 ```
+
+### 6. Create Token Refresh API Endpoint (REQUIRED)
+
+The extension will automatically refresh tokens when they expire. Create this endpoint:
+
+**File:** `src/app/api/auth/refresh/route.ts`
+
+```typescript
+import { createClient } from "@/lib/supabase/server";
+import { NextRequest, NextResponse } from "next/server";
+
+export async function POST(request: NextRequest) {
+  try {
+    const { refresh_token } = await request.json();
+
+    if (!refresh_token) {
+      return NextResponse.json(
+        { error: "Refresh token is required" },
+        { status: 400 }
+      );
+    }
+
+    const supabase = await createClient();
+
+    // Use the refresh token to get a new session
+    const { data, error } = await supabase.auth.refreshSession({
+      refresh_token,
+    });
+
+    if (error || !data.session) {
+      return NextResponse.json(
+        { error: "Invalid or expired refresh token" },
+        { status: 401 }
+      );
+    }
+
+    return NextResponse.json({
+      access_token: data.session.access_token,
+      refresh_token: data.session.refresh_token,
+      expires_at: data.session.expires_at,
+    });
+  } catch (error) {
+    console.error("Token refresh error:", error);
+    return NextResponse.json(
+      { error: "An unexpected error occurred" },
+      { status: 500 }
+    );
+  }
+}
+```
+
+## Token Refresh Behavior
+
+The extension automatically handles token refresh:
+
+1. **Proactive Refresh**: When making API calls, the extension checks if the token will expire within 5 minutes. If so, it automatically refreshes before making the request.
+
+2. **401 Recovery**: If an API call returns 401 Unauthorized, the extension attempts to refresh the token and retry the request once.
+
+3. **Refresh Failure**: If token refresh fails (invalid/expired refresh token), the user is prompted to sign in again.
+
+4. **Token Expiry**: Supabase access tokens typically expire after 1 hour. Refresh tokens have a longer lifespan (configurable in Supabase settings, default is 1 week).
 
 ## Testing
 

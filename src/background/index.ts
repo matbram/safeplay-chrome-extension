@@ -626,6 +626,12 @@ chrome.runtime.onMessageExternal.addListener(
     if (allowedOrigins.includes(sender.origin || '')) {
       if (message.type === 'AUTH_TOKEN') {
         log('Received AUTH_TOKEN from website');
+        log('Message contains:', {
+          hasToken: !!message.token,
+          hasRefreshToken: !!message.refreshToken,
+          hasExpiresAt: !!message.expiresAt,
+          hasUserId: !!message.userId,
+        });
         import('../utils/storage').then(async ({
           setAuthToken,
           setUserId,
@@ -636,8 +642,12 @@ chrome.runtime.onMessageExternal.addListener(
           setUserCredits,
         }) => {
           try {
-            // Store auth data
-            await setAuthToken(message.token);
+            // Store auth data including refresh token and expiry
+            await setAuthToken(
+              message.token,
+              message.refreshToken,  // Refresh token for auto-refresh
+              message.expiresAt      // Token expiry timestamp (in seconds)
+            );
 
             if (message.userId) {
               await setUserId(message.userId);
