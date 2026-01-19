@@ -54,6 +54,7 @@ export interface PreviewResponse {
   has_sufficient_credits: boolean;
   cached: boolean;
   has_transcript: boolean;
+  credit_cost_note?: string; // Note when duration/cost is unknown
   error?: string;
   error_code?: 'AGE_RESTRICTED' | 'VIDEO_UNAVAILABLE' | 'UNAUTHORIZED' | string;
 }
@@ -235,6 +236,8 @@ export interface MessageResponse<T = unknown> {
 export interface PreviewData {
   video: VideoMetadata;
   creditCost: number;
+  creditCostNote?: string; // Note when cost is unknown (e.g., "~1 credit per minute")
+  creditCostUnknown?: boolean; // True when duration unavailable
   userCredits: number;
   hasSufficientCredits: boolean;
   isCached: boolean;
