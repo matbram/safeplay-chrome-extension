@@ -12,6 +12,8 @@ import {
 const STORAGE_KEYS = {
   PREFERENCES: 'safeplay_preferences',
   AUTH_TOKEN: 'safeplay_auth_token',
+  REFRESH_TOKEN: 'safeplay_refresh_token',
+  TOKEN_EXPIRES_AT: 'safeplay_token_expires_at',
   USER_ID: 'safeplay_user_id',
   SUBSCRIPTION_TIER: 'safeplay_subscription_tier',
   CREDIT_INFO: 'safeplay_credit_info',
@@ -23,6 +25,12 @@ const STORAGE_KEYS = {
   USER_CREDITS: 'safeplay_user_credits',
   PROFILE_CACHE_TIME: 'safeplay_profile_cache_time',
 } as const;
+
+// API base URL for token refresh
+const API_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
+
+// Token refresh buffer - refresh 5 minutes before expiry
+const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
 // Credit cache duration in milliseconds (5 minutes)
 const CREDIT_CACHE_DURATION = 5 * 60 * 1000;
@@ -44,17 +52,120 @@ export async function setPreferences(
   return updated;
 }
 
+// Refresh the auth token using the refresh token
+export async function refreshAuthToken(): Promise<string | null> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.REFRESH_TOKEN);
+  const refreshToken = result[STORAGE_KEYS.REFRESH_TOKEN];
+
+  if (!refreshToken) {
+    console.log('[SafePlay Storage] No refresh token available');
+    return null;
+  }
+
+  try {
+    console.log('[SafePlay Storage] Attempting to refresh auth token...');
+    const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+
+    if (!response.ok) {
+      console.log('[SafePlay Storage] Token refresh failed, clearing auth data');
+      // Refresh failed - clear auth and require re-login
+      await chrome.storage.local.remove([
+        STORAGE_KEYS.AUTH_TOKEN,
+        STORAGE_KEYS.REFRESH_TOKEN,
+        STORAGE_KEYS.TOKEN_EXPIRES_AT,
+      ]);
+      return null;
+    }
+
+    const data = await response.json();
+
+    // Store new tokens
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.AUTH_TOKEN]: data.access_token,
+      [STORAGE_KEYS.REFRESH_TOKEN]: data.refresh_token,
+      [STORAGE_KEYS.TOKEN_EXPIRES_AT]: data.expires_at,
+    });
+
+    console.log('[SafePlay Storage] Token refreshed successfully');
+    return data.access_token;
+  } catch (error) {
+    console.error('[SafePlay Storage] Token refresh error:', error);
+    return null;
+  }
+}
+
+// Get auth token - automatically refreshes if expired
 export async function getAuthToken(): Promise<string | null> {
+  const result = await chrome.storage.local.get([
+    STORAGE_KEYS.AUTH_TOKEN,
+    STORAGE_KEYS.REFRESH_TOKEN,
+    STORAGE_KEYS.TOKEN_EXPIRES_AT,
+  ]);
+
+  const token = result[STORAGE_KEYS.AUTH_TOKEN];
+  const refreshToken = result[STORAGE_KEYS.REFRESH_TOKEN];
+  const expiresAt = result[STORAGE_KEYS.TOKEN_EXPIRES_AT];
+
+  if (!token) {
+    return null;
+  }
+
+  // Check if token is expired or expiring soon
+  if (expiresAt) {
+    const now = Date.now();
+    const expiresAtMs = expiresAt * 1000; // Convert seconds to milliseconds
+
+    if (expiresAtMs < now + TOKEN_REFRESH_BUFFER_MS) {
+      console.log('[SafePlay Storage] Token expired or expiring soon, attempting refresh...');
+
+      if (refreshToken) {
+        const newToken = await refreshAuthToken();
+        if (newToken) {
+          return newToken;
+        }
+      }
+
+      // Refresh failed or no refresh token - return null to trigger re-login
+      console.log('[SafePlay Storage] Token refresh failed, user needs to re-login');
+      return null;
+    }
+  }
+
+  return token;
+}
+
+// Get raw auth token without refresh check (for internal use)
+export async function getAuthTokenRaw(): Promise<string | null> {
   const result = await chrome.storage.local.get(STORAGE_KEYS.AUTH_TOKEN);
   return result[STORAGE_KEYS.AUTH_TOKEN] || null;
 }
 
-export async function setAuthToken(token: string): Promise<void> {
-  await chrome.storage.local.set({ [STORAGE_KEYS.AUTH_TOKEN]: token });
+export async function setAuthToken(token: string, refreshToken?: string, expiresAt?: number): Promise<void> {
+  const data: Record<string, unknown> = {
+    [STORAGE_KEYS.AUTH_TOKEN]: token,
+  };
+
+  if (refreshToken) {
+    data[STORAGE_KEYS.REFRESH_TOKEN] = refreshToken;
+  }
+
+  if (expiresAt) {
+    data[STORAGE_KEYS.TOKEN_EXPIRES_AT] = expiresAt;
+  }
+
+  await chrome.storage.local.set(data);
 }
 
 export async function clearAuthToken(): Promise<void> {
-  await chrome.storage.local.remove(STORAGE_KEYS.AUTH_TOKEN);
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.AUTH_TOKEN,
+    STORAGE_KEYS.REFRESH_TOKEN,
+    STORAGE_KEYS.TOKEN_EXPIRES_AT,
+  ]);
 }
 
 export async function getUserId(): Promise<string | null> {
@@ -367,6 +478,8 @@ export async function clearAuthData(): Promise<void> {
   try {
     await chrome.storage.local.remove([
       STORAGE_KEYS.AUTH_TOKEN,
+      STORAGE_KEYS.REFRESH_TOKEN,
+      STORAGE_KEYS.TOKEN_EXPIRES_AT,
       STORAGE_KEYS.USER_ID,
       STORAGE_KEYS.SUBSCRIPTION_TIER,
       STORAGE_KEYS.CREDIT_INFO,

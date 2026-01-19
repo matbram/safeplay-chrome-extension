@@ -6,7 +6,7 @@ import {
   CreditBalanceResponse,
   UserProfileResponse,
 } from '../types';
-import { getAuthToken } from '../utils/storage';
+import { getAuthToken, refreshAuthToken } from '../utils/storage';
 
 // API URL for the SafePlay website API
 const API_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
@@ -20,6 +20,7 @@ interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: unknown;
   requiresAuth?: boolean;
+  _isRetry?: boolean; // Internal flag to prevent infinite retry loops
 }
 
 export class ApiError extends Error {
@@ -38,7 +39,7 @@ async function request<T>(
   endpoint: string,
   options: RequestOptions = {}
 ): Promise<T> {
-  const { method = 'GET', body, requiresAuth = true } = options;
+  const { method = 'GET', body, requiresAuth = true, _isRetry = false } = options;
   const url = `${API_BASE_URL}${endpoint}`;
 
   logApi(`>>> ${method} ${url}`, body ? JSON.stringify(body) : '');
@@ -73,6 +74,26 @@ async function request<T>(
         errorData = JSON.parse(errorText);
       } catch {
         errorData = { rawError: errorText };
+      }
+
+      // Handle 401 Unauthorized - try to refresh token and retry
+      if (response.status === 401 && requiresAuth && !_isRetry) {
+        logApi('Got 401, attempting token refresh...');
+        const newToken = await refreshAuthToken();
+
+        if (newToken) {
+          logApi('Token refreshed, retrying request...');
+          // Retry the request with the new token
+          return request<T>(endpoint, { ...options, _isRetry: true });
+        }
+
+        logApi('Token refresh failed, user needs to re-login');
+        throw new ApiError(
+          'Session expired. Please sign in again.',
+          401,
+          errorData,
+          'SESSION_EXPIRED'
+        );
       }
 
       throw new ApiError(

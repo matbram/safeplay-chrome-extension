@@ -579,7 +579,7 @@ async function handleLogout(): Promise<MessageResponse> {
   return { success: true };
 }
 
-// Handle open login - opens the website login page
+// Handle open login - opens the website extension auth page
 const WEBSITE_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
 
 async function handleOpenLogin(): Promise<MessageResponse> {
@@ -588,10 +588,13 @@ async function handleOpenLogin(): Promise<MessageResponse> {
   // Get the extension ID for the callback
   const extensionId = chrome.runtime.id;
 
-  // Open the website login page with extension callback
-  const loginUrl = `${WEBSITE_BASE_URL}/login?extension=${extensionId}&callback=extension`;
+  // Open the dedicated extension auth page
+  // This page will check if user is already logged in:
+  // - If logged in: sends token to extension immediately
+  // - If not logged in: redirects to login with extension callback
+  const authUrl = `${WEBSITE_BASE_URL}/extension/auth?extensionId=${extensionId}`;
 
-  await chrome.tabs.create({ url: loginUrl });
+  await chrome.tabs.create({ url: authUrl });
 
   return { success: true };
 }
@@ -623,6 +626,12 @@ chrome.runtime.onMessageExternal.addListener(
     if (allowedOrigins.includes(sender.origin || '')) {
       if (message.type === 'AUTH_TOKEN') {
         log('Received AUTH_TOKEN from website');
+        log('Message contains:', {
+          hasToken: !!message.token,
+          hasRefreshToken: !!message.refreshToken,
+          hasExpiresAt: !!message.expiresAt,
+          hasUserId: !!message.userId,
+        });
         import('../utils/storage').then(async ({
           setAuthToken,
           setUserId,
@@ -633,8 +642,12 @@ chrome.runtime.onMessageExternal.addListener(
           setUserCredits,
         }) => {
           try {
-            // Store auth data
-            await setAuthToken(message.token);
+            // Store auth data including refresh token and expiry
+            await setAuthToken(
+              message.token,
+              message.refreshToken,  // Refresh token for auto-refresh
+              message.expiresAt      // Token expiry timestamp (in seconds)
+            );
 
             if (message.userId) {
               await setUserId(message.userId);
