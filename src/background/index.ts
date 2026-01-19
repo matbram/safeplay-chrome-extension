@@ -5,6 +5,9 @@ import {
   Transcript,
   UserPreferences,
   JobStatusResponse,
+  CreditInfo,
+  PreviewData,
+  FilterConfirmPayload,
 } from '../types';
 import {
   getPreferences,
@@ -14,8 +17,17 @@ import {
   getAuthToken,
   clearCachedTranscripts,
   isAuthenticated,
+  getCreditInfo,
+  setCreditInfo,
+  updateCreditsAfterFilter,
 } from '../utils/storage';
-import { requestFilter, checkJobStatus } from '../api/client';
+import {
+  requestFilter,
+  checkJobStatus,
+  getPreview,
+  startFilter,
+  getCreditBalance,
+} from '../api/client';
 
 function log(...args: unknown[]): void {
   // Always log for debugging
@@ -45,8 +57,17 @@ async function handleMessage(
       case 'GET_FILTER':
         return await handleGetFilter(message.payload as { youtubeId: string });
 
+      case 'GET_PREVIEW':
+        return await handleGetPreview(message.payload as { youtubeId: string });
+
+      case 'START_FILTER':
+        return await handleStartFilter(message.payload as FilterConfirmPayload);
+
       case 'CHECK_JOB':
         return await handleCheckJob(message.payload as { jobId: string });
+
+      case 'GET_CREDITS':
+        return await handleGetCredits();
 
       case 'GET_PREFERENCES':
         return await handleGetPreferences();
@@ -72,7 +93,147 @@ async function handleMessage(
   }
 }
 
-// Handle initial filter request - returns cached transcript or job_id for polling
+// Handle video preview request - check credits and get video info
+async function handleGetPreview(
+  payload: { youtubeId: string }
+): Promise<MessageResponse<PreviewData>> {
+  const { youtubeId } = payload;
+  log('handleGetPreview called with youtubeId:', youtubeId);
+
+  // Check local cache first
+  const cached = await getCachedTranscript(youtubeId);
+  if (cached) {
+    log('Found in local cache, preview shows 0 cost');
+    // Get current credit info for display
+    let userCredits = 0;
+    const creditInfo = await getCreditInfo();
+    if (creditInfo) {
+      userCredits = creditInfo.available;
+    }
+
+    return {
+      success: true,
+      data: {
+        video: {
+          youtube_id: youtubeId,
+          title: 'Cached Video',
+          duration: 0,
+        },
+        creditCost: 0,
+        userCredits,
+        hasSufficientCredits: true,
+        isCached: true,
+      },
+    };
+  }
+
+  log('Not in local cache, fetching preview from API...');
+
+  try {
+    const preview = await getPreview(youtubeId);
+    log('Preview response:', JSON.stringify(preview).substring(0, 300));
+
+    if (!preview.success) {
+      return {
+        success: false,
+        error: preview.error || 'Failed to get preview',
+        data: undefined,
+      };
+    }
+
+    // Update cached credit info
+    if (preview.user_credits !== undefined) {
+      const existingInfo = await getCreditInfo();
+      if (existingInfo) {
+        await setCreditInfo({
+          ...existingInfo,
+          available: preview.user_credits,
+        });
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        video: preview.video,
+        creditCost: preview.credit_cost,
+        userCredits: preview.user_credits,
+        hasSufficientCredits: preview.has_sufficient_credits,
+        isCached: preview.cached || preview.has_transcript,
+      },
+    };
+  } catch (error) {
+    logError('handleGetPreview error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to get preview';
+    return { success: false, error: errorMessage };
+  }
+}
+
+// Handle start filter request - actually start the filtering process
+async function handleStartFilter(
+  payload: FilterConfirmPayload
+): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string }>> {
+  const { youtubeId, filterType = 'mute', customWords } = payload;
+  log('handleStartFilter called:', { youtubeId, filterType });
+
+  // Check local cache first
+  const cached = await getCachedTranscript(youtubeId);
+  if (cached) {
+    log('Found in local cache, returning cached transcript');
+    return {
+      success: true,
+      data: { status: 'cached', transcript: cached },
+    };
+  }
+
+  try {
+    const response = await startFilter(youtubeId, filterType, customWords);
+    log('Start filter response:', JSON.stringify(response).substring(0, 300));
+
+    if (!response.success) {
+      return {
+        success: true,
+        data: {
+          status: 'failed',
+          error: response.error,
+          error_code: response.error_code,
+        },
+      };
+    }
+
+    if (response.status === 'completed' && response.transcript) {
+      log('API returned completed/cached transcript, saving locally');
+      await setCachedTranscript(youtubeId, response.transcript);
+      return {
+        success: true,
+        data: { status: 'completed', transcript: response.transcript },
+      };
+    }
+
+    if (response.status === 'processing' && response.job_id) {
+      log('API returned processing status, job_id:', response.job_id);
+      return {
+        success: true,
+        data: { status: 'processing', jobId: response.job_id },
+      };
+    }
+
+    return {
+      success: true,
+      data: {
+        status: 'failed',
+        error: response.error || 'Unexpected response',
+        error_code: response.error_code,
+      },
+    };
+  } catch (error) {
+    logError('handleStartFilter error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to start filter';
+    return { success: false, error: errorMessage };
+  }
+}
+
+// Handle initial filter request (legacy) - returns cached transcript or job_id for polling
 async function handleGetFilter(
   payload: { youtubeId: string }
 ): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string }>> {
@@ -176,7 +337,7 @@ async function handleCheckJob(
     const status = await checkJobStatus(jobId);
     log('Job status response:', JSON.stringify(status).substring(0, 300));
 
-    // If completed, cache the transcript
+    // If completed, cache the transcript and update credits
     if (status.status === 'completed' && status.transcript) {
       const cacheKey = status.video?.youtube_id || status.transcript.id;
       log('Job completed, caching transcript for:', cacheKey);
@@ -197,12 +358,48 @@ async function handleCheckJob(
       });
 
       await setCachedTranscript(cacheKey, status.transcript);
+
+      // Update credits after successful completion
+      // The credit cost is calculated based on video duration (1 credit per minute, min 1)
+      // For now, we'll do an optimistic update with 1 credit since we don't have duration here
+      await updateCreditsAfterFilter(1);
     }
 
     return { success: true, data: status };
   } catch (error) {
     logError('handleCheckJob error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to check job status';
+    return { success: false, error: errorMessage };
+  }
+}
+
+// Handle get credits request
+async function handleGetCredits(): Promise<MessageResponse<CreditInfo>> {
+  log('handleGetCredits called');
+
+  // Check cache first
+  const cachedInfo = await getCreditInfo();
+  if (cachedInfo) {
+    log('Returning cached credit info:', cachedInfo);
+    return { success: true, data: cachedInfo };
+  }
+
+  // Fetch from API
+  try {
+    const response = await getCreditBalance();
+    log('Credit balance response:', JSON.stringify(response));
+
+    if (!response.success) {
+      return { success: false, error: response.error || 'Failed to get credits' };
+    }
+
+    // Cache the credit info
+    await setCreditInfo(response.credits);
+
+    return { success: true, data: response.credits };
+  } catch (error) {
+    logError('handleGetCredits error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to get credits';
     return { success: false, error: errorMessage };
   }
 }
@@ -264,12 +461,23 @@ chrome.runtime.onMessageExternal.addListener(
   (message, sender, sendResponse) => {
     if (sender.origin === 'https://safeplay.app') {
       if (message.type === 'AUTH_TOKEN') {
-        import('../utils/storage').then(({ setAuthToken, setUserId, setSubscriptionTier }) => {
+        import('../utils/storage').then(({ setAuthToken, setUserId, setSubscriptionTier, setCreditInfo }) => {
           Promise.all([
             setAuthToken(message.token),
             setUserId(message.userId),
             setSubscriptionTier(message.tier),
+            message.credits ? setCreditInfo(message.credits) : Promise.resolve(),
           ]).then(() => {
+            sendResponse({ success: true });
+          });
+        });
+        return true;
+      }
+
+      // Handle credit update messages from website
+      if (message.type === 'CREDIT_UPDATE') {
+        import('../utils/storage').then(({ setCreditInfo }) => {
+          setCreditInfo(message.credits).then(() => {
             sendResponse({ success: true });
           });
         });

@@ -704,6 +704,137 @@ body.disabled .status-banner {
   color: var(--yt-text-muted);
 }
 
+/* Credits Card */
+.credit-card .card-header {
+  padding-bottom: 8px;
+}
+
+.credit-link {
+  font-size: 11px;
+  color: var(--yt-red);
+  text-decoration: none;
+  font-weight: 500;
+  padding: 4px 10px;
+  background: var(--yt-red-light);
+  border-radius: var(--radius-full);
+  transition: var(--transition);
+}
+
+.credit-link:hover {
+  background: var(--yt-red);
+  color: white;
+}
+
+.credit-info-container {
+  padding: 0 14px 14px;
+}
+
+.credit-loading {
+  text-align: center;
+  color: var(--yt-text-muted);
+  font-size: 12px;
+  padding: 16px;
+}
+
+.credit-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.credit-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.credit-value {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--success);
+  line-height: 1;
+}
+
+.credit-value.low {
+  color: var(--warning);
+}
+
+.credit-value.empty {
+  color: var(--danger);
+}
+
+.credit-label {
+  font-size: 13px;
+  color: var(--yt-text-secondary);
+}
+
+.credit-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.credit-progress-track {
+  height: 6px;
+  background: var(--yt-dark-bg);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.credit-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--success) 0%, var(--success) 100%);
+  border-radius: var(--radius-full);
+  width: 0%;
+  transition: width 0.5s ease;
+}
+
+.credit-progress-fill.warning {
+  background: linear-gradient(90deg, var(--warning) 0%, var(--warning) 100%);
+}
+
+.credit-progress-fill.danger {
+  background: linear-gradient(90deg, var(--danger) 0%, var(--danger) 100%);
+}
+
+.credit-progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--yt-text-muted);
+}
+
+.credit-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  background: var(--yt-dark-bg);
+  border-radius: var(--radius-md);
+}
+
+.credit-error-text {
+  font-size: 12px;
+  color: var(--yt-text-muted);
+}
+
+.credit-signin-link {
+  font-size: 12px;
+  color: var(--yt-red);
+  text-decoration: none;
+  font-weight: 500;
+  padding: 6px 16px;
+  background: var(--yt-red-light);
+  border-radius: var(--radius-full);
+  transition: var(--transition);
+}
+
+.credit-signin-link:hover {
+  background: var(--yt-red);
+  color: white;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

@@ -232,6 +232,42 @@
       </section>
     </main>
 
+    <!-- Credits Section -->
+    <section class="card credit-card" id="creditSection">
+      <div class="card-header">
+        <h3 class="card-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 6v6l4 2"/>
+          </svg>
+          Credits
+        </h3>
+        <a href="https://safeplay.app/pricing" target="_blank" class="credit-link" id="getCreditsLink">Get More</a>
+      </div>
+      <div class="credit-info-container" id="creditInfoContainer">
+        <div class="credit-loading" id="creditLoading">Loading...</div>
+        <div class="credit-content" id="creditContent" style="display: none;">
+          <div class="credit-balance">
+            <span class="credit-value" id="creditValue">0</span>
+            <span class="credit-label">Available</span>
+          </div>
+          <div class="credit-progress">
+            <div class="credit-progress-track">
+              <div class="credit-progress-fill" id="creditProgressFill"></div>
+            </div>
+            <div class="credit-progress-labels">
+              <span id="creditUsed">0 used</span>
+              <span id="creditPlan">Free Plan</span>
+            </div>
+          </div>
+        </div>
+        <div class="credit-error" id="creditError" style="display: none;">
+          <span class="credit-error-text">Sign in to view credits</span>
+          <a href="https://safeplay.app/login" target="_blank" class="credit-signin-link">Sign In</a>
+        </div>
+      </div>
+    </section>
+
     <!-- Footer -->
     <footer class="popup-footer">
       <a href="#" class="footer-btn" id="settingsLink">

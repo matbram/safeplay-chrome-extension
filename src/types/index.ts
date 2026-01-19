@@ -23,6 +23,75 @@ export interface Transcript {
   created_at?: string;
 }
 
+// Video metadata from preview endpoint
+export interface VideoMetadata {
+  youtube_id: string;
+  title: string;
+  duration: number; // in seconds
+  thumbnail?: string;
+  channel?: string;
+}
+
+// Credit system types
+export interface CreditInfo {
+  available: number;
+  used_this_period: number;
+  plan_allocation: number;
+  percent_consumed: number;
+  plan?: 'free' | 'base' | 'professional' | 'unlimited';
+  reset_date?: string;
+}
+
+// Preview response - check cost before filtering
+export interface PreviewResponse {
+  success: boolean;
+  video: VideoMetadata;
+  credit_cost: number;
+  user_credits: number;
+  has_sufficient_credits: boolean;
+  cached: boolean;
+  has_transcript: boolean;
+  message?: string;
+  error?: string;
+  error_code?: 'AGE_RESTRICTED' | 'VIDEO_UNAVAILABLE' | 'UNAUTHORIZED' | string;
+}
+
+// Credit balance response
+export interface CreditBalanceResponse {
+  success: boolean;
+  credits: CreditInfo;
+  error?: string;
+}
+
+// Filter start response
+export interface FilterStartResponse {
+  success: boolean;
+  status: 'completed' | 'processing' | 'failed';
+  cached?: boolean;
+  transcript?: Transcript;
+  job_id?: string;
+  message?: string;
+  error?: string;
+  error_code?: 'INSUFFICIENT_CREDITS' | 'AGE_RESTRICTED' | 'VIDEO_UNAVAILABLE' | 'UNAUTHORIZED' | string;
+  credits_required?: number;
+  credits_available?: number;
+}
+
+// Job status response
+export interface JobStatusResponse {
+  status: 'pending' | 'downloading' | 'transcribing' | 'completed' | 'failed';
+  progress: number;
+  message?: string;
+  transcript?: Transcript;
+  error?: string;
+  error_code?: 'AGE_RESTRICTED' | 'VIDEO_UNAVAILABLE' | string;
+  video?: {
+    youtube_id: string;
+    title?: string;
+  };
+}
+
+// Legacy FilterResponse - kept for compatibility during migration
 export interface FilterResponse {
   status: 'completed' | 'processing' | 'failed';
   cached?: boolean;
@@ -31,18 +100,6 @@ export interface FilterResponse {
   message?: string;
   error?: string;
   error_code?: string;  // 'AGE_RESTRICTED', 'VIDEO_UNAVAILABLE', etc.
-}
-
-export interface JobStatusResponse {
-  status: 'pending' | 'downloading' | 'transcribing' | 'completed' | 'failed';
-  progress: number;
-  transcript?: Transcript;
-  error?: string;
-  error_code?: string;  // 'AGE_RESTRICTED', 'VIDEO_UNAVAILABLE', etc.
-  video?: {
-    youtube_id: string;
-    title?: string;
-  };
 }
 
 // Button state for UX
@@ -134,11 +191,14 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
 
 // Storage Types
 
+export type SubscriptionTier = 'free' | 'base' | 'professional' | 'unlimited';
+
 export interface StorageData {
   preferences: UserPreferences;
   authToken?: string;
   userId?: string;
-  subscriptionTier?: 'free' | 'basic' | 'professional' | 'unlimited';
+  subscriptionTier?: SubscriptionTier;
+  creditInfo?: CreditInfo;
   cachedTranscripts: Record<string, Transcript>;
 }
 
@@ -146,7 +206,10 @@ export interface StorageData {
 
 export type MessageType =
   | 'GET_FILTER'
+  | 'GET_PREVIEW'
+  | 'START_FILTER'
   | 'CHECK_JOB'
+  | 'GET_CREDITS'
   | 'GET_PREFERENCES'
   | 'SET_PREFERENCES'
   | 'GET_AUTH_STATUS'
@@ -161,4 +224,20 @@ export interface MessageResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+}
+
+// Preview data passed to content script
+export interface PreviewData {
+  video: VideoMetadata;
+  creditCost: number;
+  userCredits: number;
+  hasSufficientCredits: boolean;
+  isCached: boolean;
+}
+
+// Filter confirmation payload from content script
+export interface FilterConfirmPayload {
+  youtubeId: string;
+  filterType?: 'mute' | 'bleep';
+  customWords?: string[];
 }
