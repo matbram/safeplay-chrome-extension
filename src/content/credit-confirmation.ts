@@ -129,7 +129,7 @@ export class CreditConfirmation {
             <button class="safeplay-btn safeplay-btn-secondary" data-action="cancel">
               Cancel
             </button>
-            <a href="https://safeplay.app/pricing" target="_blank" class="safeplay-btn safeplay-btn-primary">
+            <a href="https://astonishing-youthfulness-production.up.railway.app/pricing" target="_blank" class="safeplay-btn safeplay-btn-primary">
               Get Credits
             </a>
           </div>
@@ -236,6 +236,7 @@ export class CreditConfirmation {
 
     const styles = document.createElement('style');
     styles.id = 'safeplay-credit-dialog-styles';
+    // Colors matched to SafePlay website theme
     styles.textContent = `
       .safeplay-credit-dialog-overlay {
         position: fixed;
@@ -252,7 +253,8 @@ export class CreditConfirmation {
       }
 
       .safeplay-credit-dialog {
-        background: #1a1a1a;
+        background: #212121;
+        border: 1px solid #3F3F3F;
         border-radius: 12px;
         padding: 24px;
         max-width: 380px;
@@ -284,7 +286,7 @@ export class CreditConfirmation {
         width: 40px;
         height: 40px;
         border-radius: 50%;
-        background: linear-gradient(135deg, #10b981, #059669);
+        background: #FF0000;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -293,18 +295,18 @@ export class CreditConfirmation {
       }
 
       .safeplay-dialog-icon.safeplay-icon-cached {
-        background: linear-gradient(135deg, #3b82f6, #2563eb);
+        background: #2BA640;
       }
 
       .safeplay-dialog-icon.safeplay-icon-warning {
-        background: linear-gradient(135deg, #f59e0b, #d97706);
+        background: #F9A825;
       }
 
       .safeplay-dialog-header h2 {
         margin: 0;
         font-size: 18px;
         font-weight: 600;
-        color: #fff;
+        color: #F1F1F1;
       }
 
       .safeplay-dialog-body {
@@ -312,14 +314,14 @@ export class CreditConfirmation {
       }
 
       .safeplay-dialog-message {
-        color: #a3a3a3;
+        color: #AAAAAA;
         font-size: 14px;
         line-height: 1.5;
         margin: 0;
       }
 
       .safeplay-video-info {
-        background: #262626;
+        background: #272727;
         border-radius: 8px;
         padding: 12px;
         margin-bottom: 16px;
@@ -327,7 +329,7 @@ export class CreditConfirmation {
 
       .safeplay-video-title {
         display: block;
-        color: #fff;
+        color: #F1F1F1;
         font-size: 14px;
         font-weight: 500;
         margin-bottom: 4px;
@@ -338,18 +340,18 @@ export class CreditConfirmation {
 
       .safeplay-video-duration {
         display: block;
-        color: #737373;
+        color: #606060;
         font-size: 12px;
       }
 
       .safeplay-credit-info {
-        background: #262626;
+        background: #272727;
         border-radius: 8px;
         padding: 12px;
       }
 
       .safeplay-credit-info.safeplay-insufficient {
-        border: 1px solid #dc2626;
+        border: 1px solid #FF4E45;
       }
 
       .safeplay-credit-row {
@@ -357,29 +359,29 @@ export class CreditConfirmation {
         justify-content: space-between;
         align-items: center;
         padding: 6px 0;
-        color: #a3a3a3;
+        color: #AAAAAA;
         font-size: 14px;
       }
 
       .safeplay-credit-row:not(:last-child) {
-        border-bottom: 1px solid #333;
+        border-bottom: 1px solid #3F3F3F;
       }
 
       .safeplay-credit-value {
         font-weight: 600;
-        color: #10b981;
+        color: #2BA640;
       }
 
       .safeplay-credit-value.safeplay-low {
-        color: #ef4444;
+        color: #FF4E45;
       }
 
       .safeplay-credit-row.safeplay-need .safeplay-credit-value {
-        color: #f59e0b;
+        color: #F9A825;
       }
 
       .safeplay-credit-row.safeplay-after {
-        color: #737373;
+        color: #606060;
       }
 
       .safeplay-dialog-actions {
@@ -403,22 +405,23 @@ export class CreditConfirmation {
       }
 
       .safeplay-btn-primary {
-        background: linear-gradient(135deg, #10b981, #059669);
+        background: #FF0000;
         color: white;
       }
 
       .safeplay-btn-primary:hover {
-        background: linear-gradient(135deg, #059669, #047857);
+        background: #CC0000;
         transform: translateY(-1px);
       }
 
       .safeplay-btn-secondary {
-        background: #333;
-        color: #fff;
+        background: #272727;
+        border: 1px solid #3F3F3F;
+        color: #F1F1F1;
       }
 
       .safeplay-btn-secondary:hover {
-        background: #404040;
+        background: #3F3F3F;
       }
     `;
 
@@ -449,17 +452,18 @@ export function showAuthRequiredMessage(): void {
         <button class="safeplay-btn safeplay-btn-secondary" data-action="cancel">
           Cancel
         </button>
-        <a href="https://safeplay.app/login" target="_blank" class="safeplay-btn safeplay-btn-primary">
+        <a href="https://astonishing-youthfulness-production.up.railway.app/login" target="_blank" class="safeplay-btn safeplay-btn-primary">
           Sign In
         </a>
       </div>
     </div>
   `;
 
-  // Inject styles if needed
+  // Inject styles if needed (uses same styles as CreditConfirmation class)
   if (!document.getElementById('safeplay-credit-dialog-styles')) {
     const styles = document.createElement('style');
     styles.id = 'safeplay-credit-dialog-styles';
+    // Colors matched to SafePlay website theme
     styles.textContent = `
       .safeplay-credit-dialog-overlay {
         position: fixed;
@@ -475,7 +479,8 @@ export function showAuthRequiredMessage(): void {
         font-family: 'Roboto', 'YouTube Sans', -apple-system, BlinkMacSystemFont, sans-serif;
       }
       .safeplay-credit-dialog {
-        background: #1a1a1a;
+        background: #212121;
+        border: 1px solid #3F3F3F;
         border-radius: 12px;
         padding: 24px;
         max-width: 380px;
@@ -493,23 +498,26 @@ export function showAuthRequiredMessage(): void {
         width: 40px;
         height: 40px;
         border-radius: 50%;
-        background: linear-gradient(135deg, #f59e0b, #d97706);
+        background: #FF0000;
         display: flex;
         align-items: center;
         justify-content: center;
         color: white;
       }
+      .safeplay-dialog-icon.safeplay-icon-warning {
+        background: #F9A825;
+      }
       .safeplay-dialog-header h2 {
         margin: 0;
         font-size: 18px;
         font-weight: 600;
-        color: #fff;
+        color: #F1F1F1;
       }
       .safeplay-dialog-body {
         margin-bottom: 24px;
       }
       .safeplay-dialog-message {
-        color: #a3a3a3;
+        color: #AAAAAA;
         font-size: 14px;
         line-height: 1.5;
         margin: 0;
@@ -531,12 +539,19 @@ export function showAuthRequiredMessage(): void {
         align-items: center;
       }
       .safeplay-btn-primary {
-        background: linear-gradient(135deg, #10b981, #059669);
+        background: #FF0000;
         color: white;
       }
+      .safeplay-btn-primary:hover {
+        background: #CC0000;
+      }
       .safeplay-btn-secondary {
-        background: #333;
-        color: #fff;
+        background: #272727;
+        border: 1px solid #3F3F3F;
+        color: #F1F1F1;
+      }
+      .safeplay-btn-secondary:hover {
+        background: #3F3F3F;
       }
     `;
     document.head.appendChild(styles);
