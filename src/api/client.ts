@@ -6,7 +6,7 @@ import {
   CreditBalanceResponse,
   UserProfileResponse,
 } from '../types';
-import { getAuthToken, refreshAuthToken } from '../utils/storage';
+import { getAuthToken, refreshAuthToken, clearAuthData } from '../utils/storage';
 
 // API URL for the SafePlay website API
 const API_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
@@ -87,7 +87,24 @@ async function request<T>(
           return request<T>(endpoint, { ...options, _isRetry: true });
         }
 
-        logApi('Token refresh failed, user needs to re-login');
+        logApi('Token refresh failed, clearing auth data and notifying UI');
+        // Clear auth data so UI updates to show sign-in state
+        await clearAuthData();
+
+        // Broadcast logout to all tabs so UI updates
+        if (typeof chrome !== 'undefined' && chrome.tabs) {
+          chrome.tabs.query({}).then(tabs => {
+            for (const tab of tabs) {
+              if (tab.id) {
+                chrome.tabs.sendMessage(tab.id, {
+                  type: 'AUTH_STATE_CHANGED',
+                  payload: { isAuthenticated: false },
+                }).catch(() => {});
+              }
+            }
+          });
+        }
+
         throw new ApiError(
           'Session expired. Please sign in again.',
           401,
