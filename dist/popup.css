@@ -704,6 +704,204 @@ body.disabled .status-banner {
   color: var(--yt-text-muted);
 }
 
+/* Account Card */
+.account-card {
+  margin: 0 16px;
+}
+
+.account-logged-out {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-message {
+  text-align: center;
+}
+
+.account-message-text {
+  font-size: 12px;
+  color: var(--yt-text-muted);
+  line-height: 1.4;
+}
+
+.account-signin-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 16px;
+  background: var(--yt-red);
+  border: none;
+  border-radius: var(--radius-md);
+  color: white;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.account-signin-btn:hover {
+  background: var(--yt-red-hover);
+}
+
+.account-logged-in {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-avatar {
+  width: 40px;
+  height: 40px;
+  background: var(--yt-dark-bg);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--yt-text-muted);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.account-avatar svg {
+  width: 20px;
+  height: 20px;
+}
+
+.account-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-name {
+  display: block;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--yt-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-email {
+  display: block;
+  font-size: 11px;
+  color: var(--yt-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.account-plan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--yt-dark-bg);
+  border-radius: var(--radius-md);
+}
+
+.account-plan-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  background: var(--yt-card-bg);
+  color: var(--yt-text-secondary);
+}
+
+.account-plan-badge.free {
+  background: var(--yt-card-bg);
+  color: var(--yt-text-secondary);
+}
+
+.account-plan-badge.individual,
+.account-plan-badge.base {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.account-plan-badge.family,
+.account-plan-badge.professional {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.account-plan-badge.organization,
+.account-plan-badge.unlimited {
+  background: var(--religious-bg);
+  color: var(--religious);
+}
+
+.account-upgrade-link {
+  font-size: 11px;
+  color: var(--yt-red);
+  text-decoration: none;
+  font-weight: 500;
+  padding: 4px 10px;
+  background: var(--yt-red-light);
+  border-radius: var(--radius-full);
+  transition: var(--transition);
+}
+
+.account-upgrade-link:hover {
+  background: var(--yt-red);
+  color: white;
+}
+
+.account-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.account-action-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--yt-dark-bg);
+  border: 1px solid var(--yt-border);
+  border-radius: var(--radius-md);
+  color: var(--yt-text-secondary);
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.account-action-btn:hover {
+  border-color: var(--yt-text-muted);
+  color: var(--yt-text-primary);
+  background: var(--yt-card-hover);
+}
+
+.account-action-btn.logout-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: var(--danger-bg);
+}
+
 /* Credits Card */
 .credit-card .card-header {
   padding-bottom: 8px;

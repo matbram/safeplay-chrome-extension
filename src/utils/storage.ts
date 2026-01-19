@@ -4,6 +4,9 @@ import {
   Transcript,
   CreditInfo,
   SubscriptionTier,
+  UserProfile,
+  UserSubscription,
+  UserCredits,
 } from '../types';
 
 const STORAGE_KEYS = {
@@ -15,6 +18,10 @@ const STORAGE_KEYS = {
   CREDIT_CACHE_TIME: 'safeplay_credit_cache_time',
   CACHED_TRANSCRIPTS: 'safeplay_cached_transcripts',
   FILTERED_VIDEOS: 'safeplay_filtered_videos',
+  USER_PROFILE: 'safeplay_user_profile',
+  USER_SUBSCRIPTION: 'safeplay_user_subscription',
+  USER_CREDITS: 'safeplay_user_credits',
+  PROFILE_CACHE_TIME: 'safeplay_profile_cache_time',
 } as const;
 
 // Credit cache duration in milliseconds (5 minutes)
@@ -272,4 +279,127 @@ export async function removeFilteredVideo(youtubeId: string): Promise<void> {
 
 export async function clearFilteredVideos(): Promise<void> {
   await chrome.storage.local.remove(STORAGE_KEYS.FILTERED_VIDEOS);
+}
+
+// Profile cache duration in milliseconds (10 minutes)
+const PROFILE_CACHE_DURATION = 10 * 60 * 1000;
+
+// User Profile Storage
+export async function getUserProfile(): Promise<UserProfile | null> {
+  try {
+    const result = await chrome.storage.local.get([
+      STORAGE_KEYS.USER_PROFILE,
+      STORAGE_KEYS.PROFILE_CACHE_TIME,
+    ]);
+
+    const cacheTime = result[STORAGE_KEYS.PROFILE_CACHE_TIME];
+    const profile = result[STORAGE_KEYS.USER_PROFILE];
+
+    // Check if cache is valid
+    if (cacheTime && profile && Date.now() - cacheTime < PROFILE_CACHE_DURATION) {
+      return profile;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('[SafePlay Storage] Error getting user profile:', error);
+    return null;
+  }
+}
+
+export async function setUserProfile(profile: UserProfile): Promise<void> {
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.USER_PROFILE]: profile,
+      [STORAGE_KEYS.PROFILE_CACHE_TIME]: Date.now(),
+    });
+  } catch (error) {
+    console.error('[SafePlay Storage] Error setting user profile:', error);
+  }
+}
+
+export async function getUserSubscription(): Promise<UserSubscription | null> {
+  try {
+    const result = await chrome.storage.local.get(STORAGE_KEYS.USER_SUBSCRIPTION);
+    return result[STORAGE_KEYS.USER_SUBSCRIPTION] || null;
+  } catch (error) {
+    console.error('[SafePlay Storage] Error getting user subscription:', error);
+    return null;
+  }
+}
+
+export async function setUserSubscription(subscription: UserSubscription | null): Promise<void> {
+  try {
+    if (subscription) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.USER_SUBSCRIPTION]: subscription });
+    } else {
+      await chrome.storage.local.remove(STORAGE_KEYS.USER_SUBSCRIPTION);
+    }
+  } catch (error) {
+    console.error('[SafePlay Storage] Error setting user subscription:', error);
+  }
+}
+
+export async function getUserCredits(): Promise<UserCredits | null> {
+  try {
+    const result = await chrome.storage.local.get(STORAGE_KEYS.USER_CREDITS);
+    return result[STORAGE_KEYS.USER_CREDITS] || null;
+  } catch (error) {
+    console.error('[SafePlay Storage] Error getting user credits:', error);
+    return null;
+  }
+}
+
+export async function setUserCredits(credits: UserCredits | null): Promise<void> {
+  try {
+    if (credits) {
+      await chrome.storage.local.set({ [STORAGE_KEYS.USER_CREDITS]: credits });
+    } else {
+      await chrome.storage.local.remove(STORAGE_KEYS.USER_CREDITS);
+    }
+  } catch (error) {
+    console.error('[SafePlay Storage] Error setting user credits:', error);
+  }
+}
+
+// Clear all auth-related data (for logout)
+export async function clearAuthData(): Promise<void> {
+  try {
+    await chrome.storage.local.remove([
+      STORAGE_KEYS.AUTH_TOKEN,
+      STORAGE_KEYS.USER_ID,
+      STORAGE_KEYS.SUBSCRIPTION_TIER,
+      STORAGE_KEYS.CREDIT_INFO,
+      STORAGE_KEYS.CREDIT_CACHE_TIME,
+      STORAGE_KEYS.USER_PROFILE,
+      STORAGE_KEYS.USER_SUBSCRIPTION,
+      STORAGE_KEYS.USER_CREDITS,
+      STORAGE_KEYS.PROFILE_CACHE_TIME,
+    ]);
+    console.log('[SafePlay Storage] Auth data cleared');
+  } catch (error) {
+    console.error('[SafePlay Storage] Error clearing auth data:', error);
+  }
+}
+
+// Get full auth state
+export async function getFullAuthState(): Promise<{
+  isAuthenticated: boolean;
+  profile: UserProfile | null;
+  subscription: UserSubscription | null;
+  credits: UserCredits | null;
+  token: string | null;
+}> {
+  const token = await getAuthToken();
+  const profile = await getUserProfile();
+  const subscription = await getUserSubscription();
+  const credits = await getUserCredits();
+
+  return {
+    isAuthenticated: token !== null,
+    profile,
+    subscription,
+    credits,
+    token,
+  };
 }

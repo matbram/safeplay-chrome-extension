@@ -1,5 +1,12 @@
 // SafePlay Popup Script
-import { UserPreferences, DEFAULT_PREFERENCES, FilterMode, SeverityLevel, CreditInfo } from '../types';
+import {
+  UserPreferences,
+  DEFAULT_PREFERENCES,
+  FilterMode,
+  SeverityLevel,
+  CreditInfo,
+  AuthState,
+} from '../types';
 import { PROFANITY_LIST, getWordsBySeverity } from '../filter/profanity-list';
 import './popup.css';
 
@@ -7,6 +14,7 @@ class PopupController {
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private wordPreviewExpanded = false;
   private creditInfo: CreditInfo | null = null;
+  private authState: AuthState | null = null;
 
   // Word counts by severity
   private wordCounts: Record<SeverityLevel, number> = {
@@ -49,6 +57,18 @@ class PopupController {
   private creditUsed!: HTMLElement;
   private creditPlan!: HTMLElement;
 
+  // Account elements
+  private accountLoggedOut!: HTMLElement;
+  private accountLoggedIn!: HTMLElement;
+  private signInBtn!: HTMLButtonElement;
+  private signOutBtn!: HTMLButtonElement;
+  private creditSignInBtn!: HTMLButtonElement;
+  private accountAvatar!: HTMLElement;
+  private accountName!: HTMLElement;
+  private accountEmail!: HTMLElement;
+  private accountPlanBadge!: HTMLElement;
+  private accountUpgradeLink!: HTMLAnchorElement;
+
   async initialize(): Promise<void> {
     // Calculate word counts
     this.calculateWordCounts();
@@ -86,6 +106,18 @@ class PopupController {
     this.creditUsed = document.getElementById('creditUsed') as HTMLElement;
     this.creditPlan = document.getElementById('creditPlan') as HTMLElement;
 
+    // Account elements
+    this.accountLoggedOut = document.getElementById('accountLoggedOut') as HTMLElement;
+    this.accountLoggedIn = document.getElementById('accountLoggedIn') as HTMLElement;
+    this.signInBtn = document.getElementById('signInBtn') as HTMLButtonElement;
+    this.signOutBtn = document.getElementById('signOutBtn') as HTMLButtonElement;
+    this.creditSignInBtn = document.getElementById('creditSignInBtn') as HTMLButtonElement;
+    this.accountAvatar = document.getElementById('accountAvatar') as HTMLElement;
+    this.accountName = document.getElementById('accountName') as HTMLElement;
+    this.accountEmail = document.getElementById('accountEmail') as HTMLElement;
+    this.accountPlanBadge = document.getElementById('accountPlanBadge') as HTMLElement;
+    this.accountUpgradeLink = document.getElementById('accountUpgradeLink') as HTMLAnchorElement;
+
     // Display word counts
     this.displayWordCounts();
 
@@ -95,17 +127,28 @@ class PopupController {
     // Set up event listeners
     this.setupEventListeners();
 
+    // Set up account event listeners
+    this.setupAccountListeners();
+
     // Check current video status
     await this.checkVideoStatus();
 
-    // Load credits
-    await this.loadCredits();
+    // Load auth state and user profile
+    await this.loadAuthState();
 
     // Listen for status updates
     this.setupMessageListener();
   }
 
   private async loadCredits(): Promise<void> {
+    // Don't load credits if not authenticated
+    if (!this.authState?.isAuthenticated) {
+      this.creditLoading.style.display = 'none';
+      this.creditContent.style.display = 'none';
+      this.creditError.style.display = 'flex';
+      return;
+    }
+
     try {
       // Show loading state
       this.creditLoading.style.display = 'block';
@@ -478,7 +521,145 @@ class PopupController {
         this.creditInfo = message.payload;
         this.displayCredits();
       }
+      if (message.type === 'AUTH_STATE_CHANGED' && message.payload) {
+        // Reload auth state when authentication changes
+        this.loadAuthState();
+      }
     });
+  }
+
+  private setupAccountListeners(): void {
+    // Sign in button
+    this.signInBtn?.addEventListener('click', () => {
+      this.handleSignIn();
+    });
+
+    // Sign out button
+    this.signOutBtn?.addEventListener('click', () => {
+      this.handleSignOut();
+    });
+
+    // Credit section sign in button
+    this.creditSignInBtn?.addEventListener('click', () => {
+      this.handleSignIn();
+    });
+  }
+
+  private async loadAuthState(): Promise<void> {
+    try {
+      const response = await chrome.runtime.sendMessage({ type: 'GET_USER_PROFILE' });
+
+      if (response.success && response.data) {
+        this.authState = response.data;
+        this.updateAccountUI();
+
+        // Load credits if authenticated
+        if (this.authState?.isAuthenticated) {
+          await this.loadCredits();
+        }
+      } else {
+        // Not authenticated
+        this.authState = {
+          isAuthenticated: false,
+          user: null,
+          subscription: null,
+          credits: null,
+          token: null,
+        };
+        this.updateAccountUI();
+      }
+    } catch (error) {
+      console.error('Failed to load auth state:', error);
+      this.authState = {
+        isAuthenticated: false,
+        user: null,
+        subscription: null,
+        credits: null,
+        token: null,
+      };
+      this.updateAccountUI();
+    }
+  }
+
+  private updateAccountUI(): void {
+    if (!this.authState) return;
+
+    if (this.authState.isAuthenticated && this.authState.user) {
+      // Show logged in state
+      this.accountLoggedOut.style.display = 'none';
+      this.accountLoggedIn.style.display = 'flex';
+
+      // Update user info
+      const user = this.authState.user;
+      this.accountName.textContent = user.full_name || user.email?.split('@')[0] || 'User';
+      this.accountEmail.textContent = user.email || '';
+
+      // Update avatar
+      if (user.avatar_url) {
+        this.accountAvatar.innerHTML = `<img src="${this.escapeHtml(user.avatar_url)}" alt="Avatar">`;
+      } else {
+        this.accountAvatar.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+            <circle cx="12" cy="7" r="4"/>
+          </svg>
+        `;
+      }
+
+      // Update plan badge
+      const subscription = this.authState.subscription;
+      const planName = subscription?.plans?.name || 'Free';
+      const planId = planName.toLowerCase();
+      this.accountPlanBadge.textContent = planName;
+      this.accountPlanBadge.className = `account-plan-badge ${planId}`;
+
+      // Hide upgrade link for unlimited plans
+      if (planId === 'unlimited' || planId === 'organization') {
+        this.accountUpgradeLink.style.display = 'none';
+      } else {
+        this.accountUpgradeLink.style.display = 'inline-block';
+      }
+    } else {
+      // Show logged out state
+      this.accountLoggedOut.style.display = 'flex';
+      this.accountLoggedIn.style.display = 'none';
+
+      // Update credit section to show sign in prompt
+      this.creditLoading.style.display = 'none';
+      this.creditContent.style.display = 'none';
+      this.creditError.style.display = 'flex';
+    }
+  }
+
+  private async handleSignIn(): Promise<void> {
+    try {
+      await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+      // Close the popup after opening login page
+      window.close();
+    } catch (error) {
+      console.error('Failed to open login:', error);
+    }
+  }
+
+  private async handleSignOut(): Promise<void> {
+    try {
+      await chrome.runtime.sendMessage({ type: 'LOGOUT' });
+
+      // Update local state
+      this.authState = {
+        isAuthenticated: false,
+        user: null,
+        subscription: null,
+        credits: null,
+        token: null,
+      };
+      this.creditInfo = null;
+
+      // Update UI
+      this.updateAccountUI();
+    } catch (error) {
+      console.error('Failed to sign out:', error);
+    }
   }
 }
 
