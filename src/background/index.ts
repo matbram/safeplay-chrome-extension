@@ -459,7 +459,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 // Handle auth callback from website (deep-link auth flow)
 chrome.runtime.onMessageExternal.addListener(
   (message, sender, sendResponse) => {
-    if (sender.origin === 'https://safeplay.app') {
+    if (sender.origin === 'https://astonishing-youthfulness-production.up.railway.app' || sender.origin === 'https://safeplay.app') {
       if (message.type === 'AUTH_TOKEN') {
         import('../utils/storage').then(({ setAuthToken, setUserId, setSubscriptionTier, setCreditInfo }) => {
           Promise.all([

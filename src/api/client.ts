@@ -8,7 +8,7 @@ import {
 import { getAuthToken } from '../utils/storage';
 
 // API URL for the SafePlay website API
-const API_BASE_URL = 'https://safeplay.app';
+const API_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
 
 // Verbose logging
 function logApi(...args: unknown[]): void {
