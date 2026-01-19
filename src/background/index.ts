@@ -214,7 +214,8 @@ async function handleStartFilter(
     const response = await startFilter(youtubeId, filterType, customWords);
     log('Start filter response:', JSON.stringify(response).substring(0, 300));
 
-    if (!response.success) {
+    // Check for explicit failure or error
+    if (response.status === 'failed' || response.error) {
       return {
         success: true,
         data: {
