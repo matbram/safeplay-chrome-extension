@@ -42,16 +42,18 @@ export interface CreditInfo {
   reset_date?: string;
 }
 
-// Preview response - check cost before filtering
+// Preview response - check cost before filtering (matches actual API format)
 export interface PreviewResponse {
-  success: boolean;
-  video: VideoMetadata;
+  youtube_id: string;
+  title: string;
+  channel_name?: string;
+  duration_seconds: number;
+  thumbnail_url?: string;
   credit_cost: number;
   user_credits: number;
   has_sufficient_credits: boolean;
   cached: boolean;
   has_transcript: boolean;
-  message?: string;
   error?: string;
   error_code?: 'AGE_RESTRICTED' | 'VIDEO_UNAVAILABLE' | 'UNAUTHORIZED' | string;
 }

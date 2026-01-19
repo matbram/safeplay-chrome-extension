@@ -221,7 +221,8 @@ export async function getOrRequestTranscript(
   if (!skipPreview) {
     const preview = await getPreview(youtubeId);
 
-    if (!preview.success) {
+    // Check for error in response
+    if (preview.error || preview.error_code) {
       throw new ApiError(
         preview.error || 'Failed to get video preview',
         400,

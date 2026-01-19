@@ -133,10 +133,11 @@ async function handleGetPreview(
     const preview = await getPreview(youtubeId);
     log('Preview response:', JSON.stringify(preview).substring(0, 300));
 
-    if (!preview.success) {
+    // Check for error response
+    if (preview.error || preview.error_code) {
       return {
         success: false,
-        error: preview.error || 'Failed to get preview',
+        error: preview.error || `Error: ${preview.error_code}`,
         data: undefined,
       };
     }
@@ -152,10 +153,17 @@ async function handleGetPreview(
       }
     }
 
+    // Convert API response format to PreviewData format
     return {
       success: true,
       data: {
-        video: preview.video,
+        video: {
+          youtube_id: preview.youtube_id,
+          title: preview.title,
+          duration: preview.duration_seconds,
+          thumbnail: preview.thumbnail_url,
+          channel: preview.channel_name,
+        },
         creditCost: preview.credit_cost,
         userCredits: preview.user_credits,
         hasSufficientCredits: preview.has_sufficient_credits,
