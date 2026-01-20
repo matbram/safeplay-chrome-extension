@@ -170,6 +170,9 @@ async function handleGetPreview(
     }
 
     // Convert API response format to PreviewData format
+    // Note: credit_cost === 0 with no transcript means unknown duration, not free
+    const isUnknownCost = preview.credit_cost === 0 && !preview.cached && !preview.has_transcript;
+
     return {
       success: true,
       data: {
@@ -181,6 +184,8 @@ async function handleGetPreview(
           channel: preview.channel_name,
         },
         creditCost: preview.credit_cost,
+        creditCostNote: preview.credit_cost_note,
+        creditCostUnknown: isUnknownCost,
         userCredits: preview.user_credits,
         hasSufficientCredits: preview.has_sufficient_credits,
         isCached: preview.cached || preview.has_transcript,

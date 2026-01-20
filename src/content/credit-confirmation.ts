@@ -64,7 +64,12 @@ export class CreditConfirmation {
   }
 
   private createDialogHTML(data: PreviewData): string {
-    const { video, creditCost, userCredits, hasSufficientCredits, isCached } = data;
+    const { video, creditCost, creditCostNote, creditCostUnknown, userCredits, hasSufficientCredits, isCached } = data;
+
+    // Format cost display - handle unknown cost case
+    const costDisplay = creditCostUnknown
+      ? (creditCostNote || '~1 credit per minute')
+      : `${creditCost} credit${creditCost !== 1 ? 's' : ''}`;
 
     // Determine dialog content based on state
     if (isCached) {
@@ -112,17 +117,19 @@ export class CreditConfirmation {
             </div>
             <div class="safeplay-credit-info safeplay-insufficient">
               <div class="safeplay-credit-row">
-                <span>Cost:</span>
-                <span class="safeplay-credit-value">${creditCost} credit${creditCost !== 1 ? 's' : ''}</span>
+                <span>Estimated cost:</span>
+                <span class="safeplay-credit-value">${costDisplay}</span>
               </div>
               <div class="safeplay-credit-row">
                 <span>Your balance:</span>
                 <span class="safeplay-credit-value safeplay-low">${userCredits} credit${userCredits !== 1 ? 's' : ''}</span>
               </div>
+              ${!creditCostUnknown ? `
               <div class="safeplay-credit-row safeplay-need">
                 <span>Need:</span>
                 <span class="safeplay-credit-value">${creditCost - userCredits} more</span>
               </div>
+              ` : ''}
             </div>
           </div>
           <div class="safeplay-dialog-actions">
@@ -155,17 +162,23 @@ export class CreditConfirmation {
           </div>
           <div class="safeplay-credit-info">
             <div class="safeplay-credit-row">
-              <span>Cost:</span>
-              <span class="safeplay-credit-value">${creditCost} credit${creditCost !== 1 ? 's' : ''}</span>
+              <span>${creditCostUnknown ? 'Estimated cost:' : 'Cost:'}</span>
+              <span class="safeplay-credit-value">${costDisplay}</span>
             </div>
             <div class="safeplay-credit-row">
               <span>Your balance:</span>
               <span class="safeplay-credit-value">${userCredits} credit${userCredits !== 1 ? 's' : ''}</span>
             </div>
+            ${!creditCostUnknown ? `
             <div class="safeplay-credit-row safeplay-after">
               <span>After filtering:</span>
               <span class="safeplay-credit-value">${userCredits - creditCost} credit${(userCredits - creditCost) !== 1 ? 's' : ''}</span>
             </div>
+            ` : `
+            <div class="safeplay-credit-row safeplay-after">
+              <span class="safeplay-cost-note">Final cost will be calculated after processing</span>
+            </div>
+            `}
           </div>
         </div>
         <div class="safeplay-dialog-actions">
@@ -382,6 +395,12 @@ export class CreditConfirmation {
 
       .safeplay-credit-row.safeplay-after {
         color: #606060;
+      }
+
+      .safeplay-cost-note {
+        font-size: 12px;
+        font-style: italic;
+        color: #888888;
       }
 
       .safeplay-dialog-actions {

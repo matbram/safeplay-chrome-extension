@@ -16,6 +16,34 @@ function log(...args: unknown[]): void {
   }
 }
 
+// Check if the extension context is still valid (not invalidated by extension reload)
+function isExtensionContextValid(): boolean {
+  try {
+    // Accessing chrome.runtime.id will throw if context is invalidated
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
+}
+
+// Safe wrapper for chrome.runtime.sendMessage
+async function safeSendMessage<T>(message: unknown): Promise<T | null> {
+  if (!isExtensionContextValid()) {
+    log('Extension context invalidated, skipping message');
+    return null;
+  }
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    // Extension context might have been invalidated during the call
+    if (String(error).includes('Extension context invalidated')) {
+      log('Extension context invalidated during message');
+      return null;
+    }
+    throw error;
+  }
+}
+
 class SafePlayContentScript {
   private injector: ResilientInjector;
   private videoController: VideoController | null = null;
@@ -77,11 +105,11 @@ class SafePlayContentScript {
 
   private async loadPreferences(): Promise<void> {
     try {
-      const response = await chrome.runtime.sendMessage({
+      const response = await safeSendMessage<{ success: boolean; data?: UserPreferences }>({
         type: 'GET_PREFERENCES',
       });
 
-      if (response.success && response.data) {
+      if (response?.success && response.data) {
         this.preferences = response.data;
       }
     } catch (error) {
@@ -125,6 +153,18 @@ class SafePlayContentScript {
            document.querySelector('video');
   }
 
+  // Resume video if it was playing before we paused it
+  private resumeVideoIfNeeded(): void {
+    if (this.videoWasPlaying) {
+      const video = this.getVideoElement();
+      if (video) {
+        video.play();
+        log('Video resumed');
+      }
+      this.videoWasPlaying = false;
+    }
+  }
+
   // Main filter flow - called when SafePlay button is clicked
   private async onFilterButtonClick(youtubeId: string): Promise<void> {
     if (this.isProcessing) {
@@ -141,10 +181,18 @@ class SafePlayContentScript {
       // Step 1: Get preview (credit cost and video info)
       this.updateButtonState({ state: 'connecting', text: 'Checking...', videoId: youtubeId });
 
-      const previewResponse = await chrome.runtime.sendMessage({
+      const previewResponse = await safeSendMessage<{ success: boolean; error?: string; data?: PreviewData }>({
         type: 'GET_PREVIEW',
         payload: { youtubeId },
       });
+
+      // Handle extension context invalidated
+      if (!previewResponse) {
+        this.isProcessing = false;
+        this.filteringVideoId = null;
+        this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: youtubeId });
+        return;
+      }
 
       // Handle auth errors
       if (!previewResponse.success) {
@@ -158,11 +206,17 @@ class SafePlayContentScript {
         throw new Error(previewResponse.error || 'Failed to get preview');
       }
 
+      if (!previewResponse.data) {
+        throw new Error('No preview data received');
+      }
+
       const previewData: PreviewData = previewResponse.data;
 
       // If cached and has sufficient credits (free), skip confirmation
       if (previewData.isCached && previewData.creditCost === 0) {
         log('Video is cached, skipping confirmation');
+        // Reset isProcessing since proceedWithFiltering will set it again
+        this.isProcessing = false;
         await this.proceedWithFiltering(youtubeId);
         return;
       }
@@ -222,13 +276,28 @@ class SafePlayContentScript {
       this.updateButtonState({ state: 'connecting', text: 'Connecting...', videoId: youtubeId });
 
       // Request filter from background script (uses START_FILTER which deducts credits)
-      const response = await chrome.runtime.sendMessage({
+      const response = await safeSendMessage<{
+        success: boolean;
+        error?: string;
+        data?: { status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string };
+      }>({
         type: 'START_FILTER',
         payload: { youtubeId, filterType: this.preferences.filterMode },
       });
 
+      // Handle extension context invalidated
+      if (!response) {
+        this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: youtubeId });
+        this.resumeVideoIfNeeded();
+        return;
+      }
+
       if (!response.success) {
         throw new Error(response.error || 'Failed to request filter');
+      }
+
+      if (!response.data) {
+        throw new Error('No filter data received');
       }
 
       const { status, transcript, jobId, error_code, error } = response.data;
@@ -330,13 +399,30 @@ class SafePlayContentScript {
 
     while (attempts < maxAttempts) {
       try {
-        const response = await chrome.runtime.sendMessage({
+        const response = await safeSendMessage<{
+          success: boolean;
+          error?: string;
+          data?: { status: string; progress: number; transcript?: Transcript; error?: string; error_code?: string };
+        }>({
           type: 'CHECK_JOB',
           payload: { jobId },
         });
 
+        // Handle extension context invalidated
+        if (!response) {
+          this.progressAnimator?.stop();
+          this.progressAnimator = null;
+          this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: videoId || undefined });
+          this.resumeVideoIfNeeded();
+          return;
+        }
+
         if (!response.success) {
           throw new Error(response.error || 'Failed to check job status');
+        }
+
+        if (!response.data) {
+          throw new Error('No job status data received');
         }
 
         const { status, progress, transcript, error, error_code } = response.data;
@@ -629,20 +715,35 @@ class SafePlayContentScript {
   private onVideoStateChange(state: ReturnType<VideoController['getState']>): void {
     log('Video state changed:', state);
 
-    // Notify popup of state change
+    // Notify popup of state change (if extension context still valid)
+    if (!isExtensionContextValid()) {
+      log('Extension context invalidated, skipping state change notification');
+      return;
+    }
+
     chrome.runtime.sendMessage({
       type: 'VIDEO_STATE_CHANGED',
       payload: state,
     }).catch(() => {
-      // Popup might not be open
+      // Popup might not be open or extension context invalidated
     });
   }
 
   private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-      this.handleMessage(message).then(sendResponse);
-      return true; // Keep channel open for async response
-    });
+    // Check if extension context is still valid before setting up listener
+    if (!isExtensionContextValid()) {
+      log('Extension context invalidated, skipping message listener setup');
+      return;
+    }
+
+    try {
+      chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+        this.handleMessage(message).then(sendResponse);
+        return true; // Keep channel open for async response
+      });
+    } catch (error) {
+      log('Failed to setup message listener (extension context may be invalidated):', error);
+    }
   }
 
   private async handleMessage(message: { type: string; payload?: unknown }): Promise<unknown> {
