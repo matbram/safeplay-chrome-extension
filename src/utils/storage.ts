@@ -93,7 +93,14 @@ export async function refreshAuthToken(): Promise<string | null> {
     console.log('[SafePlay Storage] Token refreshed successfully');
     return data.access_token;
   } catch (error) {
-    console.error('[SafePlay Storage] Token refresh error:', error);
+    // Network errors (Failed to fetch) are expected when offline or server unreachable
+    // Don't log as error to avoid cluttering the extension error panel
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
+      console.log('[SafePlay Storage] Token refresh failed (network unavailable)');
+    } else {
+      console.warn('[SafePlay Storage] Token refresh error:', error);
+    }
     return null;
   }
 }
