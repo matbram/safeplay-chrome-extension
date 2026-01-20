@@ -56,6 +56,8 @@ class PopupController {
   private creditProgressFill!: HTMLElement;
   private creditUsed!: HTMLElement;
   private creditPlan!: HTMLElement;
+  private creditBonus!: HTMLElement;
+  private creditBonusText!: HTMLElement;
 
   // Account elements
   private accountLoggedOut!: HTMLElement;
@@ -105,6 +107,8 @@ class PopupController {
     this.creditProgressFill = document.getElementById('creditProgressFill') as HTMLElement;
     this.creditUsed = document.getElementById('creditUsed') as HTMLElement;
     this.creditPlan = document.getElementById('creditPlan') as HTMLElement;
+    this.creditBonus = document.getElementById('creditBonus') as HTMLElement;
+    this.creditBonusText = document.getElementById('creditBonusText') as HTMLElement;
 
     // Account elements
     this.accountLoggedOut = document.getElementById('accountLoggedOut') as HTMLElement;
@@ -175,34 +179,42 @@ class PopupController {
   private displayCredits(): void {
     if (!this.creditInfo) return;
 
-    const { available, used_this_period, plan_allocation, percent_consumed, plan } = this.creditInfo;
+    const { available, used_this_period, plan_allocation, plan } = this.creditInfo;
 
     // Show content, hide loading/error
     this.creditLoading.style.display = 'none';
     this.creditContent.style.display = 'flex';
     this.creditError.style.display = 'none';
 
-    // Update credit value with color based on level
+    // Calculate base vs bonus credits (same logic as website)
+    const planQuota = plan_allocation;
+    const effectiveTotal = available + used_this_period;
+    const bonusTotal = Math.max(0, effectiveTotal - planQuota);
+    const baseRemaining = Math.max(0, planQuota - used_this_period);
+    const bonusRemaining = Math.max(0, available - baseRemaining);
+    const usagePercent = Math.min(100, (used_this_period / planQuota) * 100);
+
+    // Update credit value - show total available
     this.creditValue.textContent = available.toString();
     this.creditValue.classList.remove('low', 'empty');
     if (available === 0) {
       this.creditValue.classList.add('empty');
-    } else if (available <= 5) {
+    } else if (baseRemaining === 0 && bonusRemaining <= 5) {
+      // Only show "low" warning if we're into bonus credits and running low
       this.creditValue.classList.add('low');
     }
 
-    // Update progress bar
-    const usagePercent = Math.min(100, percent_consumed);
+    // Update progress bar - based on plan usage only
     this.creditProgressFill.style.width = `${usagePercent}%`;
     this.creditProgressFill.classList.remove('warning', 'danger');
-    if (usagePercent >= 90) {
+    if (usagePercent >= 100) {
       this.creditProgressFill.classList.add('danger');
     } else if (usagePercent >= 70) {
       this.creditProgressFill.classList.add('warning');
     }
 
-    // Update labels
-    this.creditUsed.textContent = `${used_this_period} of ${plan_allocation} used`;
+    // Update labels - show plan credits usage
+    this.creditUsed.textContent = `${Math.min(used_this_period, planQuota)}/${planQuota} plan used`;
 
     // Format plan name
     const planNames: Record<string, string> = {
@@ -212,6 +224,14 @@ class PopupController {
       unlimited: 'Unlimited',
     };
     this.creditPlan.textContent = planNames[plan || 'free'] || 'Free Plan';
+
+    // Show bonus credits if any exist
+    if (bonusTotal > 0) {
+      this.creditBonus.style.display = 'block';
+      this.creditBonusText.textContent = `+${bonusRemaining} bonus available`;
+    } else {
+      this.creditBonus.style.display = 'none';
+    }
   }
 
   private calculateWordCounts(): void {
