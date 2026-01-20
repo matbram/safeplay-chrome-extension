@@ -34,6 +34,7 @@ import {
   startFilter,
   getCreditBalance,
   getUserProfile,
+  recordCachedHistory,
 } from '../api/client';
 
 function log(...args: unknown[]): void {
@@ -209,6 +210,16 @@ async function handleStartFilter(
   const cached = await getCachedTranscript(youtubeId);
   if (cached) {
     log('Found in local cache, returning cached transcript');
+
+    // Record history for cached video (fire and forget - don't await)
+    recordCachedHistory({
+      youtubeId,
+      filterType,
+      customWords,
+    }).catch(() => {
+      // Silently ignore - already logged in the function
+    });
+
     return {
       success: true,
       data: { status: 'cached', transcript: cached },
@@ -274,6 +285,14 @@ async function handleGetFilter(
   const cached = await getCachedTranscript(youtubeId);
   if (cached) {
     log('Found in local cache, returning cached transcript');
+
+    // Record history for cached video (fire and forget - don't await)
+    recordCachedHistory({
+      youtubeId,
+    }).catch(() => {
+      // Silently ignore - already logged in the function
+    });
+
     return {
       success: true,
       data: { status: 'cached', transcript: cached },

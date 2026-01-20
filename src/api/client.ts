@@ -357,4 +357,41 @@ export async function requestFilter(youtubeId: string): Promise<{
   }
 }
 
+/**
+ * Record history for a cached video (fire and forget)
+ * This is called when serving from local cache to keep server history in sync
+ */
+export interface RecordHistoryParams {
+  youtubeId: string;
+  title?: string;
+  channelName?: string;
+  durationSeconds?: number;
+  filterType?: 'mute' | 'bleep';
+  customWords?: string[];
+}
+
+export async function recordCachedHistory(params: RecordHistoryParams): Promise<void> {
+  logApi('=== recordCachedHistory ===', params.youtubeId);
+
+  try {
+    await request<{ success: boolean; history_id?: string }>('/api/filter/record-history', {
+      method: 'POST',
+      body: {
+        youtube_id: params.youtubeId,
+        title: params.title || null,
+        channel_name: params.channelName || null,
+        duration_seconds: params.durationSeconds || null,
+        filter_type: params.filterType || 'mute',
+        custom_words: params.customWords || [],
+      },
+      requiresAuth: true,
+    });
+    logApi('History recorded successfully for:', params.youtubeId);
+  } catch (error) {
+    // Non-critical - don't let this affect user experience
+    // Just log and continue
+    logApi('Failed to record history (non-critical):', error instanceof Error ? error.message : error);
+  }
+}
+
 export { ApiError as default };
