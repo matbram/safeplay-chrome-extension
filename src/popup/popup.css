@@ -1033,6 +1033,21 @@ body.disabled .status-banner {
   color: white;
 }
 
+/* Bonus credits */
+.credit-bonus {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: rgba(43, 166, 64, 0.1);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.credit-bonus-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: #2BA640;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
