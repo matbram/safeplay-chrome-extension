@@ -126,8 +126,9 @@ export async function getAuthToken(): Promise<string | null> {
     const now = Date.now();
     const expiresAtMs = expiresAt * 1000; // Convert seconds to milliseconds
 
-    if (expiresAtMs < now + TOKEN_REFRESH_BUFFER_MS) {
-      console.log('[SafePlay Storage] Token expired or expiring soon, attempting refresh...');
+    // If token is completely expired (past expiry time)
+    if (expiresAtMs < now) {
+      console.log('[SafePlay Storage] Token expired, attempting refresh...');
 
       if (refreshToken) {
         const newToken = await refreshAuthToken();
@@ -136,9 +137,29 @@ export async function getAuthToken(): Promise<string | null> {
         }
       }
 
-      // Refresh failed or no refresh token - return null to trigger re-login
-      console.log('[SafePlay Storage] Token refresh failed, user needs to re-login');
+      // Refresh failed and token is expired - clear and return null
+      console.log('[SafePlay Storage] Token expired and refresh failed, clearing auth');
+      await chrome.storage.local.remove([
+        STORAGE_KEYS.AUTH_TOKEN,
+        STORAGE_KEYS.REFRESH_TOKEN,
+        STORAGE_KEYS.TOKEN_EXPIRES_AT,
+      ]);
       return null;
+    }
+
+    // If token is expiring soon (within buffer) but not yet expired, try to refresh
+    // but still return the current token if refresh fails
+    if (expiresAtMs < now + TOKEN_REFRESH_BUFFER_MS) {
+      console.log('[SafePlay Storage] Token expiring soon, attempting proactive refresh...');
+
+      if (refreshToken) {
+        const newToken = await refreshAuthToken();
+        if (newToken) {
+          return newToken;
+        }
+        // Refresh failed but token is still valid - use it anyway
+        console.log('[SafePlay Storage] Refresh failed but token still valid, using existing token');
+      }
     }
   }
 

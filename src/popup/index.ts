@@ -64,7 +64,6 @@ class PopupController {
   private accountLoggedIn!: HTMLElement;
   private signInBtn!: HTMLButtonElement;
   private signOutBtn!: HTMLButtonElement;
-  private creditSignInBtn!: HTMLButtonElement;
   private accountAvatar!: HTMLElement;
   private accountName!: HTMLElement;
   private accountEmail!: HTMLElement;
@@ -115,7 +114,6 @@ class PopupController {
     this.accountLoggedIn = document.getElementById('accountLoggedIn') as HTMLElement;
     this.signInBtn = document.getElementById('signInBtn') as HTMLButtonElement;
     this.signOutBtn = document.getElementById('signOutBtn') as HTMLButtonElement;
-    this.creditSignInBtn = document.getElementById('creditSignInBtn') as HTMLButtonElement;
     this.accountAvatar = document.getElementById('accountAvatar') as HTMLElement;
     this.accountName = document.getElementById('accountName') as HTMLElement;
     this.accountEmail = document.getElementById('accountEmail') as HTMLElement;
@@ -557,11 +555,6 @@ class PopupController {
     // Sign out button
     this.signOutBtn?.addEventListener('click', () => {
       this.handleSignOut();
-    });
-
-    // Credit section sign in button
-    this.creditSignInBtn?.addEventListener('click', () => {
-      this.handleSignIn();
     });
   }
 
