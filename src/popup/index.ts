@@ -11,11 +11,17 @@ import { PROFANITY_LIST } from '../filter/profanity-list';
 import './popup.css';
 
 const THEME_STORAGE_KEY = 'safeplay_theme';
+const CREDIT_POLL_INTERVAL = 5000; // Poll credits every 5 seconds
+const VIDEO_POLL_INTERVAL = 2000; // Poll video status every 2 seconds
 
 class PopupController {
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private creditInfo: CreditInfo | null = null;
   private authState: AuthState | null = null;
+
+  // Polling intervals
+  private creditPollTimer: number | null = null;
+  private videoPollTimer: number | null = null;
 
   // Word counts by severity
   private wordCounts: Record<SeverityLevel, number> = {
@@ -84,6 +90,37 @@ class PopupController {
 
     // Listen for status updates
     this.setupMessageListener();
+
+    // Start real-time polling
+    this.startPolling();
+
+    // Cleanup on popup close
+    window.addEventListener('unload', () => this.stopPolling());
+  }
+
+  private startPolling(): void {
+    // Poll credits every 5 seconds
+    this.creditPollTimer = window.setInterval(() => {
+      if (this.authState?.isAuthenticated) {
+        this.loadCredits();
+      }
+    }, CREDIT_POLL_INTERVAL);
+
+    // Poll video status every 2 seconds
+    this.videoPollTimer = window.setInterval(() => {
+      this.checkVideoStatus();
+    }, VIDEO_POLL_INTERVAL);
+  }
+
+  private stopPolling(): void {
+    if (this.creditPollTimer !== null) {
+      clearInterval(this.creditPollTimer);
+      this.creditPollTimer = null;
+    }
+    if (this.videoPollTimer !== null) {
+      clearInterval(this.videoPollTimer);
+      this.videoPollTimer = null;
+    }
   }
 
   private cacheElements(): void {
