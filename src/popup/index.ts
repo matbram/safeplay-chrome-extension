@@ -1,4 +1,4 @@
-// SafePlay Popup Script
+// SafePlay Popup Script - Clean Redesign
 import {
   UserPreferences,
   DEFAULT_PREFERENCES,
@@ -7,12 +7,13 @@ import {
   CreditInfo,
   AuthState,
 } from '../types';
-import { PROFANITY_LIST, getWordsBySeverity } from '../filter/profanity-list';
+import { PROFANITY_LIST } from '../filter/profanity-list';
 import './popup.css';
+
+const THEME_STORAGE_KEY = 'safeplay_theme';
 
 class PopupController {
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
-  private wordPreviewExpanded = false;
   private creditInfo: CreditInfo | null = null;
   private authState: AuthState | null = null;
 
@@ -25,14 +26,15 @@ class PopupController {
   };
 
   // DOM Elements
+  private themeToggle!: HTMLButtonElement;
   private enableToggle!: HTMLInputElement;
   private filterModeRadios!: NodeListOf<HTMLInputElement>;
   private severityMild!: HTMLInputElement;
   private severityModerate!: HTMLInputElement;
   private severitySevere!: HTMLInputElement;
   private severityReligious!: HTMLInputElement;
-  private statusBanner!: HTMLElement;
-  private statusText!: HTMLElement;
+  private statusPill!: HTMLElement;
+  private statusLabel!: HTMLElement;
   private videoStatusSection!: HTMLElement;
   private videoStatusValue!: HTMLElement;
   private filteredCount!: HTMLElement;
@@ -43,21 +45,6 @@ class PopupController {
   private moderateCount!: HTMLElement;
   private severeCount!: HTMLElement;
   private religiousCount!: HTMLElement;
-  private wordPreviewToggle!: HTMLElement;
-  private wordPreviewArrow!: HTMLElement;
-  private wordPreviewContent!: HTMLElement;
-  private wordTags!: HTMLElement;
-  private autoEnableToggle!: HTMLInputElement;
-  // Credit elements
-  private creditLoading!: HTMLElement;
-  private creditContent!: HTMLElement;
-  private creditError!: HTMLElement;
-  private creditValue!: HTMLElement;
-  private creditProgressFill!: HTMLElement;
-  private creditUsed!: HTMLElement;
-  private creditPlan!: HTMLElement;
-  private creditBonus!: HTMLElement;
-  private creditBonusText!: HTMLElement;
 
   // Account elements
   private accountLoggedOut!: HTMLElement;
@@ -66,59 +53,19 @@ class PopupController {
   private signOutBtn!: HTMLButtonElement;
   private accountAvatar!: HTMLElement;
   private accountName!: HTMLElement;
-  private accountEmail!: HTMLElement;
   private accountPlanBadge!: HTMLElement;
   private accountUpgradeLink!: HTMLAnchorElement;
+  private creditValue!: HTMLElement;
 
   async initialize(): Promise<void> {
     // Calculate word counts
     this.calculateWordCounts();
 
-    // Get DOM elements
-    this.enableToggle = document.getElementById('enableToggle') as HTMLInputElement;
-    this.filterModeRadios = document.querySelectorAll('input[name="filterMode"]');
-    this.severityMild = document.getElementById('severityMild') as HTMLInputElement;
-    this.severityModerate = document.getElementById('severityModerate') as HTMLInputElement;
-    this.severitySevere = document.getElementById('severitySevere') as HTMLInputElement;
-    this.severityReligious = document.getElementById('severityReligious') as HTMLInputElement;
-    this.statusBanner = document.getElementById('statusBanner') as HTMLElement;
-    this.statusText = document.getElementById('statusText') as HTMLElement;
-    this.videoStatusSection = document.getElementById('videoStatus') as HTMLElement;
-    this.videoStatusValue = document.getElementById('videoStatusValue') as HTMLElement;
-    this.filteredCount = document.getElementById('filteredCount') as HTMLElement;
-    this.progressBar = document.getElementById('progressBar') as HTMLElement;
-    this.progressFill = document.getElementById('progressFill') as HTMLElement;
-    this.totalWordCount = document.getElementById('totalWordCount') as HTMLElement;
-    this.mildCount = document.getElementById('mildCount') as HTMLElement;
-    this.moderateCount = document.getElementById('moderateCount') as HTMLElement;
-    this.severeCount = document.getElementById('severeCount') as HTMLElement;
-    this.religiousCount = document.getElementById('religiousCount') as HTMLElement;
-    this.wordPreviewToggle = document.getElementById('wordPreviewToggle') as HTMLElement;
-    this.wordPreviewArrow = document.getElementById('wordPreviewArrow') as HTMLElement;
-    this.wordPreviewContent = document.getElementById('wordPreviewContent') as HTMLElement;
-    this.wordTags = document.getElementById('wordTags') as HTMLElement;
-    this.autoEnableToggle = document.getElementById('autoEnableToggle') as HTMLInputElement;
-    // Credit elements
-    this.creditLoading = document.getElementById('creditLoading') as HTMLElement;
-    this.creditContent = document.getElementById('creditContent') as HTMLElement;
-    this.creditError = document.getElementById('creditError') as HTMLElement;
-    this.creditValue = document.getElementById('creditValue') as HTMLElement;
-    this.creditProgressFill = document.getElementById('creditProgressFill') as HTMLElement;
-    this.creditUsed = document.getElementById('creditUsed') as HTMLElement;
-    this.creditPlan = document.getElementById('creditPlan') as HTMLElement;
-    this.creditBonus = document.getElementById('creditBonus') as HTMLElement;
-    this.creditBonusText = document.getElementById('creditBonusText') as HTMLElement;
+    // Cache DOM elements
+    this.cacheElements();
 
-    // Account elements
-    this.accountLoggedOut = document.getElementById('accountLoggedOut') as HTMLElement;
-    this.accountLoggedIn = document.getElementById('accountLoggedIn') as HTMLElement;
-    this.signInBtn = document.getElementById('signInBtn') as HTMLButtonElement;
-    this.signOutBtn = document.getElementById('signOutBtn') as HTMLButtonElement;
-    this.accountAvatar = document.getElementById('accountAvatar') as HTMLElement;
-    this.accountName = document.getElementById('accountName') as HTMLElement;
-    this.accountEmail = document.getElementById('accountEmail') as HTMLElement;
-    this.accountPlanBadge = document.getElementById('accountPlanBadge') as HTMLElement;
-    this.accountUpgradeLink = document.getElementById('accountUpgradeLink') as HTMLAnchorElement;
+    // Load and apply theme
+    this.loadTheme();
 
     // Display word counts
     this.displayWordCounts();
@@ -128,9 +75,6 @@ class PopupController {
 
     // Set up event listeners
     this.setupEventListeners();
-
-    // Set up account event listeners
-    this.setupAccountListeners();
 
     // Check current video status
     await this.checkVideoStatus();
@@ -142,111 +86,101 @@ class PopupController {
     this.setupMessageListener();
   }
 
+  private cacheElements(): void {
+    this.themeToggle = document.getElementById('themeToggle') as HTMLButtonElement;
+    this.enableToggle = document.getElementById('enableToggle') as HTMLInputElement;
+    this.filterModeRadios = document.querySelectorAll('input[name="filterMode"]');
+    this.severityMild = document.getElementById('severityMild') as HTMLInputElement;
+    this.severityModerate = document.getElementById('severityModerate') as HTMLInputElement;
+    this.severitySevere = document.getElementById('severitySevere') as HTMLInputElement;
+    this.severityReligious = document.getElementById('severityReligious') as HTMLInputElement;
+    this.statusPill = document.getElementById('statusPill') as HTMLElement;
+    this.statusLabel = document.getElementById('statusLabel') as HTMLElement;
+    this.videoStatusSection = document.getElementById('videoStatus') as HTMLElement;
+    this.videoStatusValue = document.getElementById('videoStatusValue') as HTMLElement;
+    this.filteredCount = document.getElementById('filteredCount') as HTMLElement;
+    this.progressBar = document.getElementById('progressBar') as HTMLElement;
+    this.progressFill = document.getElementById('progressFill') as HTMLElement;
+    this.totalWordCount = document.getElementById('totalWordCount') as HTMLElement;
+    this.mildCount = document.getElementById('mildCount') as HTMLElement;
+    this.moderateCount = document.getElementById('moderateCount') as HTMLElement;
+    this.severeCount = document.getElementById('severeCount') as HTMLElement;
+    this.religiousCount = document.getElementById('religiousCount') as HTMLElement;
+
+    // Account elements
+    this.accountLoggedOut = document.getElementById('accountLoggedOut') as HTMLElement;
+    this.accountLoggedIn = document.getElementById('accountLoggedIn') as HTMLElement;
+    this.signInBtn = document.getElementById('signInBtn') as HTMLButtonElement;
+    this.signOutBtn = document.getElementById('signOutBtn') as HTMLButtonElement;
+    this.accountAvatar = document.getElementById('accountAvatar') as HTMLElement;
+    this.accountName = document.getElementById('accountName') as HTMLElement;
+    this.accountPlanBadge = document.getElementById('accountPlanBadge') as HTMLElement;
+    this.accountUpgradeLink = document.getElementById('accountUpgradeLink') as HTMLAnchorElement;
+    this.creditValue = document.getElementById('creditValue') as HTMLElement;
+  }
+
+  private loadTheme(): void {
+    const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
+    if (savedTheme === 'light') {
+      document.body.classList.add('light-theme');
+    }
+  }
+
+  private toggleTheme(): void {
+    const isLight = document.body.classList.toggle('light-theme');
+    localStorage.setItem(THEME_STORAGE_KEY, isLight ? 'light' : 'dark');
+  }
+
   private async loadCredits(): Promise<void> {
-    // Don't load credits if not authenticated
     if (!this.authState?.isAuthenticated) {
-      this.creditLoading.style.display = 'none';
-      this.creditContent.style.display = 'none';
-      this.creditError.style.display = 'flex';
+      this.creditValue.textContent = '0';
       return;
     }
 
     try {
-      // Show loading state
-      this.creditLoading.style.display = 'block';
-      this.creditContent.style.display = 'none';
-      this.creditError.style.display = 'none';
-
       const response = await chrome.runtime.sendMessage({ type: 'GET_CREDITS' });
 
       if (response.success && response.data) {
         this.creditInfo = response.data;
         this.displayCredits();
-      } else {
-        // Show error state (likely not authenticated)
-        this.creditLoading.style.display = 'none';
-        this.creditError.style.display = 'flex';
       }
     } catch (error) {
       console.error('Failed to load credits:', error);
-      this.creditLoading.style.display = 'none';
-      this.creditError.style.display = 'flex';
     }
   }
 
   private displayCredits(): void {
     if (!this.creditInfo) return;
 
-    const { available, used_this_period, plan_allocation, plan } = this.creditInfo;
+    const { available, used_this_period, plan_allocation } = this.creditInfo;
 
-    // Show content, hide loading/error
-    this.creditLoading.style.display = 'none';
-    this.creditContent.style.display = 'flex';
-    this.creditError.style.display = 'none';
-
-    // Calculate base vs bonus credits (same logic as website)
-    const planQuota = plan_allocation;
-    const effectiveTotal = available + used_this_period;
-    const bonusTotal = Math.max(0, effectiveTotal - planQuota);
-    const baseRemaining = Math.max(0, planQuota - used_this_period);
-    const bonusRemaining = Math.max(0, available - baseRemaining);
-    const usagePercent = Math.min(100, (used_this_period / planQuota) * 100);
-
-    // Update credit value - show total available
+    // Update credit value
     this.creditValue.textContent = available.toString();
     this.creditValue.classList.remove('low', 'empty');
+
+    // Calculate remaining base credits
+    const baseRemaining = Math.max(0, plan_allocation - used_this_period);
+    const bonusRemaining = Math.max(0, available - baseRemaining);
+
     if (available === 0) {
       this.creditValue.classList.add('empty');
     } else if (baseRemaining === 0 && bonusRemaining <= 5) {
-      // Only show "low" warning if we're into bonus credits and running low
       this.creditValue.classList.add('low');
-    }
-
-    // Update progress bar - based on plan usage only
-    this.creditProgressFill.style.width = `${usagePercent}%`;
-    this.creditProgressFill.classList.remove('warning', 'danger');
-    if (usagePercent >= 100) {
-      this.creditProgressFill.classList.add('danger');
-    } else if (usagePercent >= 70) {
-      this.creditProgressFill.classList.add('warning');
-    }
-
-    // Update labels - show plan credits usage
-    this.creditUsed.textContent = `${Math.min(used_this_period, planQuota)}/${planQuota} plan used`;
-
-    // Format plan name
-    const planNames: Record<string, string> = {
-      free: 'Free Plan',
-      base: 'Base Plan',
-      professional: 'Pro Plan',
-      unlimited: 'Unlimited',
-    };
-    this.creditPlan.textContent = planNames[plan || 'free'] || 'Free Plan';
-
-    // Show bonus credits if any exist
-    if (bonusTotal > 0) {
-      this.creditBonus.style.display = 'block';
-      this.creditBonusText.textContent = `+${bonusRemaining} bonus available`;
-    } else {
-      this.creditBonus.style.display = 'none';
     }
   }
 
   private calculateWordCounts(): void {
-    // Count words by severity from the profanity list
     for (const item of PROFANITY_LIST) {
       this.wordCounts[item.severity]++;
     }
   }
 
   private displayWordCounts(): void {
-    // Update individual counts
-    this.mildCount.textContent = `(${this.wordCounts.mild})`;
-    this.moderateCount.textContent = `(${this.wordCounts.moderate})`;
-    this.severeCount.textContent = `(${this.wordCounts.severe})`;
-    this.religiousCount.textContent = `(${this.wordCounts.religious})`;
+    this.mildCount.textContent = this.wordCounts.mild.toString();
+    this.moderateCount.textContent = this.wordCounts.moderate.toString();
+    this.severeCount.textContent = this.wordCounts.severe.toString();
+    this.religiousCount.textContent = this.wordCounts.religious.toString();
 
-    // Update total (will be recalculated based on selected levels)
     this.updateTotalWordCount();
   }
 
@@ -257,7 +191,6 @@ class PopupController {
     if (this.severitySevere?.checked) total += this.wordCounts.severe;
     if (this.severityReligious?.checked) total += this.wordCounts.religious;
 
-    // Add custom blacklist count
     total += this.preferences.customBlacklist.length;
 
     this.totalWordCount.textContent = `${total} words`;
@@ -280,8 +213,8 @@ class PopupController {
     this.enableToggle.checked = this.preferences.enabled;
     document.body.classList.toggle('disabled', !this.preferences.enabled);
 
-    // Update status banner
-    this.updateStatusBanner();
+    // Update status pill
+    this.updateStatusPill();
 
     // Update filter mode
     this.filterModeRadios.forEach((radio) => {
@@ -294,32 +227,27 @@ class PopupController {
     this.severitySevere.checked = this.preferences.severityLevels.severe;
     this.severityReligious.checked = this.preferences.severityLevels.religious;
 
-    // Update auto-enable toggle
-    if (this.autoEnableToggle) {
-      this.autoEnableToggle.checked = this.preferences.autoEnableForFilteredVideos ?? true;
-    }
-
     // Update total word count
     this.updateTotalWordCount();
-
-    // Update word preview if expanded
-    if (this.wordPreviewExpanded) {
-      this.renderWordPreview();
-    }
   }
 
-  private updateStatusBanner(): void {
-    this.statusBanner.classList.remove('inactive', 'error');
+  private updateStatusPill(): void {
+    this.statusPill.classList.remove('inactive', 'error', 'warning');
 
     if (!this.preferences.enabled) {
-      this.statusBanner.classList.add('inactive');
-      this.statusText.textContent = 'Protection Disabled';
+      this.statusPill.classList.add('inactive');
+      this.statusLabel.textContent = 'Disabled';
     } else {
-      this.statusText.textContent = 'Protection Active';
+      this.statusLabel.textContent = 'Active';
     }
   }
 
   private setupEventListeners(): void {
+    // Theme toggle
+    this.themeToggle.addEventListener('click', () => {
+      this.toggleTheme();
+    });
+
     // Enable toggle
     this.enableToggle.addEventListener('change', () => {
       this.savePreferences({ enabled: this.enableToggle.checked });
@@ -335,41 +263,19 @@ class PopupController {
     });
 
     // Severity levels
-    this.severityMild.addEventListener('change', () => {
+    const severityHandler = () => {
       this.saveSeverityLevels();
       this.updateTotalWordCount();
-      if (this.wordPreviewExpanded) this.renderWordPreview();
-    });
+    };
 
-    this.severityModerate.addEventListener('change', () => {
-      this.saveSeverityLevels();
-      this.updateTotalWordCount();
-      if (this.wordPreviewExpanded) this.renderWordPreview();
-    });
+    this.severityMild.addEventListener('change', severityHandler);
+    this.severityModerate.addEventListener('change', severityHandler);
+    this.severitySevere.addEventListener('change', severityHandler);
+    this.severityReligious.addEventListener('change', severityHandler);
 
-    this.severitySevere.addEventListener('change', () => {
-      this.saveSeverityLevels();
-      this.updateTotalWordCount();
-      if (this.wordPreviewExpanded) this.renderWordPreview();
-    });
-
-    this.severityReligious.addEventListener('change', () => {
-      this.saveSeverityLevels();
-      this.updateTotalWordCount();
-      if (this.wordPreviewExpanded) this.renderWordPreview();
-    });
-
-    // Word preview toggle
-    this.wordPreviewToggle.addEventListener('click', () => {
-      this.toggleWordPreview();
-    });
-
-    // Auto-enable toggle
-    if (this.autoEnableToggle) {
-      this.autoEnableToggle.addEventListener('change', () => {
-        this.savePreferences({ autoEnableForFilteredVideos: this.autoEnableToggle.checked });
-      });
-    }
+    // Account listeners
+    this.signInBtn?.addEventListener('click', () => this.handleSignIn());
+    this.signOutBtn?.addEventListener('click', () => this.handleSignOut());
 
     // Settings link
     const settingsLink = document.getElementById('settingsLink');
@@ -377,53 +283,6 @@ class PopupController {
       e.preventDefault();
       chrome.runtime.openOptionsPage?.();
     });
-  }
-
-  private toggleWordPreview(): void {
-    this.wordPreviewExpanded = !this.wordPreviewExpanded;
-    this.wordPreviewArrow.classList.toggle('expanded', this.wordPreviewExpanded);
-    this.wordPreviewContent.classList.toggle('show', this.wordPreviewExpanded);
-
-    if (this.wordPreviewExpanded) {
-      this.renderWordPreview();
-    }
-  }
-
-  private renderWordPreview(): void {
-    const words: { word: string; isCustom: boolean }[] = [];
-
-    // Add words from selected severity levels
-    if (this.severityMild.checked) {
-      getWordsBySeverity('mild').forEach(word => words.push({ word, isCustom: false }));
-    }
-    if (this.severityModerate.checked) {
-      getWordsBySeverity('moderate').forEach(word => words.push({ word, isCustom: false }));
-    }
-    if (this.severitySevere.checked) {
-      getWordsBySeverity('severe').forEach(word => words.push({ word, isCustom: false }));
-    }
-    if (this.severityReligious.checked) {
-      getWordsBySeverity('religious').forEach(word => words.push({ word, isCustom: false }));
-    }
-
-    // Add custom blacklist words
-    this.preferences.customBlacklist.forEach(word => words.push({ word, isCustom: true }));
-
-    // Sort alphabetically
-    words.sort((a, b) => a.word.localeCompare(b.word));
-
-    // Render tags
-    this.wordTags.innerHTML = words
-      .map(({ word, isCustom }) =>
-        `<span class="word-tag${isCustom ? ' custom' : ''}">${this.escapeHtml(word)}</span>`
-      )
-      .join('');
-  }
-
-  private escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
   }
 
   private saveSeverityLevels(): void {
@@ -455,7 +314,6 @@ class PopupController {
 
   private async checkVideoStatus(): Promise<void> {
     try {
-      // Get current active tab
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
       if (!tab?.id || !tab.url?.includes('youtube.com/watch')) {
@@ -463,14 +321,12 @@ class PopupController {
         return;
       }
 
-      // Query content script for video state
       const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_STATE' });
 
       if (response?.success && response.data) {
         this.updateVideoStatus(response.data);
       }
     } catch (error) {
-      // Content script not loaded or not on YouTube
       this.videoStatusSection.style.display = 'none';
     }
   }
@@ -484,34 +340,27 @@ class PopupController {
   }): void {
     this.videoStatusSection.style.display = 'block';
 
-    // Update status text
     const statusMap: Record<string, string> = {
       idle: 'Ready',
-      loading: 'Loading...',
-      processing: 'Processing...',
+      loading: 'Loading',
+      processing: 'Processing',
       active: 'Filtering',
       error: 'Error',
       disabled: 'Disabled',
-      'age-restricted': 'Age-Restricted',
+      'age-restricted': 'Restricted',
     };
 
     this.videoStatusValue.textContent = statusMap[state.status] || state.status;
 
-    // Remove previous state classes
-    this.statusBanner.classList.remove('error', 'warning');
+    // Update status pill for special states
+    this.statusPill.classList.remove('error', 'warning');
 
     if (state.status === 'age-restricted') {
-      // Age-restricted is a warning, not an error
-      this.statusBanner.classList.add('warning');
-      this.statusText.textContent = 'Cannot Filter';
-      if (state.error) {
-        this.videoStatusValue.textContent = 'Age-Restricted';
-        this.videoStatusValue.title = state.error;
-      }
-    } else if (state.status === 'error' && state.error) {
-      this.videoStatusValue.textContent = state.error;
-      this.statusBanner.classList.add('error');
-      this.statusText.textContent = 'Error Occurred';
+      this.statusPill.classList.add('warning');
+      this.statusLabel.textContent = 'Restricted';
+    } else if (state.status === 'error') {
+      this.statusPill.classList.add('error');
+      this.statusLabel.textContent = 'Error';
     }
 
     // Update filtered count
@@ -540,21 +389,8 @@ class PopupController {
         this.displayCredits();
       }
       if (message.type === 'AUTH_STATE_CHANGED' && message.payload) {
-        // Reload auth state when authentication changes
         this.loadAuthState();
       }
-    });
-  }
-
-  private setupAccountListeners(): void {
-    // Sign in button
-    this.signInBtn?.addEventListener('click', () => {
-      this.handleSignIn();
-    });
-
-    // Sign out button
-    this.signOutBtn?.addEventListener('click', () => {
-      this.handleSignOut();
     });
   }
 
@@ -566,12 +402,10 @@ class PopupController {
         this.authState = response.data;
         this.updateAccountUI();
 
-        // Load credits if authenticated
         if (this.authState?.isAuthenticated) {
           await this.loadCredits();
         }
       } else {
-        // Not authenticated
         this.authState = {
           isAuthenticated: false,
           user: null,
@@ -602,10 +436,8 @@ class PopupController {
       this.accountLoggedOut.style.display = 'none';
       this.accountLoggedIn.style.display = 'flex';
 
-      // Update user info
       const user = this.authState.user;
       this.accountName.textContent = user.full_name || user.email?.split('@')[0] || 'User';
-      this.accountEmail.textContent = user.email || '';
 
       // Update avatar
       if (user.avatar_url) {
@@ -624,30 +456,31 @@ class PopupController {
       const planName = subscription?.plans?.name || 'Free';
       const planId = planName.toLowerCase();
       this.accountPlanBadge.textContent = planName;
-      this.accountPlanBadge.className = `account-plan-badge ${planId}`;
+      this.accountPlanBadge.className = `account-plan ${planId}`;
 
       // Hide upgrade link for unlimited plans
       if (planId === 'unlimited' || planId === 'organization') {
         this.accountUpgradeLink.style.display = 'none';
       } else {
-        this.accountUpgradeLink.style.display = 'inline-block';
+        this.accountUpgradeLink.style.display = 'flex';
       }
     } else {
       // Show logged out state
       this.accountLoggedOut.style.display = 'flex';
       this.accountLoggedIn.style.display = 'none';
-
-      // Update credit section to show sign in prompt
-      this.creditLoading.style.display = 'none';
-      this.creditContent.style.display = 'none';
-      this.creditError.style.display = 'flex';
+      this.creditValue.textContent = '0';
     }
+  }
+
+  private escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
   }
 
   private async handleSignIn(): Promise<void> {
     try {
       await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
-      // Close the popup after opening login page
       window.close();
     } catch (error) {
       console.error('Failed to open login:', error);
@@ -658,7 +491,6 @@ class PopupController {
     try {
       await chrome.runtime.sendMessage({ type: 'LOGOUT' });
 
-      // Update local state
       this.authState = {
         isAuthenticated: false,
         user: null,
@@ -668,7 +500,6 @@ class PopupController {
       };
       this.creditInfo = null;
 
-      // Update UI
       this.updateAccountUI();
     } catch (error) {
       console.error('Failed to sign out:', error);
