@@ -161,16 +161,18 @@ export class AudioFilter {
     }
   }
 
-  // Handle tab visibility change - stop bleep when tab is hidden
+  // Handle tab visibility change
+  // Note: We do NOT stop the bleep when tab is hidden because the user
+  // may switch tabs while still wanting to hear the video with profanity filtered.
+  // The bleep should only stop when the video is actually paused.
   private handleVisibilityChange(): void {
-    if (document.hidden && this.isBleeping) {
-      this.stopBleep();
-    } else if (!document.hidden && this.video && !this.video.paused) {
-      // Tab became visible and video is playing - check if we need to resume bleep
+    // When tab becomes visible again, check if we need to resume bleep
+    // (in case browser throttled audio while hidden)
+    if (!document.hidden && this.video && !this.video.paused && this.isMuted && this.filterMode === 'bleep') {
       const currentTime = this.video.currentTime;
       const activeInterval = this.findActiveInterval(currentTime);
 
-      if (activeInterval && this.isMuted && this.filterMode === 'bleep' && !this.bleepOscillator) {
+      if (activeInterval && !this.bleepOscillator) {
         this.startBleep();
       }
     }
@@ -404,9 +406,10 @@ export class AudioFilter {
   private startBleep(): void {
     if (!this.audioContext || !this.bleepGain) return;
 
-    // Don't start bleep if video is paused, ended, or tab is hidden
+    // Don't start bleep if video is paused or ended
+    // Note: We DO allow bleep when tab is hidden - user may switch tabs
+    // while still wanting to hear filtered audio
     if (this.video && (this.video.paused || this.video.ended)) return;
-    if (document.hidden) return;
 
     // Don't start if already bleeping
     if (this.bleepOscillator) return;
