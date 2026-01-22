@@ -243,8 +243,8 @@ class SafePlayContentScript {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.updateButtonState({
         state: 'error',
-        text: 'Error',
-        error: errorMessage,
+        text: 'Retry',
+        error: `${errorMessage} - Click to retry`,
         videoId: youtubeId,
       });
       this.isProcessing = false;
@@ -321,8 +321,8 @@ class SafePlayContentScript {
         } else {
           this.updateButtonState({
             state: 'error',
-            text: 'Error',
-            error: error || 'Failed to filter video',
+            text: 'Retry',
+            error: (error || 'Failed to filter video') + ' - Click to retry',
             videoId: youtubeId,
           });
         }
@@ -357,8 +357,8 @@ class SafePlayContentScript {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.updateButtonState({
         state: 'error',
-        text: 'Error',
-        error: errorMessage,
+        text: 'Retry',
+        error: `${errorMessage} - Click to retry`,
         videoId: youtubeId,
       });
       // Resume video on error
@@ -510,8 +510,8 @@ class SafePlayContentScript {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         this.updateButtonState({
           state: 'error',
-          text: 'Error',
-          error: errorMessage,
+          text: 'Retry',
+          error: `${errorMessage} - Click to retry`,
           videoId: videoId || undefined,
         });
         this.isProcessing = false;
@@ -527,8 +527,8 @@ class SafePlayContentScript {
     }
     this.updateButtonState({
       state: 'error',
-      text: 'Timeout',
-      error: 'Processing took too long. Please try again.',
+      text: 'Retry',
+      error: 'Processing timed out - Click to retry',
       videoId: videoId || undefined,
     });
     this.isProcessing = false;
