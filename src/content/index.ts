@@ -221,6 +221,14 @@ class SafePlayContentScript {
         return;
       }
 
+      // Pause video before showing confirmation dialog so user can review without missing content
+      const video = this.getVideoElement();
+      const videoWasPlayingBeforeDialog = !!(video && !video.paused);
+      if (video && videoWasPlayingBeforeDialog) {
+        video.pause();
+        log('Video paused for credit confirmation');
+      }
+
       // Show credit confirmation dialog
       this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
       this.isProcessing = false;
@@ -228,11 +236,18 @@ class SafePlayContentScript {
       const confirmation = new CreditConfirmation({
         onConfirm: async () => {
           log('User confirmed filtering');
+          // Pass the video state to proceedWithFiltering
+          this.videoWasPlaying = videoWasPlayingBeforeDialog;
           await this.proceedWithFiltering(youtubeId);
         },
         onCancel: () => {
           log('User cancelled filtering');
           this.filteringVideoId = null;
+          // Resume video if it was playing before we showed the dialog
+          if (videoWasPlayingBeforeDialog && video) {
+            video.play();
+            log('Video resumed after cancel');
+          }
         },
         debug: DEBUG,
       });
@@ -263,12 +278,16 @@ class SafePlayContentScript {
     this.isProcessing = true;
     this.filteringVideoId = youtubeId;
 
-    // Pause video while we load the filter to prevent hearing profanity
+    // Video should already be paused from the confirmation dialog
+    // If not (e.g., for cached videos that skip confirmation), pause it now
     const video = this.getVideoElement();
-    this.videoWasPlaying = !!(video && !video.paused);
-    if (video && this.videoWasPlaying) {
-      video.pause();
-      log('Video paused while loading filter');
+    if (!this.videoWasPlaying) {
+      // Only set videoWasPlaying if it wasn't already set by the confirmation flow
+      this.videoWasPlaying = !!(video && !video.paused);
+      if (video && this.videoWasPlaying) {
+        video.pause();
+        log('Video paused while loading filter');
+      }
     }
 
     try {
