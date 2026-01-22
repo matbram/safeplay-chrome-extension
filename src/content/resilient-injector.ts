@@ -806,7 +806,7 @@ export class ResilientInjector {
         button.title = 'Filter paused - Click to re-enable';
         break;
       case 'error':
-        button.title = stateInfo.error || 'An error occurred. Click to retry.';
+        button.title = stateInfo.error || 'Something went wrong - Click to retry';
         break;
       case 'age-restricted':
         button.title = stateInfo.error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.';

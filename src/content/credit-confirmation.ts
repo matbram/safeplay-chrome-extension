@@ -108,26 +108,29 @@ export class CreditConfirmation {
                 <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
               </svg>
             </div>
-            <h2 id="safeplay-dialog-title">Insufficient Credits</h2>
+            <h2 id="safeplay-dialog-title">Not Enough Credits</h2>
           </div>
           <div class="safeplay-dialog-body">
             <div class="safeplay-video-info">
               <span class="safeplay-video-title">${this.escapeHtml(video.title)}</span>
               <span class="safeplay-video-duration">${formatDuration(video.duration)}</span>
             </div>
+            <p class="safeplay-dialog-message safeplay-credit-explanation">
+              You don't have enough credits to filter this video.
+            </p>
             <div class="safeplay-credit-info safeplay-insufficient">
               <div class="safeplay-credit-row">
-                <span>Estimated cost:</span>
+                <span>This video requires:</span>
                 <span class="safeplay-credit-value">${costDisplay}</span>
               </div>
               <div class="safeplay-credit-row">
-                <span>Your balance:</span>
+                <span>You currently have:</span>
                 <span class="safeplay-credit-value safeplay-low">${userCredits} credit${userCredits !== 1 ? 's' : ''}</span>
               </div>
               ${!creditCostUnknown ? `
               <div class="safeplay-credit-row safeplay-need">
-                <span>Need:</span>
-                <span class="safeplay-credit-value">${creditCost - userCredits} more</span>
+                <span>You need:</span>
+                <span class="safeplay-credit-value">${creditCost - userCredits} more credit${(creditCost - userCredits) !== 1 ? 's' : ''}</span>
               </div>
               ` : ''}
             </div>
@@ -137,7 +140,7 @@ export class CreditConfirmation {
               Cancel
             </button>
             <a href="https://astonishing-youthfulness-production.up.railway.app/pricing" target="_blank" class="safeplay-btn safeplay-btn-primary">
-              Get Credits
+              Get More Credits
             </a>
           </div>
         </div>
@@ -153,30 +156,33 @@ export class CreditConfirmation {
               <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
             </svg>
           </div>
-          <h2 id="safeplay-dialog-title">Filter Video</h2>
+          <h2 id="safeplay-dialog-title">Confirm Filtering</h2>
         </div>
         <div class="safeplay-dialog-body">
           <div class="safeplay-video-info">
             <span class="safeplay-video-title">${this.escapeHtml(video.title)}</span>
             <span class="safeplay-video-duration">${formatDuration(video.duration)}</span>
           </div>
+          <p class="safeplay-dialog-message safeplay-credit-explanation">
+            Filtering this video will use credits from your account.
+          </p>
           <div class="safeplay-credit-info">
             <div class="safeplay-credit-row">
-              <span>${creditCostUnknown ? 'Estimated cost:' : 'Cost:'}</span>
-              <span class="safeplay-credit-value">${costDisplay}</span>
+              <span>Your current credits:</span>
+              <span class="safeplay-credit-value">${userCredits}</span>
             </div>
-            <div class="safeplay-credit-row">
-              <span>Your balance:</span>
-              <span class="safeplay-credit-value">${userCredits} credit${userCredits !== 1 ? 's' : ''}</span>
+            <div class="safeplay-credit-row safeplay-deduct">
+              <span>${creditCostUnknown ? 'Estimated deduction:' : 'Will be deducted:'}</span>
+              <span class="safeplay-credit-value safeplay-cost">-${creditCost}</span>
             </div>
             ${!creditCostUnknown ? `
             <div class="safeplay-credit-row safeplay-after">
-              <span>After filtering:</span>
-              <span class="safeplay-credit-value">${userCredits - creditCost} credit${(userCredits - creditCost) !== 1 ? 's' : ''}</span>
+              <span>You'll have left:</span>
+              <span class="safeplay-credit-value safeplay-remaining">${userCredits - creditCost}</span>
             </div>
             ` : `
             <div class="safeplay-credit-row safeplay-after">
-              <span class="safeplay-cost-note">Final cost will be calculated after processing</span>
+              <span class="safeplay-cost-note">Exact cost calculated after processing (~1 credit/minute)</span>
             </div>
             `}
           </div>
@@ -186,7 +192,7 @@ export class CreditConfirmation {
             Cancel
           </button>
           <button class="safeplay-btn safeplay-btn-primary" data-action="confirm">
-            Start Filtering
+            Use ${creditCostUnknown ? '~' + creditCost : creditCost} Credit${creditCost !== 1 ? 's' : ''} & Filter
           </button>
         </div>
       </div>
@@ -393,8 +399,32 @@ export class CreditConfirmation {
         color: #F9A825;
       }
 
+      .safeplay-credit-explanation {
+        margin: 0 0 12px 0;
+        font-size: 13px;
+        color: #AAAAAA;
+        line-height: 1.4;
+      }
+
+      .safeplay-credit-row.safeplay-deduct {
+        background: rgba(255, 78, 69, 0.1);
+        margin: 0 -12px;
+        padding: 8px 12px;
+      }
+
+      .safeplay-credit-value.safeplay-cost {
+        color: #FF4E45;
+        font-weight: 700;
+      }
+
+      .safeplay-credit-value.safeplay-remaining {
+        color: #2BA640;
+        font-weight: 600;
+      }
+
       .safeplay-credit-row.safeplay-after {
-        color: #606060;
+        color: #888888;
+        font-size: 13px;
       }
 
       .safeplay-cost-note {

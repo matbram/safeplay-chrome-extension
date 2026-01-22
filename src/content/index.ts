@@ -221,6 +221,14 @@ class SafePlayContentScript {
         return;
       }
 
+      // Pause video before showing confirmation dialog so user can review without missing content
+      const video = this.getVideoElement();
+      const videoWasPlayingBeforeDialog = !!(video && !video.paused);
+      if (video && videoWasPlayingBeforeDialog) {
+        video.pause();
+        log('Video paused for credit confirmation');
+      }
+
       // Show credit confirmation dialog
       this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
       this.isProcessing = false;
@@ -228,11 +236,18 @@ class SafePlayContentScript {
       const confirmation = new CreditConfirmation({
         onConfirm: async () => {
           log('User confirmed filtering');
+          // Pass the video state to proceedWithFiltering
+          this.videoWasPlaying = videoWasPlayingBeforeDialog;
           await this.proceedWithFiltering(youtubeId);
         },
         onCancel: () => {
           log('User cancelled filtering');
           this.filteringVideoId = null;
+          // Resume video if it was playing before we showed the dialog
+          if (videoWasPlayingBeforeDialog && video) {
+            video.play();
+            log('Video resumed after cancel');
+          }
         },
         debug: DEBUG,
       });
@@ -243,8 +258,8 @@ class SafePlayContentScript {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.updateButtonState({
         state: 'error',
-        text: 'Error',
-        error: errorMessage,
+        text: 'Retry',
+        error: `${errorMessage} - Click to retry`,
         videoId: youtubeId,
       });
       this.isProcessing = false;
@@ -263,12 +278,16 @@ class SafePlayContentScript {
     this.isProcessing = true;
     this.filteringVideoId = youtubeId;
 
-    // Pause video while we load the filter to prevent hearing profanity
+    // Video should already be paused from the confirmation dialog
+    // If not (e.g., for cached videos that skip confirmation), pause it now
     const video = this.getVideoElement();
-    this.videoWasPlaying = !!(video && !video.paused);
-    if (video && this.videoWasPlaying) {
-      video.pause();
-      log('Video paused while loading filter');
+    if (!this.videoWasPlaying) {
+      // Only set videoWasPlaying if it wasn't already set by the confirmation flow
+      this.videoWasPlaying = !!(video && !video.paused);
+      if (video && this.videoWasPlaying) {
+        video.pause();
+        log('Video paused while loading filter');
+      }
     }
 
     try {
@@ -321,8 +340,8 @@ class SafePlayContentScript {
         } else {
           this.updateButtonState({
             state: 'error',
-            text: 'Error',
-            error: error || 'Failed to filter video',
+            text: 'Retry',
+            error: (error || 'Failed to filter video') + ' - Click to retry',
             videoId: youtubeId,
           });
         }
@@ -357,8 +376,8 @@ class SafePlayContentScript {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.updateButtonState({
         state: 'error',
-        text: 'Error',
-        error: errorMessage,
+        text: 'Retry',
+        error: `${errorMessage} - Click to retry`,
         videoId: youtubeId,
       });
       // Resume video on error
@@ -510,8 +529,8 @@ class SafePlayContentScript {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         this.updateButtonState({
           state: 'error',
-          text: 'Error',
-          error: errorMessage,
+          text: 'Retry',
+          error: `${errorMessage} - Click to retry`,
           videoId: videoId || undefined,
         });
         this.isProcessing = false;
@@ -527,8 +546,8 @@ class SafePlayContentScript {
     }
     this.updateButtonState({
       state: 'error',
-      text: 'Timeout',
-      error: 'Processing took too long. Please try again.',
+      text: 'Retry',
+      error: 'Processing timed out - Click to retry',
       videoId: videoId || undefined,
     });
     this.isProcessing = false;
