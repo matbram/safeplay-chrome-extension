@@ -5,346 +5,218 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>SafePlay</title>
   <link rel="stylesheet" href="popup.css">
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
   <div class="popup-container">
     <!-- Header -->
-    <header class="popup-header">
-      <div class="header-content">
+    <header class="header">
+      <div class="header-left">
         <div class="logo">
-          <div class="logo-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-              <path d="M9 12l2 2 4-4" stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </div>
-          <div class="logo-text">
-            <span class="logo-name">SafePlay</span>
-            <span class="logo-tagline">YouTube Content Filter</span>
-          </div>
+          <svg class="logo-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" fill="currentColor"/>
+            <path d="M9 12l2 2 4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="logo-text">SafePlay</span>
         </div>
-        <label class="main-toggle">
+      </div>
+      <div class="header-right">
+        <button class="theme-toggle" id="themeToggle" title="Toggle theme">
+          <svg class="theme-icon sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="5"/>
+            <line x1="12" y1="1" x2="12" y2="3"/>
+            <line x1="12" y1="21" x2="12" y2="23"/>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+            <line x1="1" y1="12" x2="3" y2="12"/>
+            <line x1="21" y1="12" x2="23" y2="12"/>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+          </svg>
+          <svg class="theme-icon moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+        </button>
+        <label class="power-toggle">
           <input type="checkbox" id="enableToggle" checked>
-          <span class="toggle-track">
-            <span class="toggle-thumb"></span>
+          <span class="power-track">
+            <span class="power-thumb"></span>
           </span>
         </label>
       </div>
     </header>
 
-    <!-- Status Banner -->
-    <div class="status-banner" id="statusBanner">
-      <div class="status-icon">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16">
-          <circle cx="12" cy="12" r="10"/>
-        </svg>
-      </div>
-      <span class="status-text" id="statusText">Protection Active</span>
+    <!-- Status Pill -->
+    <div class="status-pill" id="statusPill">
+      <span class="status-dot"></span>
+      <span class="status-label" id="statusLabel">Active</span>
     </div>
 
     <!-- Main Content -->
-    <main class="main-content">
-      <!-- Filter Mode Card -->
-      <section class="card">
-        <div class="card-header">
-          <h3 class="card-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-              <polyline points="2 17 12 22 22 17"/>
-              <polyline points="2 12 12 17 22 12"/>
-            </svg>
-            Filter Mode
-          </h3>
+    <main class="content">
+      <!-- Filter Mode -->
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Filter Mode</span>
         </div>
-        <div class="mode-selector">
-          <label class="mode-option" data-mode="mute">
+        <div class="mode-pills">
+          <label class="mode-pill">
             <input type="radio" name="filterMode" value="mute" checked>
-            <div class="mode-card">
-              <div class="mode-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-                  <line x1="23" y1="9" x2="17" y2="15"/>
-                  <line x1="17" y1="9" x2="23" y2="15"/>
-                </svg>
-              </div>
-              <span class="mode-label">Mute</span>
-              <span class="mode-desc">Silent</span>
-            </div>
+            <span class="pill-content">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                <line x1="23" y1="9" x2="17" y2="15"/>
+                <line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+              <span>Mute</span>
+            </span>
           </label>
-          <label class="mode-option" data-mode="bleep">
+          <label class="mode-pill">
             <input type="radio" name="filterMode" value="bleep">
-            <div class="mode-card">
-              <div class="mode-icon">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M9 18V5l12-2v13"/>
-                  <circle cx="6" cy="18" r="3"/>
-                  <circle cx="18" cy="16" r="3"/>
-                </svg>
-              </div>
-              <span class="mode-label">Bleep</span>
-              <span class="mode-desc">Censor Tone</span>
-            </div>
+            <span class="pill-content">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 18V5l12-2v13"/>
+                <circle cx="6" cy="18" r="3"/>
+                <circle cx="18" cy="16" r="3"/>
+              </svg>
+              <span>Bleep</span>
+            </span>
           </label>
         </div>
-      </section>
+      </div>
 
-      <!-- Severity Levels Card -->
-      <section class="card">
-        <div class="card-header">
-          <h3 class="card-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
-              <polyline points="22 4 12 14.01 9 11.01"/>
-            </svg>
-            Filter Levels
-          </h3>
-          <span class="card-count" id="totalWordCount">0 words</span>
+      <!-- Filter Levels -->
+      <div class="section">
+        <div class="section-header">
+          <span class="section-title">Filter Levels</span>
+          <span class="word-count" id="totalWordCount">0 words</span>
         </div>
-        <div class="severity-list">
-          <label class="severity-option">
-            <div class="severity-checkbox">
-              <input type="checkbox" id="severityMild">
-              <span class="checkbox-mark"></span>
-            </div>
-            <div class="severity-info">
-              <span class="severity-name">
-                Mild
-                <span class="severity-word-count" id="mildCount">(0)</span>
-              </span>
-              <span class="severity-examples">damn, hell, crap, piss</span>
-            </div>
-            <span class="severity-badge mild">Low</span>
+        <div class="level-chips">
+          <label class="level-chip mild">
+            <input type="checkbox" id="severityMild">
+            <span class="chip-content">
+              <span class="chip-label">Mild</span>
+              <span class="chip-count" id="mildCount">0</span>
+            </span>
           </label>
-          <label class="severity-option">
-            <div class="severity-checkbox">
-              <input type="checkbox" id="severityModerate" checked>
-              <span class="checkbox-mark"></span>
-            </div>
-            <div class="severity-info">
-              <span class="severity-name">
-                Moderate
-                <span class="severity-word-count" id="moderateCount">(0)</span>
-              </span>
-              <span class="severity-examples">shit, bitch, ass, bastard</span>
-            </div>
-            <span class="severity-badge moderate">Med</span>
+          <label class="level-chip moderate">
+            <input type="checkbox" id="severityModerate" checked>
+            <span class="chip-content">
+              <span class="chip-label">Moderate</span>
+              <span class="chip-count" id="moderateCount">0</span>
+            </span>
           </label>
-          <label class="severity-option">
-            <div class="severity-checkbox">
-              <input type="checkbox" id="severitySevere" checked>
-              <span class="checkbox-mark"></span>
-            </div>
-            <div class="severity-info">
-              <span class="severity-name">
-                Severe
-                <span class="severity-word-count" id="severeCount">(0)</span>
-              </span>
-              <span class="severity-examples">fuck, cunt, n-word, slurs</span>
-            </div>
-            <span class="severity-badge severe">High</span>
+          <label class="level-chip severe">
+            <input type="checkbox" id="severitySevere" checked>
+            <span class="chip-content">
+              <span class="chip-label">Severe</span>
+              <span class="chip-count" id="severeCount">0</span>
+            </span>
           </label>
-          <div class="severity-divider"></div>
-          <label class="severity-option religious-option">
-            <div class="severity-checkbox">
-              <input type="checkbox" id="severityReligious">
-              <span class="checkbox-mark"></span>
-            </div>
-            <div class="severity-info">
-              <span class="severity-name">
-                Religious
-                <span class="severity-word-count" id="religiousCount">(0)</span>
-              </span>
-              <span class="severity-examples">OMG, Jesus, God, Lord, holy</span>
-            </div>
-            <span class="severity-badge religious">Opt-in</span>
+          <label class="level-chip religious">
+            <input type="checkbox" id="severityReligious">
+            <span class="chip-content">
+              <span class="chip-label">Religious</span>
+              <span class="chip-count" id="religiousCount">0</span>
+            </span>
           </label>
         </div>
+      </div>
 
-        <!-- Word Preview Toggle -->
-        <div class="word-preview">
-          <div class="word-preview-toggle" id="wordPreviewToggle">
-            <span class="word-preview-label">View all filtered words</span>
-            <svg class="word-preview-arrow" id="wordPreviewArrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-              <polyline points="6 9 12 15 18 9"/>
-            </svg>
-          </div>
-          <div class="word-preview-content" id="wordPreviewContent">
-            <div class="word-tags" id="wordTags">
-              <!-- Words will be populated dynamically -->
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <!-- Quick Settings -->
-      <section class="card">
-        <div class="card-header">
-          <h3 class="card-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
-            </svg>
-            Quick Settings
-          </h3>
-        </div>
-        <div class="quick-setting">
-          <label class="setting-row">
-            <div class="setting-info">
-              <span class="setting-name">Auto-enable for watched videos</span>
-              <span class="setting-desc">Automatically filter videos you've filtered before</span>
-            </div>
-            <label class="mini-toggle">
-              <input type="checkbox" id="autoEnableToggle" checked>
-              <span class="mini-toggle-track">
-                <span class="mini-toggle-thumb"></span>
-              </span>
-            </label>
-          </label>
-        </div>
-      </section>
-
-      <!-- Current Video Status -->
-      <section class="card video-card" id="videoStatus" style="display: none;">
-        <div class="card-header">
-          <h3 class="card-title">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polygon points="23 7 16 12 23 17 23 7"/>
-              <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-            </svg>
-            Current Video
-          </h3>
+      <!-- Current Video (only shown on YouTube) -->
+      <div class="section video-section" id="videoStatus" style="display: none;">
+        <div class="section-header">
+          <span class="section-title">Current Video</span>
         </div>
         <div class="video-stats">
-          <div class="stat-item">
-            <span class="stat-value" id="filteredCount">0</span>
-            <span class="stat-label">Filtered</span>
+          <div class="video-stat">
+            <span class="stat-number" id="filteredCount">0</span>
+            <span class="stat-text">filtered</span>
           </div>
-          <div class="stat-item">
-            <span class="stat-value" id="videoStatusValue">Ready</span>
-            <span class="stat-label">Status</span>
+          <div class="video-stat-divider"></div>
+          <div class="video-stat">
+            <span class="stat-status" id="videoStatusValue">Ready</span>
+            <span class="stat-text">status</span>
           </div>
         </div>
         <div class="progress-bar" id="progressBar" style="display: none;">
-          <div class="progress-track">
-            <div class="progress-fill" id="progressFill"></div>
-          </div>
+          <div class="progress-fill" id="progressFill"></div>
         </div>
-      </section>
-    </main>
+      </div>
 
-    <!-- Account Section -->
-    <section class="card account-card" id="accountSection">
-      <div class="card-header">
-        <h3 class="card-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-          Account
-        </h3>
-      </div>
-      <!-- Logged Out State -->
-      <div class="account-logged-out" id="accountLoggedOut">
-        <div class="account-message">
-          <span class="account-message-text">Sign in to track your credits and sync settings</span>
-        </div>
-        <button class="account-signin-btn" id="signInBtn">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
-            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
-            <polyline points="10 17 15 12 10 7"/>
-            <line x1="15" y1="12" x2="3" y2="12"/>
-          </svg>
-          Sign In
-        </button>
-      </div>
-      <!-- Logged In State -->
-      <div class="account-logged-in" id="accountLoggedIn" style="display: none;">
-        <div class="account-user">
-          <div class="account-avatar" id="accountAvatar">
+      <!-- Account Section -->
+      <div class="section account-section" id="accountSection">
+        <!-- Logged Out State -->
+        <div class="account-logged-out" id="accountLoggedOut">
+          <div class="account-prompt">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
               <circle cx="12" cy="7" r="4"/>
             </svg>
+            <span>Sign in to track credits</span>
           </div>
-          <div class="account-info">
-            <span class="account-name" id="accountName">User</span>
-            <span class="account-email" id="accountEmail">user@example.com</span>
-          </div>
+          <button class="signin-btn" id="signInBtn">Sign In</button>
         </div>
-        <div class="account-plan">
-          <span class="account-plan-badge" id="accountPlanBadge">Free</span>
-          <a href="https://astonishing-youthfulness-production.up.railway.app/billing" target="_blank" class="account-upgrade-link" id="accountUpgradeLink">Upgrade</a>
-        </div>
-        <div class="account-actions">
-          <a href="https://astonishing-youthfulness-production.up.railway.app/dashboard" target="_blank" class="account-action-btn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-              <rect x="3" y="3" width="7" height="7"/>
-              <rect x="14" y="3" width="7" height="7"/>
-              <rect x="14" y="14" width="7" height="7"/>
-              <rect x="3" y="14" width="7" height="7"/>
-            </svg>
-            Dashboard
-          </a>
-          <button class="account-action-btn logout-btn" id="signOutBtn">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-              <polyline points="16 17 21 12 16 7"/>
-              <line x1="21" y1="12" x2="9" y2="12"/>
-            </svg>
-            Sign Out
-          </button>
-        </div>
-      </div>
-    </section>
 
-    <!-- Credits Section -->
-    <section class="card credit-card" id="creditSection">
-      <div class="card-header">
-        <h3 class="card-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"/>
-            <path d="M12 6v6l4 2"/>
-          </svg>
-          Credits
-        </h3>
-        <a href="https://astonishing-youthfulness-production.up.railway.app/pricing" target="_blank" class="credit-link" id="getCreditsLink">Get More</a>
-      </div>
-      <div class="credit-info-container" id="creditInfoContainer">
-        <div class="credit-loading" id="creditLoading">Loading...</div>
-        <div class="credit-content" id="creditContent" style="display: none;">
-          <div class="credit-balance">
-            <span class="credit-value" id="creditValue">0</span>
-            <span class="credit-label">Available</span>
-          </div>
-          <div class="credit-progress">
-            <div class="credit-progress-track">
-              <div class="credit-progress-fill" id="creditProgressFill"></div>
+        <!-- Logged In State -->
+        <div class="account-logged-in" id="accountLoggedIn" style="display: none;">
+          <div class="account-row">
+            <div class="account-avatar" id="accountAvatar">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
+                <circle cx="12" cy="7" r="4"/>
+              </svg>
             </div>
-            <div class="credit-progress-labels">
-              <span id="creditUsed">0 used</span>
-              <span id="creditPlan">Free Plan</span>
+            <div class="account-info">
+              <span class="account-name" id="accountName">User</span>
+              <span class="account-plan" id="accountPlanBadge">Free</span>
+            </div>
+            <div class="account-credits">
+              <span class="credits-number" id="creditValue">0</span>
+              <span class="credits-label">credits</span>
             </div>
           </div>
-          <div class="credit-bonus" id="creditBonus" style="display: none;">
-            <span class="credit-bonus-text" id="creditBonusText">+0 bonus available</span>
+          <div class="account-actions">
+            <a href="https://astonishing-youthfulness-production.up.railway.app/dashboard" target="_blank" class="action-link">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="7" height="7"/>
+                <rect x="14" y="3" width="7" height="7"/>
+                <rect x="14" y="14" width="7" height="7"/>
+                <rect x="3" y="14" width="7" height="7"/>
+              </svg>
+              Dashboard
+            </a>
+            <a href="https://astonishing-youthfulness-production.up.railway.app/billing" target="_blank" class="action-link" id="accountUpgradeLink">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+                <path d="M2 17l10 5 10-5"/>
+                <path d="M2 12l10 5 10-5"/>
+              </svg>
+              Upgrade
+            </a>
+            <button class="action-link signout" id="signOutBtn">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+                <polyline points="16 17 21 12 16 7"/>
+                <line x1="21" y1="12" x2="9" y2="12"/>
+              </svg>
+              Sign Out
+            </button>
           </div>
         </div>
-        <div class="credit-error" id="creditError" style="display: none;">
-          <span class="credit-error-text">Sign in above to view credits</span>
-        </div>
       </div>
-    </section>
+    </main>
 
     <!-- Footer -->
-    <footer class="popup-footer">
-      <a href="#" class="footer-btn" id="settingsLink">
+    <footer class="footer">
+      <a href="#" class="footer-link" id="settingsLink">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="3"/>
           <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
         </svg>
         Settings
       </a>
-      <a href="https://astonishing-youthfulness-production.up.railway.app" target="_blank" class="footer-btn">
+      <a href="https://astonishing-youthfulness-production.up.railway.app" target="_blank" class="footer-link">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/>
           <line x1="2" y1="12" x2="22" y2="12"/>

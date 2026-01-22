@@ -12,6 +12,7 @@ export class AudioFilter {
   private checkIntervalId: number | null = null;
   private isMuted = false;
   private isFading = false;
+  private isBleeping = false; // Track if bleep should be playing
 
   // Web Audio API for smooth volume control
   private audioContext: AudioContext | null = null;
@@ -29,12 +30,26 @@ export class AudioFilter {
   private onMuteStart?: (interval: MuteInterval) => void;
   private onMuteEnd?: () => void;
 
+  // Bound event handlers for cleanup
+  private boundHandleVideoPause: () => void;
+  private boundHandleVideoPlay: () => void;
+  private boundHandleVideoEnded: () => void;
+  private boundHandleVideoSeeking: () => void;
+  private boundHandleVisibilityChange: () => void;
+
   constructor(options?: {
     onMuteStart?: (interval: MuteInterval) => void;
     onMuteEnd?: () => void;
   }) {
     this.onMuteStart = options?.onMuteStart;
     this.onMuteEnd = options?.onMuteEnd;
+
+    // Bind event handlers
+    this.boundHandleVideoPause = this.handleVideoPause.bind(this);
+    this.boundHandleVideoPlay = this.handleVideoPlay.bind(this);
+    this.boundHandleVideoEnded = this.handleVideoEnded.bind(this);
+    this.boundHandleVideoSeeking = this.handleVideoSeeking.bind(this);
+    this.boundHandleVisibilityChange = this.handleVisibilityChange.bind(this);
   }
 
   // Initialize with video element and mute intervals
@@ -78,10 +93,88 @@ export class AudioFilter {
         this.bleepGain.connect(this.audioContext.destination);
       }
 
+      // Add video event listeners for bleep control
+      this.addVideoEventListeners();
+
       console.log('[SafePlay] Audio context initialized with smooth fading');
     } catch (error) {
       console.error('[SafePlay] Failed to initialize audio context:', error);
       // Fallback: will use video.muted instead
+    }
+  }
+
+  // Add event listeners for video state changes
+  private addVideoEventListeners(): void {
+    if (!this.video) return;
+
+    this.video.addEventListener('pause', this.boundHandleVideoPause);
+    this.video.addEventListener('play', this.boundHandleVideoPlay);
+    this.video.addEventListener('ended', this.boundHandleVideoEnded);
+    this.video.addEventListener('seeking', this.boundHandleVideoSeeking);
+    document.addEventListener('visibilitychange', this.boundHandleVisibilityChange);
+  }
+
+  // Remove event listeners
+  private removeVideoEventListeners(): void {
+    if (this.video) {
+      this.video.removeEventListener('pause', this.boundHandleVideoPause);
+      this.video.removeEventListener('play', this.boundHandleVideoPlay);
+      this.video.removeEventListener('ended', this.boundHandleVideoEnded);
+      this.video.removeEventListener('seeking', this.boundHandleVideoSeeking);
+    }
+    document.removeEventListener('visibilitychange', this.boundHandleVisibilityChange);
+  }
+
+  // Handle video pause - stop bleep immediately
+  private handleVideoPause(): void {
+    if (this.isBleeping) {
+      this.stopBleep();
+    }
+  }
+
+  // Handle video play - resume bleep if we're in a mute interval
+  private handleVideoPlay(): void {
+    if (!this.video || !this.isActive) return;
+
+    // Check if we're currently in a mute interval
+    const currentTime = this.video.currentTime;
+    const activeInterval = this.findActiveInterval(currentTime);
+
+    if (activeInterval && this.isMuted && this.filterMode === 'bleep') {
+      this.startBleep();
+    }
+  }
+
+  // Handle video ended - stop everything
+  private handleVideoEnded(): void {
+    if (this.isBleeping) {
+      this.stopBleep();
+    }
+    this.isMuted = false;
+    this.isBleeping = false;
+  }
+
+  // Handle seeking - stop bleep during seek, checkCurrentTime will restart if needed
+  private handleVideoSeeking(): void {
+    if (this.isBleeping) {
+      this.stopBleep();
+    }
+  }
+
+  // Handle tab visibility change
+  // Note: We do NOT stop the bleep when tab is hidden because the user
+  // may switch tabs while still wanting to hear the video with profanity filtered.
+  // The bleep should only stop when the video is actually paused.
+  private handleVisibilityChange(): void {
+    // When tab becomes visible again, check if we need to resume bleep
+    // (in case browser throttled audio while hidden)
+    if (!document.hidden && this.video && !this.video.paused && this.isMuted && this.filterMode === 'bleep') {
+      const currentTime = this.video.currentTime;
+      const activeInterval = this.findActiveInterval(currentTime);
+
+      if (activeInterval && !this.bleepOscillator) {
+        this.startBleep();
+      }
     }
   }
 
@@ -113,6 +206,7 @@ export class AudioFilter {
     }
 
     this.isActive = false;
+    this.isBleeping = false;
 
     if (this.checkIntervalId !== null) {
       clearInterval(this.checkIntervalId);
@@ -124,7 +218,11 @@ export class AudioFilter {
 
     // Stop bleep if playing
     if (this.bleepOscillator) {
-      this.bleepOscillator.stop();
+      try {
+        this.bleepOscillator.stop();
+      } catch (e) {
+        // Already stopped
+      }
       this.bleepOscillator = null;
     }
 
@@ -134,6 +232,9 @@ export class AudioFilter {
   // Clean up resources
   destroy(): void {
     this.stop();
+
+    // Remove event listeners
+    this.removeVideoEventListeners();
 
     if (this.sourceNode) {
       this.sourceNode.disconnect();
@@ -154,6 +255,11 @@ export class AudioFilter {
   // Check if current time falls within or is approaching any mute interval
   private checkCurrentTime(): void {
     if (!this.video || !this.isActive) {
+      return;
+    }
+
+    // Don't process if video is paused, ended, or not ready
+    if (this.video.paused || this.video.ended || this.video.readyState < 2) {
       return;
     }
 
@@ -300,6 +406,16 @@ export class AudioFilter {
   private startBleep(): void {
     if (!this.audioContext || !this.bleepGain) return;
 
+    // Don't start bleep if video is paused or ended
+    // Note: We DO allow bleep when tab is hidden - user may switch tabs
+    // while still wanting to hear filtered audio
+    if (this.video && (this.video.paused || this.video.ended)) return;
+
+    // Don't start if already bleeping
+    if (this.bleepOscillator) return;
+
+    this.isBleeping = true;
+
     // Resume audio context if suspended
     if (this.audioContext.state === 'suspended') {
       this.audioContext.resume();
@@ -339,6 +455,8 @@ export class AudioFilter {
   }
 
   private stopBleep(): void {
+    this.isBleeping = false;
+
     if (!this.audioContext || !this.bleepGain || !this.bleepOscillator) return;
 
     // Smooth release to avoid clicks
