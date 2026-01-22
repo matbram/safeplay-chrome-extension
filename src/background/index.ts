@@ -665,14 +665,6 @@ chrome.runtime.onMessageExternal.addListener(
           userId: message.userId,
         });
 
-        // Validate refresh token before storing
-        if (!message.refreshToken) {
-          logError('WARNING: No refreshToken in AUTH_TOKEN message!');
-        } else if (String(message.refreshToken).length < 50) {
-          logError('WARNING: refreshToken appears too short:', String(message.refreshToken).length, 'chars');
-          logError('Expected 100+ chars, got:', message.refreshToken);
-        }
-
         import('../utils/storage').then(async ({
           setAuthToken,
           setUserId,

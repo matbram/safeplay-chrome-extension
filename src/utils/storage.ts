@@ -52,124 +52,50 @@ export async function setPreferences(
   return updated;
 }
 
-// Refresh the auth token using the refresh token
+// Refresh the auth token by getting fresh session from website
 export async function refreshAuthToken(): Promise<string | null> {
-  const result = await chrome.storage.local.get(STORAGE_KEYS.REFRESH_TOKEN);
-  const refreshToken = result[STORAGE_KEYS.REFRESH_TOKEN];
-
-  // Detailed logging to diagnose token issues
-  console.log('[SafePlay Storage] Refresh token retrieval:', {
-    hasToken: !!refreshToken,
-    tokenLength: refreshToken?.length,
-    tokenPreview: refreshToken ? `${refreshToken.substring(0, 10)}...${refreshToken.substring(refreshToken.length - 10)}` : 'none',
-  });
-
-  if (!refreshToken) {
-    console.log('[SafePlay Storage] No refresh token available');
-    return null;
-  }
-
-  // Validate refresh token length - Supabase tokens are 100+ chars
-  if (refreshToken.length < 50) {
-    console.error('[SafePlay Storage] Refresh token appears invalid (too short):', refreshToken.length, 'chars');
-    console.error('[SafePlay Storage] This suggests the wrong value was stored as refresh token');
-    // Don't clear - let user retry login manually
-    return null;
-  }
-
   try {
-    console.log('[SafePlay Storage] Attempting to refresh auth token...');
-    const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
+    console.log('[SafePlay Storage] Fetching fresh session from website...');
+
+    const extensionId = chrome.runtime.id;
+    const response = await fetch(
+      `${API_BASE_URL}/api/extension/session?extensionId=${extensionId}`,
+      {
+        method: 'GET',
+        credentials: 'include',  // Include cookies for session
+      }
+    );
 
     if (!response.ok) {
-      const errorText = await response.text();
-      let errorData: Record<string, unknown> = {};
-      try {
-        errorData = JSON.parse(errorText);
-      } catch {
-        errorData = { rawError: errorText };
-      }
-
-      console.log('[SafePlay Storage] Token refresh failed:', {
-        status: response.status,
-        error: errorData.error || errorData.message || errorText,
-        code: errorData.code || errorData.error_code,
-      });
-
-      // Only clear access token on failure - keep refresh token for potential retry
-      // unless it's an "already used" error which means the token is permanently invalid
-      const errorCode = String(errorData.code || errorData.error_code || '');
-      const errorMsg = String(errorData.error || errorData.message || '');
-      const isTokenInvalid = errorCode.includes('already_used') ||
-                            errorMsg.includes('Already Used') ||
-                            errorCode.includes('invalid') ||
-                            response.status === 400;
-
-      if (isTokenInvalid) {
-        console.log('[SafePlay Storage] Refresh token is invalid, clearing all auth data');
-        await chrome.storage.local.remove([
-          STORAGE_KEYS.AUTH_TOKEN,
-          STORAGE_KEYS.REFRESH_TOKEN,
-          STORAGE_KEYS.TOKEN_EXPIRES_AT,
-        ]);
-      } else {
-        // For other errors (rate limit, server error), only clear access token
-        console.log('[SafePlay Storage] Clearing only access token, keeping refresh token for retry');
-        await chrome.storage.local.remove([STORAGE_KEYS.AUTH_TOKEN]);
-      }
+      console.log('[SafePlay Storage] Session fetch failed:', response.status);
       return null;
     }
 
     const data = await response.json();
 
-    // Handle both snake_case and camelCase response formats
-    const newAccessToken = data.access_token || data.token;
-    const newRefreshToken = data.refresh_token || data.refreshToken;
-    const newExpiresAt = data.expires_at || (data.expiresAt ? Math.floor(data.expiresAt / 1000) : null);
-
-    console.log('[SafePlay Storage] Refresh response:', {
-      hasAccessToken: !!newAccessToken,
-      hasRefreshToken: !!newRefreshToken,
-      refreshTokenLength: newRefreshToken?.length,
-      expiresAt: newExpiresAt,
-      expiresAtSource: data.expires_at ? 'expires_at (seconds)' : 'expiresAt (converted from ms)',
-    });
-
-    // Validate new refresh token before storing
-    if (!newRefreshToken || newRefreshToken.length < 50) {
-      console.error('[SafePlay Storage] New refresh token is missing or invalid, keeping old one');
-      // Store access token but keep old refresh token
-      if (newAccessToken) {
-        await chrome.storage.local.set({
-          [STORAGE_KEYS.AUTH_TOKEN]: newAccessToken,
-          ...(newExpiresAt && { [STORAGE_KEYS.TOKEN_EXPIRES_AT]: newExpiresAt }),
-        });
-      }
-      return newAccessToken || null;
+    if (!data.authenticated) {
+      console.log('[SafePlay Storage] User not authenticated on website');
+      // Clear local tokens since website session is gone
+      await chrome.storage.local.remove([
+        STORAGE_KEYS.AUTH_TOKEN,
+        STORAGE_KEYS.REFRESH_TOKEN,
+        STORAGE_KEYS.TOKEN_EXPIRES_AT,
+      ]);
+      return null;
     }
 
-    // Store new tokens
+    console.log('[SafePlay Storage] Got fresh session from website');
+
+    // Store the new tokens
     await chrome.storage.local.set({
-      [STORAGE_KEYS.AUTH_TOKEN]: newAccessToken,
-      [STORAGE_KEYS.REFRESH_TOKEN]: newRefreshToken,
-      ...(newExpiresAt && { [STORAGE_KEYS.TOKEN_EXPIRES_AT]: newExpiresAt }),
+      [STORAGE_KEYS.AUTH_TOKEN]: data.token,
+      [STORAGE_KEYS.REFRESH_TOKEN]: data.refreshToken,
+      [STORAGE_KEYS.TOKEN_EXPIRES_AT]: Math.floor(data.expiresAt / 1000), // Convert to seconds
     });
 
-    console.log('[SafePlay Storage] Token refreshed successfully, new refresh token stored');
-    return newAccessToken;
+    return data.token;
   } catch (error) {
-    // Network errors (Failed to fetch) are expected when offline or server unreachable
-    // Don't clear auth data - keep tokens for retry when network is back
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
-      console.log('[SafePlay Storage] Token refresh failed (network unavailable), keeping tokens for retry');
-    } else {
-      console.warn('[SafePlay Storage] Token refresh error:', error);
-    }
+    console.log('[SafePlay Storage] Session refresh error:', error);
     return null;
   }
 }
@@ -269,13 +195,6 @@ export async function setAuthToken(token: string, refreshToken?: string, expires
     expiresAt,
     expiresAtType: typeof expiresAt,
   });
-
-  // Validate refresh token before storing
-  if (refreshToken && refreshToken.length < 50) {
-    console.error('[SafePlay Storage] WARNING: Refresh token appears too short:', refreshToken.length, 'chars');
-    console.error('[SafePlay Storage] Expected 100+ chars for a valid Supabase refresh token');
-    console.error('[SafePlay Storage] Received value:', refreshToken);
-  }
 
   const data: Record<string, unknown> = {
     [STORAGE_KEYS.AUTH_TOKEN]: token,
