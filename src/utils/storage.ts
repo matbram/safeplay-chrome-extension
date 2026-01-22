@@ -55,26 +55,43 @@ export async function setPreferences(
 // Refresh the auth token by getting fresh session from website
 export async function refreshAuthToken(): Promise<string | null> {
   try {
-    console.log('[SafePlay Storage] Fetching fresh session from website...');
-
     const extensionId = chrome.runtime.id;
-    const response = await fetch(
-      `${API_BASE_URL}/api/extension/session?extensionId=${extensionId}`,
-      {
-        method: 'GET',
-        credentials: 'include',  // Include cookies for session
-      }
-    );
+    const url = `${API_BASE_URL}/api/extension/session?extensionId=${extensionId}`;
+
+    console.log('[SafePlay Storage] 🔄 Refreshing token via website session...');
+    console.log('[SafePlay Storage] Endpoint:', url);
+
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',  // Include cookies for session
+    });
+
+    console.log('[SafePlay Storage] Response status:', response.status);
 
     if (!response.ok) {
-      console.log('[SafePlay Storage] Session fetch failed:', response.status);
+      const errorText = await response.text();
+      console.log('[SafePlay Storage] ❌ Session fetch failed:', {
+        status: response.status,
+        statusText: response.statusText,
+        body: errorText.substring(0, 200),
+      });
       return null;
     }
 
     const data = await response.json();
 
+    console.log('[SafePlay Storage] Response data:', {
+      authenticated: data.authenticated,
+      hasToken: !!data.token,
+      tokenLength: data.token?.length,
+      hasRefreshToken: !!data.refreshToken,
+      refreshTokenLength: data.refreshToken?.length,
+      expiresAt: data.expiresAt,
+      expiresAtDate: data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
+    });
+
     if (!data.authenticated) {
-      console.log('[SafePlay Storage] User not authenticated on website');
+      console.log('[SafePlay Storage] ❌ User not authenticated on website - clearing local tokens');
       // Clear local tokens since website session is gone
       await chrome.storage.local.remove([
         STORAGE_KEYS.AUTH_TOKEN,
@@ -84,18 +101,20 @@ export async function refreshAuthToken(): Promise<string | null> {
       return null;
     }
 
-    console.log('[SafePlay Storage] Got fresh session from website');
-
     // Store the new tokens
+    const expiresAtSeconds = Math.floor(data.expiresAt / 1000);
     await chrome.storage.local.set({
       [STORAGE_KEYS.AUTH_TOKEN]: data.token,
       [STORAGE_KEYS.REFRESH_TOKEN]: data.refreshToken,
-      [STORAGE_KEYS.TOKEN_EXPIRES_AT]: Math.floor(data.expiresAt / 1000), // Convert to seconds
+      [STORAGE_KEYS.TOKEN_EXPIRES_AT]: expiresAtSeconds,
     });
+
+    console.log('[SafePlay Storage] ✅ Token refreshed successfully via website session');
+    console.log('[SafePlay Storage] New token expires:', new Date(expiresAtSeconds * 1000).toISOString());
 
     return data.token;
   } catch (error) {
-    console.log('[SafePlay Storage] Session refresh error:', error);
+    console.log('[SafePlay Storage] ❌ Session refresh error:', error);
     return null;
   }
 }
