@@ -651,12 +651,28 @@ chrome.runtime.onMessageExternal.addListener(
     if (allowedOrigins.includes(sender.origin || '')) {
       if (message.type === 'AUTH_TOKEN') {
         log('Received AUTH_TOKEN from website');
-        log('Message contains:', {
+        // Detailed logging to diagnose token issues
+        log('Message token details:', {
           hasToken: !!message.token,
+          tokenLength: message.token?.length,
           hasRefreshToken: !!message.refreshToken,
+          refreshTokenLength: message.refreshToken?.length,
+          refreshTokenPreview: message.refreshToken ? `${String(message.refreshToken).substring(0, 15)}...` : 'none',
           hasExpiresAt: !!message.expiresAt,
+          expiresAt: message.expiresAt,
+          expiresAtType: typeof message.expiresAt,
           hasUserId: !!message.userId,
+          userId: message.userId,
         });
+
+        // Validate refresh token before storing
+        if (!message.refreshToken) {
+          logError('WARNING: No refreshToken in AUTH_TOKEN message!');
+        } else if (String(message.refreshToken).length < 50) {
+          logError('WARNING: refreshToken appears too short:', String(message.refreshToken).length, 'chars');
+          logError('Expected 100+ chars, got:', message.refreshToken);
+        }
+
         import('../utils/storage').then(async ({
           setAuthToken,
           setUserId,
@@ -668,10 +684,11 @@ chrome.runtime.onMessageExternal.addListener(
         }) => {
           try {
             // Store auth data including refresh token and expiry
+            // Note: setAuthToken will normalize expiresAt to seconds if it's in milliseconds
             await setAuthToken(
               message.token,
               message.refreshToken,  // Refresh token for auto-refresh
-              message.expiresAt      // Token expiry timestamp (in seconds)
+              message.expiresAt      // Token expiry timestamp (auto-detected: seconds or milliseconds)
             );
 
             if (message.userId) {
