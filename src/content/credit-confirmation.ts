@@ -478,6 +478,14 @@ export class CreditConfirmation {
   }
 }
 
+// Debug: Allow triggering error notification from console for testing
+// Usage: document.dispatchEvent(new CustomEvent('safeplay-test-error'))
+if (typeof document !== 'undefined') {
+  document.addEventListener('safeplay-test-error', () => {
+    showFilterErrorNotification();
+  });
+}
+
 // Helper function to show a filter error notification
 export function showFilterErrorNotification(): void {
   const overlay = document.createElement('div');
