@@ -478,6 +478,68 @@ export class CreditConfirmation {
   }
 }
 
+// Helper function to show a filter error notification
+export function showFilterErrorNotification(): void {
+  const overlay = document.createElement('div');
+  // Use inline styles to avoid conflicts with CreditConfirmation styles
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999999;
+    font-family: 'Roboto', 'YouTube Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  `;
+  overlay.innerHTML = `
+    <div tabindex="-1" role="dialog" style="background: #212121; border: 1px solid #3F3F3F; border-radius: 12px; padding: 24px; max-width: 380px; width: 90%; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); outline: none;">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+        <div style="width: 40px; height: 40px; border-radius: 50%; background: #FF4E45; display: flex; align-items: center; justify-content: center; color: white; flex-shrink: 0;">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
+            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/>
+          </svg>
+        </div>
+        <h2 style="margin: 0; font-size: 18px; font-weight: 600; color: #F1F1F1;">Having Trouble Filtering</h2>
+      </div>
+      <div style="margin-bottom: 24px;">
+        <p style="color: #AAAAAA; font-size: 14px; line-height: 1.5; margin: 0;">
+          We're experiencing some difficulty censoring this video right now. Our team has been notified and is working on it.
+        </p>
+        <p style="color: #888888; font-size: 14px; line-height: 1.5; margin: 12px 0 0 0;">
+          We'll notify you when the video is ready to be filtered. You can also try again later by clicking the Retry button.
+        </p>
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: flex-end;">
+        <button data-action="close" style="padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; background: #FF0000; color: white;">
+          Got It
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  // Set up close handlers
+  const closeDialog = () => {
+    overlay.remove();
+  };
+
+  overlay.querySelector('[data-action="close"]')?.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  document.addEventListener('keydown', function escHandler(e) {
+    if (e.key === 'Escape') {
+      closeDialog();
+      document.removeEventListener('keydown', escHandler);
+    }
+  });
+}
+
 // Helper function to show a quick "not authenticated" message
 export function showAuthRequiredMessage(): void {
   const overlay = document.createElement('div');
