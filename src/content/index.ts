@@ -3,7 +3,7 @@ import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
 import { SmoothProgressAnimator } from './smooth-progress';
 import { CaptionFilter } from './caption-filter';
-import { CreditConfirmation, showAuthRequiredMessage } from './credit-confirmation';
+import { CreditConfirmation, showAuthRequiredMessage, showFilterErrorNotification } from './credit-confirmation';
 import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo, PreviewData } from '../types';
 import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
 import './styles.css';
@@ -264,6 +264,8 @@ class SafePlayContentScript {
       });
       this.isProcessing = false;
       this.filteringVideoId = null;
+      // Show notification about the filtering issue
+      showFilterErrorNotification();
     }
   }
 
@@ -344,6 +346,8 @@ class SafePlayContentScript {
             error: (error || 'Failed to filter video') + ' - Click to retry',
             videoId: youtubeId,
           });
+          // Show notification about the filtering issue
+          showFilterErrorNotification();
         }
         // Resume video since we can't filter
         if (this.videoWasPlaying) {
@@ -391,6 +395,8 @@ class SafePlayContentScript {
       }
       this.isProcessing = false;
       this.filteringVideoId = null;
+      // Show notification about the filtering issue
+      showFilterErrorNotification();
     }
   }
 
@@ -535,6 +541,8 @@ class SafePlayContentScript {
         });
         this.isProcessing = false;
         this.filteringVideoId = null;
+        // Show notification about the filtering issue
+        showFilterErrorNotification();
         return;
       }
     }
@@ -552,6 +560,8 @@ class SafePlayContentScript {
     });
     this.isProcessing = false;
     this.filteringVideoId = null;
+    // Show notification about the filtering issue
+    showFilterErrorNotification();
   }
 
   // Apply the filter using the transcript
