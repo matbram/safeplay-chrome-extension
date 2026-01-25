@@ -870,21 +870,3 @@ if (document.readyState === 'loading') {
   const safeplay = new SafePlayContentScript();
   safeplay.initialize();
 }
-
-// Debug: Add a test button to trigger error notification (only when DEBUG is true)
-if (DEBUG) {
-  const addTestButton = () => {
-    if (document.getElementById('safeplay-test-btn')) return;
-    const testBtn = document.createElement('button');
-    testBtn.id = 'safeplay-test-btn';
-    testBtn.textContent = 'Test Error';
-    testBtn.style.cssText = 'position:fixed;bottom:10px;right:10px;z-index:999999;padding:8px 12px;background:#ff4e45;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-family:sans-serif;';
-    testBtn.addEventListener('click', () => showFilterErrorNotification());
-    document.body.appendChild(testBtn);
-  };
-  if (document.body) {
-    addTestButton();
-  } else {
-    document.addEventListener('DOMContentLoaded', addTestButton);
-  }
-}
