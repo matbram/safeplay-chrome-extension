@@ -871,19 +871,20 @@ if (document.readyState === 'loading') {
   safeplay.initialize();
 }
 
-// Debug: Inject test function into page context
-// Usage in console: window.testSafePlayError()
-const testScript = document.createElement('script');
-testScript.textContent = `
-  window.testSafePlayError = function() {
-    window.dispatchEvent(new CustomEvent('safeplay-test-error'));
-    console.log('SafePlay: Test error triggered');
+// Debug: Add a test button to trigger error notification (only when DEBUG is true)
+if (DEBUG) {
+  const addTestButton = () => {
+    if (document.getElementById('safeplay-test-btn')) return;
+    const testBtn = document.createElement('button');
+    testBtn.id = 'safeplay-test-btn';
+    testBtn.textContent = 'Test Error';
+    testBtn.style.cssText = 'position:fixed;bottom:10px;right:10px;z-index:999999;padding:8px 12px;background:#ff4e45;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-family:sans-serif;';
+    testBtn.addEventListener('click', () => showFilterErrorNotification());
+    document.body.appendChild(testBtn);
   };
-`;
-(document.head || document.documentElement).appendChild(testScript);
-testScript.remove();
-
-// Listen for test event from page context
-window.addEventListener('safeplay-test-error', () => {
-  showFilterErrorNotification();
-});
+  if (document.body) {
+    addTestButton();
+  } else {
+    document.addEventListener('DOMContentLoaded', addTestButton);
+  }
+}
