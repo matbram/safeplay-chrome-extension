@@ -870,3 +870,20 @@ if (document.readyState === 'loading') {
   const safeplay = new SafePlayContentScript();
   safeplay.initialize();
 }
+
+// Debug: Inject test function into page context
+// Usage in console: window.testSafePlayError()
+const testScript = document.createElement('script');
+testScript.textContent = `
+  window.testSafePlayError = function() {
+    window.dispatchEvent(new CustomEvent('safeplay-test-error'));
+    console.log('SafePlay: Test error triggered');
+  };
+`;
+(document.head || document.documentElement).appendChild(testScript);
+testScript.remove();
+
+// Listen for test event from page context
+window.addEventListener('safeplay-test-error', () => {
+  showFilterErrorNotification();
+});

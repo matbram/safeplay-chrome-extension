@@ -478,21 +478,6 @@ export class CreditConfirmation {
   }
 }
 
-// Debug: Allow triggering error notification from console for testing
-// Injects into page context so console can call window.testSafePlayError()
-if (typeof document !== 'undefined') {
-  // Listen for the test event from the page
-  window.addEventListener('safeplay-test-error', () => {
-    showFilterErrorNotification();
-  });
-
-  // Inject a script that exposes the test function to the page
-  const script = document.createElement('script');
-  script.textContent = `window.testSafePlayError = function() { window.dispatchEvent(new Event('safeplay-test-error')); console.log('SafePlay: Test error notification triggered'); };`;
-  document.documentElement.appendChild(script);
-  script.remove();
-}
-
 // Helper function to show a filter error notification
 export function showFilterErrorNotification(): void {
   const overlay = document.createElement('div');
