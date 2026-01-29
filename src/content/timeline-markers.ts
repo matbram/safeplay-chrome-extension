@@ -186,12 +186,12 @@ export class TimelineMarkers {
     const endTime = Math.min(interval.end, videoDuration);
     const widthPercent = ((endTime - interval.start) / videoDuration) * 100;
 
-    // Minimum width of 1.5% for easy interaction (about 15px on a 1000px bar)
-    const minWidth = Math.max(widthPercent, 1.5);
+    // Minimum width of 0.8% for subtle but visible markers
+    const minWidth = Math.max(widthPercent, 0.8);
 
     // Center the marker on the profanity start time if we expanded it
-    const adjustedLeft = widthPercent < 1.5
-      ? Math.max(0, leftPercent - (1.5 - widthPercent) / 2)
+    const adjustedLeft = widthPercent < 0.8
+      ? Math.max(0, leftPercent - (0.8 - widthPercent) / 2)
       : leftPercent;
 
     // Use white for all markers - provides good contrast against YouTube's red progress bar
@@ -199,7 +199,7 @@ export class TimelineMarkers {
       position: absolute;
       left: ${adjustedLeft}%;
       width: ${minWidth}%;
-      height: 12px;
+      height: 6px;
       bottom: 0;
       background-color: #FFFFFF;
       opacity: 0.9;
