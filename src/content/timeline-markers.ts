@@ -199,7 +199,7 @@ export class TimelineMarkers {
       position: absolute;
       left: ${adjustedLeft}%;
       width: ${minWidth}%;
-      height: 300%;
+      height: 12px;
       bottom: 0;
       background-color: #FFFFFF;
       opacity: 0.9;

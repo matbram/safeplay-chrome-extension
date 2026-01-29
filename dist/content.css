@@ -425,7 +425,7 @@ ytd-shorts .safeplay-filter-btn {
 /* Individual marker on the timeline - sits on TOP of progress bar */
 .safeplay-timeline-marker {
   position: absolute;
-  height: 300%;
+  height: 12px;
   bottom: 0;
   opacity: 0.9;
   border-radius: 2px;
