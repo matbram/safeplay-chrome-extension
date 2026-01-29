@@ -73,16 +73,21 @@ export class TimelineMarkers {
 
   /**
    * Find YouTube's progress bar element
-   * Uses multiple selectors for robustness
-   * We target .ytp-chapter-hover-container which is the parent container
-   * that holds both the progress bar AND the timed-markers-container
+   * We need to find the parent of .ytp-timed-markers-container to be at the same level
    */
   private findProgressBar(): HTMLElement | null {
-    // We need to inject into the chapter-hover-container to be at the same
-    // stacking level as ytp-timed-markers-container (which has z-index: 40)
+    // First, try to find where ytp-timed-markers-container lives
+    // and inject as a sibling to it
+    const timedMarkersContainer = document.querySelector<HTMLElement>('.ytp-timed-markers-container');
+    if (timedMarkersContainer?.parentElement) {
+      log('Found ytp-timed-markers-container, using its parent:', timedMarkersContainer.parentElement.className);
+      return timedMarkersContainer.parentElement;
+    }
+
+    // Fallback selectors
     const selectors = [
-      '.ytp-chapter-hover-container',
       '.ytp-progress-bar-container',
+      '.ytp-chapter-hover-container',
       '.ytp-progress-bar',
       '#movie_player .ytp-progress-bar-container',
     ];
