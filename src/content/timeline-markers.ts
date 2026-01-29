@@ -74,15 +74,16 @@ export class TimelineMarkers {
   /**
    * Find YouTube's progress bar element
    * Uses multiple selectors for robustness
-   * We target .ytp-progress-list which contains the actual progress segments
+   * We target .ytp-chapter-hover-container which is the parent container
+   * that holds both the progress bar AND the timed-markers-container
    */
   private findProgressBar(): HTMLElement | null {
-    // Selectors for YouTube's progress bar (in order of preference)
-    // .ytp-progress-list is where the colored progress segments live
+    // We need to inject into the chapter-hover-container to be at the same
+    // stacking level as ytp-timed-markers-container (which has z-index: 40)
     const selectors = [
-      '.ytp-progress-list',
-      '.ytp-progress-bar',
+      '.ytp-chapter-hover-container',
       '.ytp-progress-bar-container',
+      '.ytp-progress-bar',
       '#movie_player .ytp-progress-bar-container',
     ];
 
