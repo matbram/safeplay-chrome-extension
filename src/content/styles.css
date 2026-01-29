@@ -404,3 +404,83 @@ ytd-shorts .safeplay-filter-btn {
   background: rgba(255, 255, 255, 0.8);
   transition: width 0.15s ease-out;
 }
+
+/* ================================================
+   Timeline Markers - Profanity location indicators
+   ================================================ */
+
+/* Overlay container on YouTube's progress bar */
+.safeplay-timeline-overlay {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 100%;
+  pointer-events: none;
+  z-index: 30;
+}
+
+/* Individual marker on the timeline */
+.safeplay-timeline-marker {
+  position: absolute;
+  height: 100%;
+  opacity: 0.7;
+  border-radius: 1px;
+  pointer-events: auto;
+  cursor: pointer;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.safeplay-timeline-marker:hover {
+  opacity: 1 !important;
+  transform: scaleY(1.5);
+  z-index: 31;
+}
+
+/* Severity color classes */
+.safeplay-severity-mild {
+  background-color: #FFA500; /* Orange */
+}
+
+.safeplay-severity-moderate {
+  background-color: #FF6B6B; /* Red */
+}
+
+.safeplay-severity-severe {
+  background-color: #DC143C; /* Crimson */
+}
+
+.safeplay-severity-religious {
+  background-color: #9370DB; /* Medium Purple */
+}
+
+/* Ensure markers are visible on YouTube's dark progress bar */
+.ytp-progress-bar-container .safeplay-timeline-overlay {
+  z-index: 32;
+}
+
+/* When hovering over the progress bar, make markers more prominent */
+.ytp-chrome-bottom:hover .safeplay-timeline-marker {
+  opacity: 0.85;
+}
+
+/* Animation for markers appearing */
+@keyframes safeplay-marker-appear {
+  from {
+    opacity: 0;
+    transform: scaleY(0);
+  }
+  to {
+    opacity: 0.7;
+    transform: scaleY(1);
+  }
+}
+
+.safeplay-timeline-marker {
+  animation: safeplay-marker-appear 0.3s ease-out forwards;
+}
+
+/* Marker tooltip styling (using native title, but prepared for custom tooltip) */
+.safeplay-timeline-marker[title] {
+  position: relative;
+}

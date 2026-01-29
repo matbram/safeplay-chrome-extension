@@ -3,6 +3,7 @@ import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
 import { SmoothProgressAnimator } from './smooth-progress';
 import { CaptionFilter } from './caption-filter';
+import { TimelineMarkers } from './timeline-markers';
 import { CreditConfirmation, showAuthRequiredMessage, showFilterErrorNotification } from './credit-confirmation';
 import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo, PreviewData } from '../types';
 import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
@@ -56,6 +57,7 @@ class SafePlayContentScript {
   private progressAnimator: SmoothProgressAnimator | null = null;
   private lastIntervalCount = 0; // Store interval count for toggle restore
   private isFilterActive = false; // Track if filter is currently active
+  private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -611,6 +613,14 @@ class SafePlayContentScript {
       this.captionFilter.start();
       log('Caption filter started');
 
+      // Initialize timeline markers to show profanity locations on progress bar
+      const video = this.getVideoElement();
+      if (video && muteIntervals.length > 0) {
+        this.timelineMarkers = new TimelineMarkers({ debug: DEBUG });
+        this.timelineMarkers.initialize(video, muteIntervals);
+        log('Timeline markers initialized');
+      }
+
       // Update button to filtering state
       this.updateButtonState({
         state: 'filtering',
@@ -710,6 +720,7 @@ class SafePlayContentScript {
       // Disable filter
       this.videoController.stop();
       this.captionFilter.stop();
+      this.timelineMarkers?.hide();
       this.isFilterActive = false;
 
       playerButton?.classList.remove('safeplay-active');
@@ -726,6 +737,7 @@ class SafePlayContentScript {
       // Resume filtering (we have data from before)
       this.videoController.resume();
       this.captionFilter.start();
+      this.timelineMarkers?.show();
       this.isFilterActive = true;
 
       playerButton?.classList.add('safeplay-active');
@@ -818,6 +830,12 @@ class SafePlayContentScript {
 
     // Stop caption filter
     this.captionFilter.stop();
+
+    // Clean up timeline markers
+    if (this.timelineMarkers) {
+      this.timelineMarkers.destroy();
+      this.timelineMarkers = null;
+    }
 
     // Reset state
     this.currentVideoId = null;
