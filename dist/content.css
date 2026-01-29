@@ -414,27 +414,30 @@ ytd-shorts .safeplay-filter-btn {
   position: absolute;
   left: 0;
   right: 0;
+  top: 0;
   bottom: 0;
   height: 100%;
+  width: 100%;
   pointer-events: none;
-  z-index: 30;
+  z-index: 77 !important;
 }
 
 /* Individual marker on the timeline */
 .safeplay-timeline-marker {
   position: absolute;
   height: 100%;
-  opacity: 0.7;
+  opacity: 0.8;
   border-radius: 1px;
   pointer-events: auto;
   cursor: pointer;
+  z-index: 78 !important;
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .safeplay-timeline-marker:hover {
   opacity: 1 !important;
   transform: scaleY(1.5);
-  z-index: 31;
+  z-index: 79 !important;
 }
 
 /* Severity color classes */
@@ -455,8 +458,10 @@ ytd-shorts .safeplay-filter-btn {
 }
 
 /* Ensure markers are visible on YouTube's dark progress bar */
-.ytp-progress-bar-container .safeplay-timeline-overlay {
-  z-index: 32;
+.ytp-progress-bar-container .safeplay-timeline-overlay,
+.ytp-progress-list .safeplay-timeline-overlay,
+.ytp-progress-bar .safeplay-timeline-overlay {
+  z-index: 77 !important;
 }
 
 /* When hovering over the progress bar, make markers more prominent */

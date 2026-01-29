@@ -74,19 +74,22 @@ export class TimelineMarkers {
   /**
    * Find YouTube's progress bar element
    * Uses multiple selectors for robustness
+   * We target .ytp-progress-list which contains the actual progress segments
    */
   private findProgressBar(): HTMLElement | null {
-    // Selectors for YouTube's progress bar container (in order of preference)
+    // Selectors for YouTube's progress bar (in order of preference)
+    // .ytp-progress-list is where the colored progress segments live
     const selectors = [
-      '.ytp-progress-bar-container',
+      '.ytp-progress-list',
       '.ytp-progress-bar',
-      '.ytp-chrome-bottom .ytp-progress-bar-container',
+      '.ytp-progress-bar-container',
       '#movie_player .ytp-progress-bar-container',
     ];
 
     for (const selector of selectors) {
       const element = document.querySelector<HTMLElement>(selector);
       if (element) {
+        log('Found progress bar element:', selector);
         return element;
       }
     }
@@ -107,15 +110,18 @@ export class TimelineMarkers {
     this.overlayContainer = document.createElement('div');
     this.overlayContainer.className = 'safeplay-timeline-overlay';
 
-    // Position relative to progress bar
+    // Position relative to progress bar with high z-index to be above YouTube's elements
+    // YouTube uses z-index up to ~70 for various interactive elements
     this.overlayContainer.style.cssText = `
       position: absolute;
       left: 0;
       right: 0;
+      top: 0;
       bottom: 0;
       height: 100%;
+      width: 100%;
       pointer-events: none;
-      z-index: 30;
+      z-index: 77;
     `;
 
     // Insert overlay into progress bar container
@@ -182,10 +188,11 @@ export class TimelineMarkers {
       width: ${minWidth}%;
       height: 100%;
       background-color: ${color};
-      opacity: 0.7;
+      opacity: 0.8;
       border-radius: 1px;
       pointer-events: auto;
       cursor: pointer;
+      z-index: 78;
       transition: opacity 0.2s ease, transform 0.2s ease;
     `;
 
@@ -195,14 +202,14 @@ export class TimelineMarkers {
     // Hover effect
     marker.addEventListener('mouseenter', () => {
       marker.style.opacity = '1';
-      marker.style.transform = 'scaleY(1.3)';
-      marker.style.zIndex = '31';
+      marker.style.transform = 'scaleY(1.5)';
+      marker.style.zIndex = '79';
     });
 
     marker.addEventListener('mouseleave', () => {
-      marker.style.opacity = '0.7';
+      marker.style.opacity = '0.8';
       marker.style.transform = 'scaleY(1)';
-      marker.style.zIndex = '30';
+      marker.style.zIndex = '78';
     });
 
     // Click to seek to that position
