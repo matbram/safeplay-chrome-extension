@@ -140,6 +140,13 @@ export class TimelineMarkers {
     this.progressBarElement.style.position = 'relative';
     this.progressBarElement.appendChild(this.overlayContainer);
 
+    // CRITICAL: Disable pointer events on ytp-timed-markers-container so our markers receive events
+    const timedMarkersContainer = document.querySelector<HTMLElement>('.ytp-timed-markers-container');
+    if (timedMarkersContainer) {
+      timedMarkersContainer.style.pointerEvents = 'none';
+      log('Disabled pointer events on ytp-timed-markers-container');
+    }
+
     log('Overlay container created and appended');
     log('Overlay computed z-index:', window.getComputedStyle(this.overlayContainer).zIndex);
 
