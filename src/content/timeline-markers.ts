@@ -179,7 +179,7 @@ export class TimelineMarkers {
     if (interval.start >= videoDuration) return null;
 
     const marker = document.createElement('div');
-    marker.className = `safeplay-timeline-marker safeplay-severity-${interval.severity}`;
+    marker.className = 'safeplay-timeline-marker';
 
     // Calculate position and width as percentages
     const leftPercent = (interval.start / videoDuration) * 100;
@@ -211,7 +211,7 @@ export class TimelineMarkers {
     `;
 
     // Add tooltip with word info
-    marker.title = `${this.formatTimestamp(interval.start)} - "${interval.word}" (${interval.severity})`;
+    marker.title = `${this.formatTimestamp(interval.start)} - "${interval.word}"`;
 
     // Hover effect - make it very visible
     marker.addEventListener('mouseenter', () => {
