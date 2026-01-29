@@ -438,24 +438,13 @@ ytd-shorts .safeplay-filter-btn {
   opacity: 1 !important;
   transform: scaleY(4) translateY(-50%) !important;
   z-index: 99 !important;
-  filter: brightness(1.3);
+  box-shadow: 0 0 8px 2px rgba(255, 255, 255, 0.8) !important;
 }
 
-/* Severity color classes */
-.safeplay-severity-mild {
-  background-color: #FFA500; /* Orange */
-}
-
-.safeplay-severity-moderate {
-  background-color: #FF6B6B; /* Red */
-}
-
-.safeplay-severity-severe {
-  background-color: #DC143C; /* Crimson */
-}
-
-.safeplay-severity-religious {
-  background-color: #9370DB; /* Medium Purple */
+/* All markers are white for visibility against YouTube's red progress bar */
+.safeplay-timeline-marker {
+  background-color: #FFFFFF !important;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
 }
 
 /* Ensure markers are visible on YouTube's dark progress bar */

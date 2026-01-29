@@ -1,21 +1,13 @@
 // Timeline Markers - Visual indicators on YouTube's progress bar showing profanity locations
-import { MuteInterval, SeverityLevel } from '../types';
+import { MuteInterval } from '../types';
 
-const DEBUG = true;
+const DEBUG = false;
 
 function log(...args: unknown[]): void {
   if (DEBUG) {
     console.log('[SafePlay Timeline]', ...args);
   }
 }
-
-// Colors for different severity levels
-const SEVERITY_COLORS: Record<SeverityLevel, string> = {
-  mild: '#FFA500',      // Orange
-  moderate: '#FF6B6B',  // Red
-  severe: '#DC143C',    // Crimson
-  religious: '#9370DB', // Medium Purple
-};
 
 export interface TimelineMarkersOptions {
   debug?: boolean;
@@ -202,19 +194,19 @@ export class TimelineMarkers {
       ? Math.max(0, leftPercent - (1.5 - widthPercent) / 2)
       : leftPercent;
 
-    const color = SEVERITY_COLORS[interval.severity] || SEVERITY_COLORS.moderate;
-
+    // Use white for all markers - provides good contrast against YouTube's red progress bar
     marker.style.cssText = `
       position: absolute;
       left: ${adjustedLeft}%;
       width: ${minWidth}%;
       height: 100%;
-      background-color: ${color};
-      opacity: 0.8;
-      border-radius: 1px;
+      background-color: #FFFFFF;
+      opacity: 0.9;
+      border-radius: 2px;
       pointer-events: auto;
       cursor: pointer;
       z-index: 78;
+      box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
       transition: opacity 0.2s ease, transform 0.2s ease;
     `;
 
@@ -226,16 +218,14 @@ export class TimelineMarkers {
       marker.style.opacity = '1';
       marker.style.transform = 'scaleY(4) translateY(-50%)';
       marker.style.zIndex = '99';
-      marker.style.boxShadow = `0 0 8px 2px ${color}`;
-      marker.style.filter = 'brightness(1.3)';
+      marker.style.boxShadow = '0 0 8px 2px rgba(255, 255, 255, 0.8)';
     });
 
     marker.addEventListener('mouseleave', () => {
-      marker.style.opacity = '0.8';
+      marker.style.opacity = '0.9';
       marker.style.transform = 'scaleY(1)';
       marker.style.zIndex = '78';
-      marker.style.boxShadow = 'none';
-      marker.style.filter = 'none';
+      marker.style.boxShadow = '0 0 2px rgba(0, 0, 0, 0.5)';
     });
 
     // Click to seek to that position
