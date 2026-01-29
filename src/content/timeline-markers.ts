@@ -106,6 +106,12 @@ export class TimelineMarkers {
     // Remove existing overlay if any
     this.removeOverlay();
 
+    // Log the parent element's structure for debugging
+    log('Progress bar element:', this.progressBarElement);
+    log('Progress bar parent:', this.progressBarElement.parentElement);
+    log('Progress bar computed style position:', window.getComputedStyle(this.progressBarElement).position);
+    log('Progress bar computed style z-index:', window.getComputedStyle(this.progressBarElement).zIndex);
+
     // Create overlay container
     this.overlayContainer = document.createElement('div');
     this.overlayContainer.className = 'safeplay-timeline-overlay';
@@ -128,11 +134,53 @@ export class TimelineMarkers {
     this.progressBarElement.style.position = 'relative';
     this.progressBarElement.appendChild(this.overlayContainer);
 
+    log('Overlay container created and appended');
+    log('Overlay computed z-index:', window.getComputedStyle(this.overlayContainer).zIndex);
+
+    // Log sibling elements to understand the stacking context
+    const siblings = this.progressBarElement.children;
+    log('Progress bar children count:', siblings.length);
+    for (let i = 0; i < siblings.length; i++) {
+      const sibling = siblings[i] as HTMLElement;
+      const style = window.getComputedStyle(sibling);
+      log(`  Child ${i}: ${sibling.className}, z-index: ${style.zIndex}, position: ${style.position}`);
+    }
+
     // Create markers for each mute interval
     this.renderMarkers();
 
     // Setup resize observer to handle player resizing
     this.setupResizeObserver();
+
+    // Add a test click listener on the overlay to see if events reach it
+    this.overlayContainer.addEventListener('click', (e) => {
+      log('Click on overlay container at:', e.clientX, e.clientY);
+    }, true);
+
+    // Add a global listener to debug what's receiving clicks in the progress bar area
+    this.setupDebugListeners();
+  }
+
+  /**
+   * Setup debug listeners to understand event flow
+   */
+  private setupDebugListeners(): void {
+    // Listen for mousemove on document to check what's under cursor in progress bar area
+    const progressBarRect = this.progressBarElement?.getBoundingClientRect();
+
+    document.addEventListener('mousemove', (e) => {
+      if (!progressBarRect) return;
+
+      // Only log when mouse is in the progress bar area
+      if (e.clientY >= progressBarRect.top && e.clientY <= progressBarRect.bottom &&
+          e.clientX >= progressBarRect.left && e.clientX <= progressBarRect.right) {
+        const elements = document.elementsFromPoint(e.clientX, e.clientY);
+        const topElement = elements[0];
+        if (topElement && !topElement.className.includes('safeplay')) {
+          log('Top element at cursor:', topElement.tagName, topElement.className, 'z-index:', window.getComputedStyle(topElement).zIndex);
+        }
+      }
+    }, { passive: true });
   }
 
   /**
@@ -200,21 +248,32 @@ export class TimelineMarkers {
     marker.title = `${this.formatTimestamp(interval.start)} - "${interval.word}" (${interval.severity})`;
 
     // Hover effect
-    marker.addEventListener('mouseenter', () => {
+    marker.addEventListener('mouseenter', (e) => {
+      log('MOUSEENTER on marker:', interval.word, 'at', e.clientX, e.clientY);
       marker.style.opacity = '1';
       marker.style.transform = 'scaleY(1.5)';
       marker.style.zIndex = '79';
     });
 
     marker.addEventListener('mouseleave', () => {
+      log('MOUSELEAVE on marker:', interval.word);
       marker.style.opacity = '0.8';
       marker.style.transform = 'scaleY(1)';
       marker.style.zIndex = '78';
     });
 
+    marker.addEventListener('mouseover', (e) => {
+      log('MOUSEOVER on marker:', interval.word);
+      // Check what elements are at this point
+      const elementsAtPoint = document.elementsFromPoint(e.clientX, e.clientY);
+      log('Elements at point:', elementsAtPoint.slice(0, 10).map(el => `${el.tagName}.${el.className}`));
+    });
+
     // Click to seek to that position
     marker.addEventListener('click', (e) => {
+      log('CLICK on marker:', interval.word);
       e.stopPropagation();
+      e.preventDefault();
       if (this.video) {
         // Seek to slightly before the profanity
         this.video.currentTime = Math.max(0, interval.start - 2);
