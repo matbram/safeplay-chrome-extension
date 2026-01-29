@@ -433,7 +433,7 @@ ytd-shorts .safeplay-filter-btn {
   cursor: pointer;
   z-index: 78 !important;
   background-color: #FFFFFF !important;
-  box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
@@ -442,28 +442,6 @@ ytd-shorts .safeplay-filter-btn {
   transform: scaleY(1.5) !important;
   z-index: 99 !important;
   box-shadow: 0 0 8px 2px rgba(255, 255, 255, 0.8) !important;
-}
-
-/* Custom tooltip for markers */
-.safeplay-marker-tooltip {
-  position: absolute;
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0, 0, 0, 0.9);
-  color: #FFFFFF;
-  padding: 8px 12px;
-  border-radius: 6px;
-  font-size: 14px;
-  font-weight: 500;
-  font-family: 'Roboto', 'YouTube Sans', Arial, sans-serif;
-  white-space: nowrap;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-  z-index: 100;
-  margin-bottom: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 /* Ensure markers are visible on YouTube's dark progress bar */
