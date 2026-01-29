@@ -422,29 +422,48 @@ ytd-shorts .safeplay-filter-btn {
   z-index: 77 !important;
 }
 
-/* Individual marker on the timeline */
+/* Individual marker on the timeline - sits on TOP of progress bar */
 .safeplay-timeline-marker {
   position: absolute;
-  height: 100%;
-  opacity: 0.8;
-  border-radius: 1px;
+  height: 300%;
+  bottom: 0;
+  opacity: 0.9;
+  border-radius: 2px;
   pointer-events: auto;
   cursor: pointer;
   z-index: 78 !important;
+  background-color: #FFFFFF !important;
+  box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
   transition: opacity 0.2s ease, transform 0.2s ease;
 }
 
 .safeplay-timeline-marker:hover {
   opacity: 1 !important;
-  transform: scaleY(4) translateY(-50%) !important;
+  transform: scaleY(1.5) !important;
   z-index: 99 !important;
   box-shadow: 0 0 8px 2px rgba(255, 255, 255, 0.8) !important;
 }
 
-/* All markers are white for visibility against YouTube's red progress bar */
-.safeplay-timeline-marker {
-  background-color: #FFFFFF !important;
-  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+/* Custom tooltip for markers */
+.safeplay-marker-tooltip {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0, 0, 0, 0.9);
+  color: #FFFFFF;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: 'Roboto', 'YouTube Sans', Arial, sans-serif;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 100;
+  margin-bottom: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 /* Ensure markers are visible on YouTube's dark progress bar */
@@ -454,11 +473,6 @@ ytd-shorts .safeplay-filter-btn {
   z-index: 77 !important;
 }
 
-/* When hovering over the progress bar, make markers more prominent */
-.ytp-chrome-bottom:hover .safeplay-timeline-marker {
-  opacity: 0.85;
-}
-
 /* Animation for markers appearing */
 @keyframes safeplay-marker-appear {
   from {
@@ -466,18 +480,13 @@ ytd-shorts .safeplay-filter-btn {
     transform: scaleY(0);
   }
   to {
-    opacity: 0.7;
+    opacity: 0.9;
     transform: scaleY(1);
   }
 }
 
 .safeplay-timeline-marker {
   animation: safeplay-marker-appear 0.3s ease-out forwards;
-}
-
-/* Marker tooltip styling (using native title, but prepared for custom tooltip) */
-.safeplay-timeline-marker[title] {
-  position: relative;
 }
 
 

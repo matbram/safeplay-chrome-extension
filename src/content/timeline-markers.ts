@@ -199,33 +199,58 @@ export class TimelineMarkers {
       position: absolute;
       left: ${adjustedLeft}%;
       width: ${minWidth}%;
-      height: 100%;
+      height: 300%;
+      bottom: 0;
       background-color: #FFFFFF;
       opacity: 0.9;
       border-radius: 2px;
       pointer-events: auto;
       cursor: pointer;
       z-index: 78;
-      box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+      box-shadow: 0 0 3px rgba(0, 0, 0, 0.6);
       transition: opacity 0.2s ease, transform 0.2s ease;
     `;
 
-    // Add tooltip with word info
-    marker.title = `${this.formatTimestamp(interval.start)} - "${interval.word}"`;
+    // Create custom tooltip element (more visible than native title)
+    const tooltip = document.createElement('div');
+    tooltip.className = 'safeplay-marker-tooltip';
+    tooltip.textContent = `${this.formatTimestamp(interval.start)} - "${interval.word}"`;
+    tooltip.style.cssText = `
+      position: absolute;
+      bottom: 100%;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0, 0, 0, 0.9);
+      color: #FFFFFF;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      white-space: nowrap;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      z-index: 100;
+      margin-bottom: 8px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    `;
+    marker.appendChild(tooltip);
 
     // Hover effect - make it very visible
     marker.addEventListener('mouseenter', () => {
       marker.style.opacity = '1';
-      marker.style.transform = 'scaleY(4) translateY(-50%)';
+      marker.style.transform = 'scaleY(1.5)';
       marker.style.zIndex = '99';
       marker.style.boxShadow = '0 0 8px 2px rgba(255, 255, 255, 0.8)';
+      tooltip.style.opacity = '1';
     });
 
     marker.addEventListener('mouseleave', () => {
       marker.style.opacity = '0.9';
       marker.style.transform = 'scaleY(1)';
       marker.style.zIndex = '78';
-      marker.style.boxShadow = '0 0 2px rgba(0, 0, 0, 0.5)';
+      marker.style.boxShadow = '0 0 3px rgba(0, 0, 0, 0.6)';
+      tooltip.style.opacity = '0';
     });
 
     // Click to seek to that position
