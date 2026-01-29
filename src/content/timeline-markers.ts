@@ -194,14 +194,19 @@ export class TimelineMarkers {
     const endTime = Math.min(interval.end, videoDuration);
     const widthPercent = ((endTime - interval.start) / videoDuration) * 100;
 
-    // Minimum visible width (0.3% of timeline or 3px equivalent)
-    const minWidth = Math.max(widthPercent, 0.3);
+    // Minimum width of 1.5% for easy interaction (about 15px on a 1000px bar)
+    const minWidth = Math.max(widthPercent, 1.5);
+
+    // Center the marker on the profanity start time if we expanded it
+    const adjustedLeft = widthPercent < 1.5
+      ? Math.max(0, leftPercent - (1.5 - widthPercent) / 2)
+      : leftPercent;
 
     const color = SEVERITY_COLORS[interval.severity] || SEVERITY_COLORS.moderate;
 
     marker.style.cssText = `
       position: absolute;
-      left: ${leftPercent}%;
+      left: ${adjustedLeft}%;
       width: ${minWidth}%;
       height: 100%;
       background-color: ${color};
