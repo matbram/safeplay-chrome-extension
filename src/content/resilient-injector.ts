@@ -555,6 +555,7 @@ export class ResilientInjector {
     button.title = 'Filter profanity with SafePlay';
     button.setAttribute('aria-label', 'SafePlay Filter');
     button.setAttribute('data-video-id', videoId);
+    container.setAttribute('data-video-id', videoId);
 
     const stateConfig = BUTTON_STATES.idle;
     button.style.cssText = `
@@ -720,6 +721,13 @@ export class ResilientInjector {
   private updateWatchPageButton(stateInfo: ButtonStateInfo): void {
     const container = document.querySelector(`.${BUTTON_CONTAINER_CLASS}`);
     if (!container) return;
+
+    // Verify this update is for the correct video to prevent stale state updates
+    const buttonVideoId = container.getAttribute('data-video-id');
+    if (stateInfo.videoId && buttonVideoId && stateInfo.videoId !== buttonVideoId) {
+      this.log(`Ignoring state update for ${stateInfo.videoId}, button is for ${buttonVideoId}`);
+      return;
+    }
 
     const button = container.querySelector<HTMLButtonElement>('.safeplay-main-button');
     const textSpan = container.querySelector<HTMLSpanElement>('.safeplay-text');
