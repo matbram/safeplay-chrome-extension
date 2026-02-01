@@ -58,6 +58,7 @@ class SafePlayContentScript {
   private lastIntervalCount = 0; // Store interval count for toggle restore
   private isFilterActive = false; // Track if filter is currently active
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
+  private navigationId = 0; // Incremented on each navigation to cancel stale async operations
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -281,6 +282,8 @@ class SafePlayContentScript {
     log('Proceeding with filtering for:', youtubeId);
     this.isProcessing = true;
     this.filteringVideoId = youtubeId;
+    // Capture navigation ID to detect if user navigates away during filtering
+    const startNavigationId = this.navigationId;
 
     // Video should already be paused from the confirmation dialog
     // If not (e.g., for cached videos that skip confirmation), pause it now
@@ -307,6 +310,12 @@ class SafePlayContentScript {
         type: 'START_FILTER',
         payload: { youtubeId, filterType: this.preferences.filterMode },
       });
+
+      // Check if user navigated away during the request
+      if (this.navigationId !== startNavigationId) {
+        log(`Filtering aborted for ${youtubeId}: user navigated away during START_FILTER`);
+        return;
+      }
 
       // Handle extension context invalidated
       if (!response) {
@@ -368,6 +377,13 @@ class SafePlayContentScript {
       if ((status === 'cached' || status === 'completed') && transcript) {
         // Transcript was cached (locally or on server), skip to processing
         log('Using cached transcript');
+
+        // Final navigation check before applying filter
+        if (this.navigationId !== startNavigationId) {
+          log(`Filtering aborted for ${youtubeId}: user navigated away before applying cached filter`);
+          return;
+        }
+
         this.updateButtonState({ state: 'processing', text: 'Processing...', videoId: youtubeId });
         await this.applyFilter(transcript);
       } else if (status === 'processing' && jobId) {
@@ -409,6 +425,8 @@ class SafePlayContentScript {
     let attempts = 0;
     // Capture the video ID being filtered at the start
     const videoId = this.filteringVideoId;
+    // Capture navigation ID to detect if user navigated away during polling
+    const startNavigationId = this.navigationId;
 
     // Initialize smooth progress animator
     this.progressAnimator = new SmoothProgressAnimator(
@@ -425,6 +443,16 @@ class SafePlayContentScript {
     this.progressAnimator.start();
 
     while (attempts < maxAttempts) {
+      // Check if user navigated away - if so, abort polling silently
+      if (this.navigationId !== startNavigationId) {
+        log(`Polling aborted for ${videoId}: user navigated away`);
+        if (this.progressAnimator) {
+          this.progressAnimator.stop();
+          this.progressAnimator = null;
+        }
+        return;
+      }
+
       try {
         const response = await safeSendMessage<{
           success: boolean;
@@ -434,6 +462,16 @@ class SafePlayContentScript {
           type: 'CHECK_JOB',
           payload: { jobId },
         });
+
+        // Check again after async call - user may have navigated during the request
+        if (this.navigationId !== startNavigationId) {
+          log(`Polling aborted for ${videoId}: user navigated away during request`);
+          if (this.progressAnimator) {
+            this.progressAnimator.stop();
+            this.progressAnimator = null;
+          }
+          return;
+        }
 
         // Handle extension context invalidated
         if (!response) {
@@ -478,9 +516,31 @@ class SafePlayContentScript {
               this.progressAnimator.setTarget(95);
               // Give a moment for progress to animate up
               await new Promise((resolve) => setTimeout(resolve, 300));
+
+              // Check if user navigated away during animation
+              if (this.navigationId !== startNavigationId) {
+                log(`Polling aborted for ${videoId}: user navigated away during completion animation`);
+                if (this.progressAnimator) {
+                  this.progressAnimator.stop();
+                  this.progressAnimator = null;
+                }
+                return;
+              }
+
               this.progressAnimator.complete();
               // Wait for animation to finish
               await new Promise((resolve) => setTimeout(resolve, 500));
+
+              // Final navigation check before applying filter
+              if (this.navigationId !== startNavigationId) {
+                log(`Polling aborted for ${videoId}: user navigated away before filter apply`);
+                if (this.progressAnimator) {
+                  this.progressAnimator.stop();
+                  this.progressAnimator = null;
+                }
+                return;
+              }
+
               this.progressAnimator.stop();
               this.progressAnimator = null;
               await this.applyFilter(transcript);
@@ -578,6 +638,9 @@ class SafePlayContentScript {
       throw new Error('No video ID');
     }
 
+    // Capture navigation ID to detect if user navigates during async operations
+    const startNavigationId = this.navigationId;
+
     // Log transcript structure to verify character-level data
     log('Transcript received for filtering:', {
       id: transcript.id,
@@ -594,10 +657,23 @@ class SafePlayContentScript {
     try {
       // Initialize video controller with transcript
       await this.videoController.initialize(videoId, this.preferences);
+
+      // Check if user navigated away during initialization
+      if (this.navigationId !== startNavigationId) {
+        log(`Filter apply aborted for ${videoId}: user navigated away during initialization`);
+        return;
+      }
+
       this.videoController.onTranscriptReceived(transcript);
 
       // Apply the filter
       await this.videoController.applyFilter();
+
+      // Check if user navigated away during filter application
+      if (this.navigationId !== startNavigationId) {
+        log(`Filter apply aborted for ${videoId}: user navigated away during filter application`);
+        return;
+      }
 
       // Get the interval count and mute intervals for display
       const state = this.videoController.getState();
@@ -823,6 +899,11 @@ class SafePlayContentScript {
   }
 
   private onNavigation(): void {
+    // Increment navigation ID to cancel any stale async operations
+    this.navigationId++;
+    const currentNavId = this.navigationId;
+    log(`Navigation detected, navigationId: ${currentNavId}`);
+
     // Stop current filter if any
     if (this.videoController) {
       this.videoController.stop();
@@ -831,17 +912,25 @@ class SafePlayContentScript {
     // Stop caption filter
     this.captionFilter.stop();
 
+    // Stop progress animator if running (prevents stale state updates)
+    if (this.progressAnimator) {
+      this.progressAnimator.stop();
+      this.progressAnimator = null;
+    }
+
     // Clean up timeline markers
     if (this.timelineMarkers) {
       this.timelineMarkers.destroy();
       this.timelineMarkers = null;
     }
 
-    // Reset state
+    // Reset ALL state to prevent stale data from persisting
     this.currentVideoId = null;
+    this.filteringVideoId = null;
     this.isProcessing = false;
     this.isFilterActive = false;
     this.lastIntervalCount = 0;
+    this.videoWasPlaying = false;
 
     // Remove player button
     const playerButton = document.querySelector('.safeplay-player-controls');
