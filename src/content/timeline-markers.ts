@@ -20,9 +20,11 @@ export class TimelineMarkers {
   private resizeObserver: ResizeObserver | null = null;
   private progressBarElement: HTMLElement | null = null;
   private isInitialized = false;
+  private isDestroyed = false; // Flag to prevent operations after destroy
   private retryCount = 0;
   private maxRetries = 20;
   private retryDelay = 500;
+  private retryTimeoutId: number | null = null; // Track timeout for cleanup
 
   constructor(_options?: TimelineMarkersOptions) {
     // Options for future use
@@ -48,6 +50,12 @@ export class TimelineMarkers {
    * Retry injection until progress bar is available
    */
   private injectOverlayWithRetry(): void {
+    // Don't do anything if destroyed
+    if (this.isDestroyed) {
+      log('Skipping retry - markers were destroyed');
+      return;
+    }
+
     const progressBar = this.findProgressBar();
 
     if (progressBar) {
@@ -57,7 +65,7 @@ export class TimelineMarkers {
       log('Timeline overlay injected successfully');
     } else if (this.retryCount < this.maxRetries) {
       this.retryCount++;
-      setTimeout(() => this.injectOverlayWithRetry(), this.retryDelay);
+      this.retryTimeoutId = window.setTimeout(() => this.injectOverlayWithRetry(), this.retryDelay);
     } else {
       log('Failed to find progress bar after', this.maxRetries, 'attempts');
     }
@@ -99,7 +107,7 @@ export class TimelineMarkers {
    * Create the overlay container and markers
    */
   private createOverlay(): void {
-    if (!this.progressBarElement) return;
+    if (!this.progressBarElement || this.isDestroyed) return;
 
     // Remove existing overlay if any
     this.removeOverlay();
@@ -148,7 +156,7 @@ export class TimelineMarkers {
    * Render all profanity markers on the timeline
    */
   private renderMarkers(): void {
-    if (!this.overlayContainer || !this.video) return;
+    if (!this.overlayContainer || !this.video || this.isDestroyed) return;
 
     const duration = this.video.duration;
     if (!duration || !isFinite(duration)) {
@@ -335,12 +343,26 @@ export class TimelineMarkers {
   destroy(): void {
     log('Destroying timeline markers');
 
+    // Set destroyed flag first to prevent any pending operations
+    this.isDestroyed = true;
+
+    // Cancel any pending retry timeout
+    if (this.retryTimeoutId !== null) {
+      window.clearTimeout(this.retryTimeoutId);
+      this.retryTimeoutId = null;
+    }
+
     if (this.resizeObserver) {
       this.resizeObserver.disconnect();
       this.resizeObserver = null;
     }
 
     this.removeOverlay();
+
+    // Also remove any orphaned overlays by class name (safety net)
+    const orphanedOverlays = document.querySelectorAll('.safeplay-timeline-overlay');
+    orphanedOverlays.forEach(overlay => overlay.remove());
+
     this.video = null;
     this.progressBarElement = null;
     this.muteIntervals = [];
