@@ -542,6 +542,12 @@ export function showFilterErrorNotification(): void {
 
 // Helper function to show a quick "not authenticated" message
 export function showAuthRequiredMessage(): void {
+  // Get extension ID for the auth callback URL
+  const extensionId = chrome.runtime?.id || '';
+  const authUrl = `https://trysafeplay.com/extension/auth?extensionId=${extensionId}`;
+  // For signup, redirect to extension auth after registration
+  const signupUrl = `https://trysafeplay.com/signup?extensionId=${extensionId}`;
+
   const overlay = document.createElement('div');
   overlay.className = 'safeplay-credit-dialog-overlay';
   overlay.innerHTML = `
@@ -572,13 +578,13 @@ export function showAuthRequiredMessage(): void {
           <button class="safeplay-btn safeplay-btn-secondary" data-action="cancel">
             Cancel
           </button>
-          <a href="https://trysafeplay.com/login" target="_blank" class="safeplay-btn safeplay-btn-primary">
+          <a href="${authUrl}" target="_blank" class="safeplay-btn safeplay-btn-primary">
             Sign In
           </a>
         </div>
         <div style="width: 100%; text-align: center; padding-top: 8px; border-top: 1px solid #3F3F3F;">
           <span style="color: #888; font-size: 13px;">Don't have an account? </span>
-          <a href="https://trysafeplay.com/signup" target="_blank" style="color: #FF0000; font-size: 13px; text-decoration: none; font-weight: 500;">
+          <a href="${signupUrl}" target="_blank" style="color: #FF0000; font-size: 13px; text-decoration: none; font-weight: 500;">
             Sign Up Free
           </a>
         </div>
