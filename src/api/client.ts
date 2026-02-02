@@ -6,10 +6,10 @@ import {
   CreditBalanceResponse,
   UserProfileResponse,
 } from '../types';
-import { getAuthToken, refreshAuthToken, clearAuthData } from '../utils/storage';
+import { getAuthToken, refreshAuthToken, clearAuthData, hasRefreshToken } from '../utils/storage';
 
 // API URL for the SafePlay website API
-const API_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
+const API_BASE_URL = 'https://trysafeplay.com';
 
 // Verbose logging
 function logApi(...args: unknown[]): void {
@@ -78,16 +78,27 @@ async function request<T>(
 
       // Handle 401 Unauthorized - try to refresh token and retry
       if (response.status === 401 && requiresAuth && !_isRetry) {
-        logApi('Got 401, attempting token refresh...');
-        const newToken = await refreshAuthToken();
+        logApi('Got 401, checking if refresh is possible...');
 
-        if (newToken) {
-          logApi('Token refreshed, retrying request...');
-          // Retry the request with the new token
-          return request<T>(endpoint, { ...options, _isRetry: true });
+        // Only attempt refresh if we have a stored refresh token
+        // This prevents silently re-authenticating via website cookies
+        // when the user has explicitly logged out from the extension
+        const canRefresh = await hasRefreshToken();
+
+        if (canRefresh) {
+          logApi('Has refresh token, attempting token refresh...');
+          const newToken = await refreshAuthToken();
+
+          if (newToken) {
+            logApi('Token refreshed, retrying request...');
+            // Retry the request with the new token
+            return request<T>(endpoint, { ...options, _isRetry: true });
+          }
+        } else {
+          logApi('No refresh token stored - user is logged out, skipping refresh');
         }
 
-        logApi('Token refresh failed, clearing auth data and notifying UI');
+        logApi('Token refresh failed or skipped, clearing auth data and notifying UI');
         // Clear auth data so UI updates to show sign-in state
         await clearAuthData();
 

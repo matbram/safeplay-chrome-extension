@@ -18,6 +18,7 @@ import {
   getAuthToken,
   clearCachedTranscripts,
   isAuthenticated,
+  isAuthenticatedStrict,
   getCreditInfo,
   setCreditInfo,
   updateCreditsAfterFilter,
@@ -87,6 +88,9 @@ async function handleMessage(
 
       case 'GET_AUTH_STATUS':
         return await handleGetAuthStatus();
+
+      case 'CHECK_AUTH_STRICT':
+        return await handleCheckAuthStrict();
 
       case 'GET_USER_PROFILE':
         return await handleGetUserProfile();
@@ -485,6 +489,19 @@ async function handleGetAuthStatus(): Promise<
   return { success: true, data: { authenticated, token } };
 }
 
+/**
+ * Strict auth check - checks if user is authenticated without triggering
+ * any auto-refresh via website cookies. This should be used before
+ * initiating any feature that requires authentication.
+ */
+async function handleCheckAuthStrict(): Promise<
+  MessageResponse<{ authenticated: boolean }>
+> {
+  const authenticated = await isAuthenticatedStrict();
+  log('handleCheckAuthStrict:', authenticated);
+  return { success: true, data: { authenticated } };
+}
+
 async function handleClearCache(): Promise<MessageResponse> {
   await clearCachedTranscripts();
   return { success: true };
@@ -605,7 +622,7 @@ async function handleLogout(): Promise<MessageResponse> {
 }
 
 // Handle open login - opens the website extension auth page
-const WEBSITE_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
+const WEBSITE_BASE_URL = 'https://trysafeplay.com';
 
 async function handleOpenLogin(): Promise<MessageResponse> {
   log('handleOpenLogin called');
@@ -643,7 +660,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 chrome.runtime.onMessageExternal.addListener(
   (message, sender, sendResponse) => {
     const allowedOrigins = [
-      'https://astonishing-youthfulness-production.up.railway.app',
+      'https://trysafeplay.com',
       'https://safeplay.app',
       'http://localhost:3000', // Development
     ];

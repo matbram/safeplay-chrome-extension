@@ -11,6 +11,7 @@ class OptionsController {
   private paddingBefore!: HTMLInputElement;
   private paddingAfter!: HTMLInputElement;
   private mergeThreshold!: HTMLInputElement;
+  private autoEnableFiltered!: HTMLInputElement;
   private cacheCount!: HTMLElement;
   private clearCacheBtn!: HTMLButtonElement;
   private saveBtn!: HTMLButtonElement;
@@ -23,6 +24,7 @@ class OptionsController {
     this.paddingBefore = document.getElementById('paddingBefore') as HTMLInputElement;
     this.paddingAfter = document.getElementById('paddingAfter') as HTMLInputElement;
     this.mergeThreshold = document.getElementById('mergeThreshold') as HTMLInputElement;
+    this.autoEnableFiltered = document.getElementById('autoEnableFiltered') as HTMLInputElement;
     this.cacheCount = document.getElementById('cacheCount') as HTMLElement;
     this.clearCacheBtn = document.getElementById('clearCacheBtn') as HTMLButtonElement;
     this.saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
@@ -59,6 +61,9 @@ class OptionsController {
     this.paddingBefore.value = (this.preferences.paddingBeforeMs ?? this.preferences.paddingMs).toString();
     this.paddingAfter.value = (this.preferences.paddingAfterMs ?? this.preferences.paddingMs).toString();
     this.mergeThreshold.value = this.preferences.mergeThresholdMs.toString();
+
+    // Update behavior settings
+    this.autoEnableFiltered.checked = this.preferences.autoEnableForFilteredVideos !== false;
   }
 
   private async loadCacheCount(): Promise<void> {
@@ -108,6 +113,7 @@ class OptionsController {
         paddingBeforeMs: parseInt(this.paddingBefore.value, 10) || 100,
         paddingAfterMs: parseInt(this.paddingAfter.value, 10) || 30,
         mergeThresholdMs: parseInt(this.mergeThreshold.value, 10) || 100,
+        autoEnableForFilteredVideos: this.autoEnableFiltered.checked,
       };
 
       const response = await chrome.runtime.sendMessage({
