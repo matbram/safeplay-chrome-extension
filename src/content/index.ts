@@ -59,6 +59,7 @@ class SafePlayContentScript {
   private isFilterActive = false; // Track if filter is currently active
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
   private navigationId = 0; // Incremented on each navigation to cancel stale async operations
+  private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -186,11 +187,13 @@ class SafePlayContentScript {
 
       if (!authResponse?.success || !authResponse?.data?.authenticated) {
         log('User not authenticated, showing sign in modal');
+        this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
         showAuthRequiredMessage();
         return;
       }
     } catch (error) {
       log('Auth check failed:', error);
+      this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
       showAuthRequiredMessage();
       return;
     }
@@ -892,6 +895,28 @@ class SafePlayContentScript {
         return { success: true };
       }
 
+      case 'AUTH_STATE_CHANGED': {
+        const payload = message.payload as { isAuthenticated: boolean };
+        log('Auth state changed:', payload);
+
+        // If user just authenticated and we have a pending video to filter
+        if (payload.isAuthenticated && this.pendingAuthVideoId) {
+          log('User authenticated, closing auth modal and starting filter for:', this.pendingAuthVideoId);
+
+          // Close the auth modal if it's open
+          const authModal = document.querySelector('.safeplay-credit-dialog-overlay');
+          if (authModal) {
+            authModal.remove();
+          }
+
+          // Start filtering the pending video
+          const videoId = this.pendingAuthVideoId;
+          this.pendingAuthVideoId = null;
+          this.onFilterButtonClick(videoId);
+        }
+        return { success: true };
+      }
+
       case 'GET_VIDEO_STATE': {
         return {
           success: true,
@@ -947,6 +972,7 @@ class SafePlayContentScript {
     this.currentVideoId = null;
     this.filteringVideoId = null;
     this.isProcessing = false;
+    this.pendingAuthVideoId = null;
     this.isFilterActive = false;
     this.lastIntervalCount = 0;
     this.videoWasPlaying = false;
