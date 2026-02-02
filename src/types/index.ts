@@ -216,6 +216,7 @@ export type MessageType =
   | 'GET_PREFERENCES'
   | 'SET_PREFERENCES'
   | 'GET_AUTH_STATUS'
+  | 'CHECK_AUTH_STRICT'
   | 'GET_USER_PROFILE'
   | 'LOGOUT'
   | 'OPEN_LOGIN'

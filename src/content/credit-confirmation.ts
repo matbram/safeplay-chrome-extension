@@ -549,23 +549,39 @@ export function showAuthRequiredMessage(): void {
       <div class="safeplay-dialog-header">
         <div class="safeplay-dialog-icon safeplay-icon-warning">
           <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm-2 16l-4-4 1.41-1.41L10 14.17l6.59-6.59L18 9l-8 8z"/>
           </svg>
         </div>
-        <h2>Sign In Required</h2>
+        <h2>Sign In to SafePlay</h2>
       </div>
       <div class="safeplay-dialog-body">
         <p class="safeplay-dialog-message">
-          Please sign in to SafePlay to filter videos. Create a free account to get started with 30 credits per month.
+          You need to be signed in to filter videos with SafePlay.
         </p>
+        <div style="background: #272727; border-radius: 8px; padding: 12px; margin-top: 12px;">
+          <p style="color: #F1F1F1; font-size: 14px; margin: 0 0 8px 0; font-weight: 500;">
+            New to SafePlay?
+          </p>
+          <p style="color: #AAAAAA; font-size: 13px; margin: 0; line-height: 1.4;">
+            Create a free account and get 30 credits per month to start filtering profanity from YouTube videos.
+          </p>
+        </div>
       </div>
-      <div class="safeplay-dialog-actions">
-        <button class="safeplay-btn safeplay-btn-secondary" data-action="cancel">
-          Cancel
-        </button>
-        <a href="https://astonishing-youthfulness-production.up.railway.app/login" target="_blank" class="safeplay-btn safeplay-btn-primary">
-          Sign In
-        </a>
+      <div class="safeplay-dialog-actions" style="flex-direction: column; gap: 8px;">
+        <div style="display: flex; gap: 12px; width: 100%; justify-content: flex-end;">
+          <button class="safeplay-btn safeplay-btn-secondary" data-action="cancel">
+            Cancel
+          </button>
+          <a href="https://astonishing-youthfulness-production.up.railway.app/login" target="_blank" class="safeplay-btn safeplay-btn-primary">
+            Sign In
+          </a>
+        </div>
+        <div style="width: 100%; text-align: center; padding-top: 8px; border-top: 1px solid #3F3F3F;">
+          <span style="color: #888; font-size: 13px;">Don't have an account? </span>
+          <a href="https://astonishing-youthfulness-production.up.railway.app/register" target="_blank" style="color: #FF0000; font-size: 13px; text-decoration: none; font-weight: 500;">
+            Sign Up Free
+          </a>
+        </div>
       </div>
     </div>
   `;

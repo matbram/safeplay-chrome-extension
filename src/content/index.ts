@@ -176,6 +176,25 @@ class SafePlayContentScript {
     }
 
     log('Filter button clicked for:', youtubeId);
+
+    // Step 0: Check authentication FIRST - strict check without auto-refresh
+    // This prevents the extension from silently re-authenticating via website cookies
+    try {
+      const authResponse = await safeSendMessage<{ success: boolean; data?: { authenticated: boolean } }>({
+        type: 'CHECK_AUTH_STRICT',
+      });
+
+      if (!authResponse?.success || !authResponse?.data?.authenticated) {
+        log('User not authenticated, showing sign in modal');
+        showAuthRequiredMessage();
+        return;
+      }
+    } catch (error) {
+      log('Auth check failed:', error);
+      showAuthRequiredMessage();
+      return;
+    }
+
     this.isProcessing = true;
     this.currentVideoId = youtubeId;
     this.filteringVideoId = youtubeId;

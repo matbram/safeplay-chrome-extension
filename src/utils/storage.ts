@@ -203,6 +203,12 @@ export async function getAuthTokenRaw(): Promise<string | null> {
   return result[STORAGE_KEYS.AUTH_TOKEN] || null;
 }
 
+// Check if a refresh token exists locally (for checking if user has explicit session)
+export async function hasRefreshToken(): Promise<boolean> {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.REFRESH_TOKEN);
+  return !!result[STORAGE_KEYS.REFRESH_TOKEN];
+}
+
 export async function setAuthToken(token: string, refreshToken?: string, expiresAt?: number): Promise<void> {
   // Detailed logging to diagnose token storage issues
   console.log('[SafePlay Storage] setAuthToken called:', {
@@ -425,6 +431,39 @@ export async function clearAllData(): Promise<void> {
 export async function isAuthenticated(): Promise<boolean> {
   const token = await getAuthToken();
   return token !== null;
+}
+
+/**
+ * Check if user is authenticated WITHOUT triggering any auto-refresh.
+ * This is a strict check that only looks at local storage.
+ * Use this when you need to verify auth state without potentially
+ * re-authenticating via website cookies.
+ */
+export async function isAuthenticatedStrict(): Promise<boolean> {
+  const token = await getAuthTokenRaw();
+  if (!token) {
+    return false;
+  }
+
+  // Also check if token is expired
+  const result = await chrome.storage.local.get(STORAGE_KEYS.TOKEN_EXPIRES_AT);
+  const expiresAt = result[STORAGE_KEYS.TOKEN_EXPIRES_AT];
+
+  if (expiresAt) {
+    const now = Date.now();
+    let expiresAtMs = expiresAt;
+    if (expiresAt < 10000000000) {
+      // It's in seconds, convert to milliseconds
+      expiresAtMs = expiresAt * 1000;
+    }
+
+    // Token is expired
+    if (expiresAtMs < now) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 // Filtered Videos Storage - tracks which videos have been filtered

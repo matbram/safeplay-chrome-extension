@@ -18,6 +18,7 @@ import {
   getAuthToken,
   clearCachedTranscripts,
   isAuthenticated,
+  isAuthenticatedStrict,
   getCreditInfo,
   setCreditInfo,
   updateCreditsAfterFilter,
@@ -87,6 +88,9 @@ async function handleMessage(
 
       case 'GET_AUTH_STATUS':
         return await handleGetAuthStatus();
+
+      case 'CHECK_AUTH_STRICT':
+        return await handleCheckAuthStrict();
 
       case 'GET_USER_PROFILE':
         return await handleGetUserProfile();
@@ -483,6 +487,19 @@ async function handleGetAuthStatus(): Promise<
   const authenticated = await isAuthenticated();
   const token = authenticated ? (await getAuthToken()) || undefined : undefined;
   return { success: true, data: { authenticated, token } };
+}
+
+/**
+ * Strict auth check - checks if user is authenticated without triggering
+ * any auto-refresh via website cookies. This should be used before
+ * initiating any feature that requires authentication.
+ */
+async function handleCheckAuthStrict(): Promise<
+  MessageResponse<{ authenticated: boolean }>
+> {
+  const authenticated = await isAuthenticatedStrict();
+  log('handleCheckAuthStrict:', authenticated);
+  return { success: true, data: { authenticated } };
 }
 
 async function handleClearCache(): Promise<MessageResponse> {
