@@ -622,7 +622,7 @@ async function handleLogout(): Promise<MessageResponse> {
 }
 
 // Handle open login - opens the website extension auth page
-const WEBSITE_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
+const WEBSITE_BASE_URL = 'https://trysafeplay.com';
 
 async function handleOpenLogin(): Promise<MessageResponse> {
   log('handleOpenLogin called');
@@ -660,7 +660,7 @@ chrome.runtime.onInstalled.addListener((details) => {
 chrome.runtime.onMessageExternal.addListener(
   (message, sender, sendResponse) => {
     const allowedOrigins = [
-      'https://astonishing-youthfulness-production.up.railway.app',
+      'https://trysafeplay.com',
       'https://safeplay.app',
       'http://localhost:3000', // Development
     ];

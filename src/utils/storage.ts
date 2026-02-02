@@ -27,7 +27,7 @@ const STORAGE_KEYS = {
 } as const;
 
 // API base URL for token refresh
-const API_BASE_URL = 'https://astonishing-youthfulness-production.up.railway.app';
+const API_BASE_URL = 'https://trysafeplay.com';
 
 // Token refresh buffer - refresh 5 minutes before expiry
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;

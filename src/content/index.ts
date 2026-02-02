@@ -975,6 +975,17 @@ class SafePlayContentScript {
     if (this.isProcessing) return;
 
     try {
+      // First check if user is authenticated - silently skip if not
+      // (don't show auth modal on navigation, only when user clicks button)
+      const authResponse = await safeSendMessage<{ success: boolean; data?: { authenticated: boolean } }>({
+        type: 'CHECK_AUTH_STRICT',
+      });
+
+      if (!authResponse?.success || !authResponse?.data?.authenticated) {
+        log('Auto-enable skipped: user not authenticated');
+        return;
+      }
+
       const wasFiltered = await isVideoFiltered(this.currentVideoId);
       if (wasFiltered) {
         log(`Auto-enabling filter for previously filtered video: ${this.currentVideoId}`);

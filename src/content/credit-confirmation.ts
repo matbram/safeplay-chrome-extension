@@ -139,7 +139,7 @@ export class CreditConfirmation {
             <button class="safeplay-btn safeplay-btn-secondary" data-action="cancel">
               Cancel
             </button>
-            <a href="https://astonishing-youthfulness-production.up.railway.app/pricing" target="_blank" class="safeplay-btn safeplay-btn-primary">
+            <a href="https://trysafeplay.com/pricing" target="_blank" class="safeplay-btn safeplay-btn-primary">
               Get More Credits
             </a>
           </div>
@@ -572,13 +572,13 @@ export function showAuthRequiredMessage(): void {
           <button class="safeplay-btn safeplay-btn-secondary" data-action="cancel">
             Cancel
           </button>
-          <a href="https://astonishing-youthfulness-production.up.railway.app/login" target="_blank" class="safeplay-btn safeplay-btn-primary">
+          <a href="https://trysafeplay.com/login" target="_blank" class="safeplay-btn safeplay-btn-primary">
             Sign In
           </a>
         </div>
         <div style="width: 100%; text-align: center; padding-top: 8px; border-top: 1px solid #3F3F3F;">
           <span style="color: #888; font-size: 13px;">Don't have an account? </span>
-          <a href="https://astonishing-youthfulness-production.up.railway.app/register" target="_blank" style="color: #FF0000; font-size: 13px; text-decoration: none; font-weight: 500;">
+          <a href="https://trysafeplay.com/register" target="_blank" style="color: #FF0000; font-size: 13px; text-decoration: none; font-weight: 500;">
             Sign Up Free
           </a>
         </div>
