@@ -1,5 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <rect width="128" height="128" rx="24" fill="#FF0000"/>
-  <path d="M64 24C64 24 32 35.2 32 62.4V91.2C32 104.8 48 120 64 120C80 120 96 104.8 96 91.2V62.4C96 35.2 64 24 64 24ZM88 91.2C88 99.95 77.33 107.2 64 107.2C50.67 107.2 40 99.95 40 91.2V62.4C40 43.2 64 36 64 36C64 36 88 43.2 88 62.4V91.2Z" fill="white"/>
-  <path d="M64 36C64 36 40 43.2 40 62.4V91.2C40 99.95 50.67 107.2 64 107.2C77.33 107.2 88 99.95 88 91.2V62.4C88 43.2 64 36 64 36Z" fill="white" fill-opacity="0.3"/>
+  <!-- Shield outline -->
+  <path d="M64 20L28 34V62C28 88 64 108 64 108C64 108 100 88 100 62V34L64 20Z" fill="white"/>
+  <!-- Shield inner (creates the outline effect) -->
+  <path d="M64 30L38 41V62C38 82 64 98 64 98C64 98 90 82 90 62V41L64 30Z" fill="#FF0000"/>
 </svg>
