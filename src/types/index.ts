@@ -1,16 +1,9 @@
 // API Response Types
 
-export interface CharacterTiming {
-  char: string;
-  start: number;
-  end: number;
-}
-
 export interface TranscriptSegment {
   text: string;
   start_time: number;
   end_time: number;
-  characters: CharacterTiming[];
 }
 
 export interface Transcript {

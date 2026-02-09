@@ -314,7 +314,7 @@ async function handleGetFilter(
     if (response.status === 'completed' && response.transcript) {
       log('API returned completed/cached transcript, saving locally');
 
-      // Log transcript structure to verify character-level data
+      // Log transcript structure
       const t = response.transcript;
       log('Transcript structure:', {
         id: t.id,
@@ -323,23 +323,8 @@ async function handleGetFilter(
           text: t.segments[0].text,
           start_time: t.segments[0].start_time,
           end_time: t.segments[0].end_time,
-          hasCharacters: !!t.segments[0].characters,
-          characterCount: t.segments[0].characters?.length,
-          firstChar: t.segments[0].characters?.[0],
-          lastChar: t.segments[0].characters?.[t.segments[0].characters?.length - 1],
         } : null,
       });
-
-      // Log a few segments to see character data
-      if (t.segments && t.segments.length > 0) {
-        for (let i = 0; i < Math.min(3, t.segments.length); i++) {
-          const seg = t.segments[i];
-          log(`Segment ${i}: "${seg.text}" (${seg.start_time}s - ${seg.end_time}s)`, {
-            characters: seg.characters?.slice(0, 5), // First 5 chars
-            totalChars: seg.characters?.length,
-          });
-        }
-      }
 
       await setCachedTranscript(youtubeId, response.transcript);
       return {
@@ -395,7 +380,7 @@ async function handleCheckJob(
       const cacheKey = status.video?.youtube_id || status.transcript.id;
       log('Job completed, caching transcript for:', cacheKey);
 
-      // Log transcript structure to verify character-level data
+      // Log transcript structure
       const t = status.transcript;
       log('Job transcript structure:', {
         id: t.id,
@@ -404,9 +389,6 @@ async function handleCheckJob(
           text: t.segments[0].text,
           start_time: t.segments[0].start_time,
           end_time: t.segments[0].end_time,
-          hasCharacters: !!t.segments[0].characters,
-          characterCount: t.segments[0].characters?.length,
-          sampleChars: t.segments[0].characters?.slice(0, 3),
         } : null,
       });
 

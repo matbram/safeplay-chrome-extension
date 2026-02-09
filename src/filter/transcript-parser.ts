@@ -72,34 +72,11 @@ export class TranscriptParser {
     return PROFANITY_MAP.get(lowerWord) || null;
   }
 
-  // Get precise timing using character-level data
-  private getCharacterLevelTiming(
-    segment: TranscriptSegment,
-    startIndex: number,
-    endIndex: number
+  // Get word-level timing from segment
+  private getWordTiming(
+    segment: TranscriptSegment
   ): { startTime: number; endTime: number } {
-    let startTime = segment.start_time;
-    let endTime = segment.end_time;
-
-    if (segment.characters && segment.characters.length > 0) {
-      // Use character-level timing for precision
-      // Find the first character of the word
-      const startChar = segment.characters[startIndex];
-      // Find the last character of the word (endIndex is exclusive, so -1)
-      const endChar = segment.characters[Math.min(endIndex - 1, segment.characters.length - 1)];
-
-      if (startChar) {
-        startTime = startChar.start;
-      }
-      if (endChar) {
-        endTime = endChar.end;
-      }
-
-      console.log(`[SafePlay Parser] Character timing: "${segment.text.substring(startIndex, endIndex)}" ` +
-        `chars[${startIndex}..${endIndex-1}] -> ${startTime.toFixed(3)}s - ${endTime.toFixed(3)}s`);
-    }
-
-    return { startTime, endTime };
+    return { startTime: segment.start_time, endTime: segment.end_time };
   }
 
   // Find profanity matches in transcript segments
@@ -113,8 +90,7 @@ export class TranscriptParser {
       // Check for exact word match first
       const exactSeverity = this.getWordSeverity(normalizedText);
       if (exactSeverity && this.shouldFilterWord(normalizedText, exactSeverity)) {
-        // Use character-level timing for precision even on exact matches
-        const { startTime, endTime } = this.getCharacterLevelTiming(segment, 0, segment.text.length);
+        const { startTime, endTime } = this.getWordTiming(segment);
 
         matches.push({
           segmentIndex: i,
@@ -148,12 +124,7 @@ export class TranscriptParser {
           continue;
         }
 
-        // Use character-level timing for precision
-        const { startTime, endTime } = this.getCharacterLevelTiming(
-          segment,
-          embedded.startIndex,
-          embedded.endIndex
-        );
+        const { startTime, endTime } = this.getWordTiming(segment);
 
         matches.push({
           segmentIndex: i,

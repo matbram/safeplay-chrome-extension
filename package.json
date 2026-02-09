@@ -1,7 +1,7 @@
 {
   "name": "safeplay-chrome-extension",
   "version": "1.0.0",
-  "description": "YouTube profanity filter with character-level precision audio muting",
+  "description": "YouTube profanity filter with word-level precision audio muting",
   "private": true,
   "scripts": {
     "dev": "webpack --mode development --watch",
