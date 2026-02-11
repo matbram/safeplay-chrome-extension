@@ -663,16 +663,13 @@ class SafePlayContentScript {
     // Capture navigation ID to detect if user navigates during async operations
     const startNavigationId = this.navigationId;
 
-    // Log transcript structure to verify character-level data
+    // Log transcript structure
     log('Transcript received for filtering:', {
       id: transcript.id,
       segmentCount: transcript.segments?.length,
       sampleSegment: transcript.segments?.[0] ? {
         text: transcript.segments[0].text,
         times: `${transcript.segments[0].start_time}s - ${transcript.segments[0].end_time}s`,
-        hasCharacters: !!transcript.segments[0].characters,
-        charCount: transcript.segments[0].characters?.length,
-        sampleChars: transcript.segments[0].characters?.slice(0, 3),
       } : null,
     });
 
