@@ -47,6 +47,64 @@ function logError(...args: unknown[]): void {
   console.error('[SafePlay BG ERROR]', ...args);
 }
 
+// Badge management - shows remaining credits on extension icon
+function updateBadge(creditInfo: CreditInfo | null): void {
+  if (!creditInfo) {
+    chrome.action.setBadgeText({ text: '' });
+    return;
+  }
+
+  const { available } = creditInfo;
+  const text = available.toString();
+
+  chrome.action.setBadgeText({ text });
+
+  // Color-code: green for healthy, orange for low, red for empty
+  let color: string;
+  if (available === 0) {
+    color = '#F44336'; // Red
+  } else if (available <= 5) {
+    color = '#FF9800'; // Orange
+  } else {
+    color = '#4CAF50'; // Green
+  }
+  chrome.action.setBadgeBackgroundColor({ color });
+}
+
+function clearBadge(): void {
+  chrome.action.setBadgeText({ text: '' });
+}
+
+// Listen for credit info changes in storage to keep badge in sync
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+
+  if (changes.safeplay_credit_info) {
+    const newValue = changes.safeplay_credit_info.newValue as CreditInfo | undefined;
+    updateBadge(newValue || null);
+  }
+});
+
+// Initialize badge on startup from cached credit info
+async function initBadge(): Promise<void> {
+  try {
+    const cachedInfo = await getCreditInfo();
+    if (cachedInfo) {
+      updateBadge(cachedInfo);
+    } else {
+      // Check if user is authenticated; if not, leave badge clear
+      const authenticated = await isAuthenticatedStrict();
+      if (!authenticated) {
+        clearBadge();
+      }
+    }
+  } catch {
+    // Ignore errors during init
+  }
+}
+
+initBadge();
+
 // Message handler
 chrome.runtime.onMessage.addListener(
   (message: Message, sender, sendResponse: (response: MessageResponse) => void) => {
@@ -588,6 +646,7 @@ async function handleLogout(): Promise<MessageResponse> {
   log('handleLogout called');
 
   await clearAuthData();
+  clearBadge();
 
   // Broadcast logout to all tabs
   const tabs = await chrome.tabs.query({});
