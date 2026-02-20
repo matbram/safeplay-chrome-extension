@@ -84,36 +84,34 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-// Initialize badge on startup — fetch fresh credits if authenticated
+// Restore badge from storage on every service worker wake-up.
+// Reads directly from storage ignoring cache TTL — even "stale" data is better than an empty badge.
+// This is fast (local storage only, no network) so it completes before the worker can be killed.
+chrome.storage.local.get('safeplay_credit_info').then((result) => {
+  const creditInfo = result['safeplay_credit_info'] as CreditInfo | undefined;
+  if (creditInfo) {
+    updateBadge(creditInfo);
+  }
+});
+
+// Full initialization: fetch fresh credits from API if authenticated.
+// Called from onInstalled/onStartup event handlers where Chrome keeps the worker alive.
 async function initBadge(): Promise<void> {
   try {
-    // Try cached data first for an instant badge update
-    const cachedInfo = await getCreditInfo();
-    if (cachedInfo) {
-      updateBadge(cachedInfo);
-      return;
-    }
-
-    // No cached data — check if user is authenticated and fetch fresh credits
     const token = await getAuthToken();
     if (!token) {
       clearBadge();
       return;
     }
 
-    // User is authenticated but cache is stale — fetch from API
     const response = await getCreditBalance();
     if (response.success && response.credits) {
       await setCreditInfo(response.credits);
-      // Badge updates automatically via the storage.onChanged listener
     }
   } catch {
-    // Ignore errors during init — badge will update on next credit fetch
+    // Ignore errors — badge will update on next alarm or credit fetch
   }
 }
-
-// initBadge() is called from onInstalled and onStartup event handlers below
-// (not top-level, because MV3 can kill the worker before top-level async completes)
 
 // Periodic credit refresh via chrome.alarms — keeps badge accurate in real-time
 const CREDIT_REFRESH_ALARM = 'safeplay_credit_refresh';
