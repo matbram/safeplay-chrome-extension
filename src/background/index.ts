@@ -332,15 +332,15 @@ async function handleStartFilter(
       };
     }
 
-    // Optimistic badge update: deduct credits immediately so the badge reflects
-    // the cost without waiting for the API balance endpoint (which may lag).
-    if (creditCost && creditCost > 0) {
-      await updateCreditsAfterFilter(creditCost);
-    }
-
     if (response.status === 'completed' && response.transcript) {
       log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
+      // Optimistic badge update: deduct credits immediately so the badge reflects
+      // the cost without waiting for the API balance endpoint (which may lag).
+      // Only on confirmed completion — failed/processing jobs don't charge credits.
+      if (creditCost && creditCost > 0) {
+        await updateCreditsAfterFilter(creditCost);
+      }
       // Also refresh from API for accuracy (corrects the optimistic update if needed)
       await refreshCredits();
       return {
@@ -351,6 +351,8 @@ async function handleStartFilter(
 
     if (response.status === 'processing' && response.job_id) {
       log('API returned processing status, job_id:', response.job_id);
+      // No credit deduction here — credits are only charged on successful completion.
+      // handleCheckJob will refresh credits when the job finishes.
       return {
         success: true,
         data: { status: 'processing', jobId: response.job_id },
