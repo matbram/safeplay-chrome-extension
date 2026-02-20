@@ -530,15 +530,26 @@ async function handleGetAuthStatus(): Promise<
 }
 
 /**
- * Strict auth check - checks if user is authenticated without triggering
- * any auto-refresh via website cookies. This should be used before
- * initiating any feature that requires authentication.
+ * Strict auth check - first checks local token validity, then attempts
+ * a token refresh if the token is expired but a refresh token exists.
+ * This ensures users with valid sessions aren't asked to re-authenticate
+ * just because their access token expired.
  */
 async function handleCheckAuthStrict(): Promise<
   MessageResponse<{ authenticated: boolean }>
 > {
-  const authenticated = await isAuthenticatedStrict();
-  log('handleCheckAuthStrict:', authenticated);
+  // Fast path: token is still valid locally
+  const strictAuth = await isAuthenticatedStrict();
+  if (strictAuth) {
+    log('handleCheckAuthStrict: authenticated (token valid)');
+    return { success: true, data: { authenticated: true } };
+  }
+
+  // Token expired or missing — attempt refresh via stored refresh token
+  log('handleCheckAuthStrict: strict check failed, attempting token refresh');
+  const refreshedToken = await getAuthToken();
+  const authenticated = refreshedToken !== null;
+  log('handleCheckAuthStrict after refresh:', authenticated);
   return { success: true, data: { authenticated } };
 }
 
