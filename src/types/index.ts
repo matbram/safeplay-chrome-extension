@@ -242,6 +242,7 @@ export interface FilterConfirmPayload {
   youtubeId: string;
   filterType?: 'mute' | 'bleep';
   customWords?: string[];
+  creditCost?: number;
 }
 
 // User Profile Types

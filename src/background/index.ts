@@ -18,10 +18,8 @@ import {
   getAuthToken,
   clearCachedTranscripts,
   isAuthenticated,
-  isAuthenticatedStrict,
   getCreditInfo,
   setCreditInfo,
-  updateCreditsAfterFilter,
   clearAuthData,
   setUserProfile,
   setUserSubscription,
@@ -47,10 +45,122 @@ function logError(...args: unknown[]): void {
   console.error('[SafePlay BG ERROR]', ...args);
 }
 
+// Track credit costs for in-flight processing jobs so we can update
+// the badge optimistically when they complete (before the API catches up).
+const pendingJobCosts = new Map<string, number>();
+
+// Optimistically deduct credits and update badge immediately.
+// Reads directly from storage (bypassing cache TTL) and calls updateBadge()
+// directly (not relying on the storage change listener) for reliability.
+async function deductCreditsOptimistic(creditCost: number): Promise<void> {
+  const result = await chrome.storage.local.get('safeplay_credit_info');
+  const currentInfo = result['safeplay_credit_info'] as CreditInfo | undefined;
+  if (!currentInfo) return;
+
+  const updatedInfo: CreditInfo = {
+    ...currentInfo,
+    available: Math.max(0, currentInfo.available - creditCost),
+    used_this_period: currentInfo.used_this_period + creditCost,
+    percent_consumed: Math.min(
+      100,
+      ((currentInfo.used_this_period + creditCost) / currentInfo.plan_allocation) * 100
+    ),
+  };
+  await setCreditInfo(updatedInfo);
+  updateBadge(updatedInfo);
+}
+
+// Badge management - shows remaining credits on extension icon
+function updateBadge(creditInfo: CreditInfo | null): void {
+  if (!creditInfo) {
+    chrome.action.setBadgeText({ text: '' });
+    return;
+  }
+
+  const { available } = creditInfo;
+  const text = available.toString();
+
+  chrome.action.setBadgeText({ text });
+
+  // Color-code: green for healthy, orange for low, red for empty
+  let color: string;
+  if (available === 0) {
+    color = '#F44336'; // Red
+  } else if (available <= 5) {
+    color = '#FF9800'; // Orange
+  } else {
+    color = '#4CAF50'; // Green
+  }
+  chrome.action.setBadgeBackgroundColor({ color });
+}
+
+function clearBadge(): void {
+  chrome.action.setBadgeText({ text: '' });
+}
+
+// Listen for credit info changes in storage to keep badge in sync
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+
+  if (changes.safeplay_credit_info) {
+    const newValue = changes.safeplay_credit_info.newValue as CreditInfo | undefined;
+    updateBadge(newValue || null);
+  }
+});
+
+// Restore badge from storage on every service worker wake-up.
+// Reads directly from storage ignoring cache TTL — even "stale" data is better than an empty badge.
+// This is fast (local storage only, no network) so it completes before the worker can be killed.
+chrome.storage.local.get('safeplay_credit_info').then((result) => {
+  const creditInfo = result['safeplay_credit_info'] as CreditInfo | undefined;
+  if (creditInfo) {
+    updateBadge(creditInfo);
+  }
+});
+
+// Full initialization: fetch fresh credits from API if authenticated.
+// Called from onInstalled/onStartup event handlers where Chrome keeps the worker alive.
+async function initBadge(): Promise<void> {
+  try {
+    const token = await getAuthToken();
+    if (!token) {
+      clearBadge();
+      return;
+    }
+
+    const response = await getCreditBalance();
+    if (response.success && response.credits) {
+      await setCreditInfo(response.credits);
+    }
+  } catch {
+    // Ignore errors — badge will update on next alarm or credit fetch
+  }
+}
+
+// Periodic credit refresh via chrome.alarms — keeps badge accurate in real-time
+const CREDIT_REFRESH_ALARM = 'safeplay_credit_refresh';
+const CREDIT_REFRESH_INTERVAL_MIN = 2; // Every 2 minutes
+
+chrome.alarms.create(CREDIT_REFRESH_ALARM, {
+  periodInMinutes: CREDIT_REFRESH_INTERVAL_MIN,
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== CREDIT_REFRESH_ALARM) return;
+
+  const token = await getAuthToken();
+  if (!token) return;
+
+  log('Alarm: refreshing credits');
+  await refreshCredits();
+});
+
 // Message handler
 chrome.runtime.onMessage.addListener(
   (message: Message, sender, sendResponse: (response: MessageResponse) => void) => {
-    handleMessage(message, sender).then(sendResponse);
+    handleMessage(message, sender)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ success: false, error: String(error) }));
     return true; // Keep channel open for async
   }
 );
@@ -207,8 +317,8 @@ async function handleGetPreview(
 async function handleStartFilter(
   payload: FilterConfirmPayload
 ): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string }>> {
-  const { youtubeId, filterType = 'mute', customWords } = payload;
-  log('handleStartFilter called:', { youtubeId, filterType });
+  const { youtubeId, filterType = 'mute', customWords, creditCost } = payload;
+  log('handleStartFilter called:', { youtubeId, filterType, creditCost });
 
   // Check local cache first
   const cached = await getCachedTranscript(youtubeId);
@@ -249,6 +359,12 @@ async function handleStartFilter(
     if (response.status === 'completed' && response.transcript) {
       log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
+      // Deduct credits immediately so badge updates without waiting for the API
+      if (creditCost && creditCost > 0) {
+        await deductCreditsOptimistic(creditCost);
+      }
+      // Then refresh from API for accuracy (corrects the optimistic value if needed)
+      await refreshCredits();
       return {
         success: true,
         data: { status: 'completed', transcript: response.transcript },
@@ -257,6 +373,10 @@ async function handleStartFilter(
 
     if (response.status === 'processing' && response.job_id) {
       log('API returned processing status, job_id:', response.job_id);
+      // Store credit cost so handleCheckJob can deduct optimistically on completion
+      if (creditCost && creditCost > 0) {
+        pendingJobCosts.set(response.job_id, creditCost);
+      }
       return {
         success: true,
         data: { status: 'processing', jobId: response.job_id },
@@ -327,6 +447,7 @@ async function handleGetFilter(
       });
 
       await setCachedTranscript(youtubeId, response.transcript);
+      await refreshCredits();
       return {
         success: true,
         data: { status: 'completed', transcript: response.transcript },
@@ -394,10 +515,21 @@ async function handleCheckJob(
 
       await setCachedTranscript(cacheKey, status.transcript);
 
-      // Update credits after successful completion
-      // The credit cost is calculated based on video duration (1 credit per minute, min 1)
-      // For now, we'll do an optimistic update with 1 credit since we don't have duration here
-      await updateCreditsAfterFilter(1);
+      // Deduct stored credit cost immediately so badge updates without waiting
+      // for the balance API (which may still return stale data right after completion)
+      const creditCost = pendingJobCosts.get(jobId);
+      if (creditCost && creditCost > 0) {
+        pendingJobCosts.delete(jobId);
+        await deductCreditsOptimistic(creditCost);
+      }
+
+      // Then refresh from API for accuracy
+      await refreshCredits();
+    }
+
+    // Clean up pending cost if job failed
+    if (status.status === 'failed') {
+      pendingJobCosts.delete(jobId);
     }
 
     return { success: true, data: status };
@@ -405,6 +537,20 @@ async function handleCheckJob(
     logError('handleCheckJob error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to check job status';
     return { success: false, error: errorMessage };
+  }
+}
+
+// Fetch fresh credit balance from API and update storage + badge directly
+async function refreshCredits(): Promise<void> {
+  try {
+    const response = await getCreditBalance();
+    if (response.success && response.credits) {
+      await setCreditInfo(response.credits);
+      updateBadge(response.credits);
+      log('Credits refreshed from API:', response.credits.available);
+    }
+  } catch (error) {
+    log('Failed to refresh credits:', error);
   }
 }
 
@@ -472,14 +618,18 @@ async function handleGetAuthStatus(): Promise<
 }
 
 /**
- * Strict auth check - checks if user is authenticated without triggering
- * any auto-refresh via website cookies. This should be used before
- * initiating any feature that requires authentication.
+ * Strict auth check - first checks local token validity, then attempts
+ * a token refresh if the token is expired but a refresh token exists.
+ * This ensures users with valid sessions aren't asked to re-authenticate
+ * just because their access token expired.
  */
 async function handleCheckAuthStrict(): Promise<
   MessageResponse<{ authenticated: boolean }>
 > {
-  const authenticated = await isAuthenticatedStrict();
+  // Single source of truth: use getAuthToken() which handles expiry, refresh, etc.
+  // This is the same path the popup and alarm use, so auth behaves consistently.
+  const token = await getAuthToken();
+  const authenticated = token !== null;
   log('handleCheckAuthStrict:', authenticated);
   return { success: true, data: { authenticated } };
 }
@@ -588,6 +738,7 @@ async function handleLogout(): Promise<MessageResponse> {
   log('handleLogout called');
 
   await clearAuthData();
+  clearBadge();
 
   // Broadcast logout to all tabs
   const tabs = await chrome.tabs.query({});
@@ -628,14 +779,16 @@ chrome.action.onClicked.addListener((_tab) => {
   log('Extension icon clicked');
 });
 
-// Handle installation/update
-chrome.runtime.onInstalled.addListener((details) => {
+// Handle installation/update — initialize badge within event handler so worker stays alive
+chrome.runtime.onInstalled.addListener(async (details) => {
   log('Extension installed/updated:', details.reason);
+  await initBadge();
+});
 
-  if (details.reason === 'install') {
-    // First install - could open onboarding page
-    // chrome.tabs.create({ url: 'https://safeplay.app/welcome' });
-  }
+// Handle browser startup — also initialize badge
+chrome.runtime.onStartup.addListener(async () => {
+  log('Browser started');
+  await initBadge();
 });
 
 // Handle auth callback from website (deep-link auth flow)

@@ -60,6 +60,7 @@ class SafePlayContentScript {
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
   private navigationId = 0; // Incremented on each navigation to cancel stale async operations
   private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
+  private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -178,14 +179,20 @@ class SafePlayContentScript {
 
     log('Filter button clicked for:', youtubeId);
 
-    // Step 0: Check authentication FIRST - strict check without auto-refresh
-    // This prevents the extension from silently re-authenticating via website cookies
+    // Step 0: Check authentication via background script (uses getAuthToken with auto-refresh)
     try {
       const authResponse = await safeSendMessage<{ success: boolean; data?: { authenticated: boolean } }>({
         type: 'CHECK_AUTH_STRICT',
       });
 
-      if (!authResponse?.success || !authResponse?.data?.authenticated) {
+      // Null response means extension context invalidated (extension was reloaded)
+      if (!authResponse) {
+        log('Extension context invalidated, showing reload message');
+        this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: youtubeId });
+        return;
+      }
+
+      if (!authResponse.success || !authResponse.data?.authenticated) {
         log('User not authenticated, showing sign in modal');
         this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
         showAuthRequiredMessage();
@@ -236,6 +243,7 @@ class SafePlayContentScript {
       }
 
       const previewData: PreviewData = previewResponse.data;
+      this.lastCreditCost = previewData.creditCost;
 
       // If cached and has sufficient credits (free), skip confirmation
       if (previewData.isCached && previewData.creditCost === 0) {
@@ -330,7 +338,7 @@ class SafePlayContentScript {
         data?: { status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string };
       }>({
         type: 'START_FILTER',
-        payload: { youtubeId, filterType: this.preferences.filterMode },
+        payload: { youtubeId, filterType: this.preferences.filterMode, creditCost: this.lastCreditCost },
       });
 
       // Check if user navigated away during the request
