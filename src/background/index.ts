@@ -114,6 +114,24 @@ async function initBadge(): Promise<void> {
 
 initBadge();
 
+// Periodic credit refresh via chrome.alarms — keeps badge accurate in real-time
+const CREDIT_REFRESH_ALARM = 'safeplay_credit_refresh';
+const CREDIT_REFRESH_INTERVAL_MIN = 2; // Every 2 minutes
+
+chrome.alarms.create(CREDIT_REFRESH_ALARM, {
+  periodInMinutes: CREDIT_REFRESH_INTERVAL_MIN,
+});
+
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== CREDIT_REFRESH_ALARM) return;
+
+  const token = await getAuthToken();
+  if (!token) return;
+
+  log('Alarm: refreshing credits');
+  await refreshCredits();
+});
+
 // Message handler
 chrome.runtime.onMessage.addListener(
   (message: Message, sender, sendResponse: (response: MessageResponse) => void) => {
@@ -317,7 +335,7 @@ async function handleStartFilter(
       log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
       // Refresh credits so badge reflects the deduction
-      refreshCredits();
+      await refreshCredits();
       return {
         success: true,
         data: { status: 'completed', transcript: response.transcript },
@@ -396,7 +414,7 @@ async function handleGetFilter(
       });
 
       await setCachedTranscript(youtubeId, response.transcript);
-      refreshCredits();
+      await refreshCredits();
       return {
         success: true,
         data: { status: 'completed', transcript: response.transcript },
@@ -465,7 +483,7 @@ async function handleCheckJob(
       await setCachedTranscript(cacheKey, status.transcript);
 
       // Fetch fresh credit balance from server so badge reflects actual remaining credits
-      refreshCredits();
+      await refreshCredits();
     }
 
     return { success: true, data: status };
