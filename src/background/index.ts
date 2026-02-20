@@ -85,21 +85,31 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   }
 });
 
-// Initialize badge on startup from cached credit info
+// Initialize badge on startup — fetch fresh credits if authenticated
 async function initBadge(): Promise<void> {
   try {
+    // Try cached data first for an instant badge update
     const cachedInfo = await getCreditInfo();
     if (cachedInfo) {
       updateBadge(cachedInfo);
-    } else {
-      // Check if user is authenticated; if not, leave badge clear
-      const authenticated = await isAuthenticatedStrict();
-      if (!authenticated) {
-        clearBadge();
-      }
+      return;
+    }
+
+    // No cached data — check if user is authenticated and fetch fresh credits
+    const token = await getAuthToken();
+    if (!token) {
+      clearBadge();
+      return;
+    }
+
+    // User is authenticated but cache is stale — fetch from API
+    const response = await getCreditBalance();
+    if (response.success && response.credits) {
+      await setCreditInfo(response.credits);
+      // Badge updates automatically via the storage.onChanged listener
     }
   } catch {
-    // Ignore errors during init
+    // Ignore errors during init — badge will update on next credit fetch
   }
 }
 
