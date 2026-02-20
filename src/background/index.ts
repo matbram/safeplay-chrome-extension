@@ -21,7 +21,6 @@ import {
   isAuthenticatedStrict,
   getCreditInfo,
   setCreditInfo,
-  updateCreditsAfterFilter,
   clearAuthData,
   setUserProfile,
   setUserSubscription,
@@ -317,6 +316,8 @@ async function handleStartFilter(
     if (response.status === 'completed' && response.transcript) {
       log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
+      // Refresh credits so badge reflects the deduction
+      refreshCredits();
       return {
         success: true,
         data: { status: 'completed', transcript: response.transcript },
@@ -395,6 +396,7 @@ async function handleGetFilter(
       });
 
       await setCachedTranscript(youtubeId, response.transcript);
+      refreshCredits();
       return {
         success: true,
         data: { status: 'completed', transcript: response.transcript },
@@ -462,10 +464,8 @@ async function handleCheckJob(
 
       await setCachedTranscript(cacheKey, status.transcript);
 
-      // Update credits after successful completion
-      // The credit cost is calculated based on video duration (1 credit per minute, min 1)
-      // For now, we'll do an optimistic update with 1 credit since we don't have duration here
-      await updateCreditsAfterFilter(1);
+      // Fetch fresh credit balance from server so badge reflects actual remaining credits
+      refreshCredits();
     }
 
     return { success: true, data: status };
@@ -473,6 +473,19 @@ async function handleCheckJob(
     logError('handleCheckJob error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to check job status';
     return { success: false, error: errorMessage };
+  }
+}
+
+// Fetch fresh credit balance from API and update storage (which updates the badge)
+async function refreshCredits(): Promise<void> {
+  try {
+    const response = await getCreditBalance();
+    if (response.success && response.credits) {
+      await setCreditInfo(response.credits);
+      log('Credits refreshed from API:', response.credits.available);
+    }
+  } catch (error) {
+    log('Failed to refresh credits:', error);
   }
 }
 
