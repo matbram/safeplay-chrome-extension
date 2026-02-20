@@ -112,7 +112,8 @@ async function initBadge(): Promise<void> {
   }
 }
 
-initBadge();
+// initBadge() is called from onInstalled and onStartup event handlers below
+// (not top-level, because MV3 can kill the worker before top-level async completes)
 
 // Periodic credit refresh via chrome.alarms — keeps badge accurate in real-time
 const CREDIT_REFRESH_ALARM = 'safeplay_credit_refresh';
@@ -739,14 +740,16 @@ chrome.action.onClicked.addListener((_tab) => {
   log('Extension icon clicked');
 });
 
-// Handle installation/update
-chrome.runtime.onInstalled.addListener((details) => {
+// Handle installation/update — initialize badge within event handler so worker stays alive
+chrome.runtime.onInstalled.addListener(async (details) => {
   log('Extension installed/updated:', details.reason);
+  await initBadge();
+});
 
-  if (details.reason === 'install') {
-    // First install - could open onboarding page
-    // chrome.tabs.create({ url: 'https://safeplay.app/welcome' });
-  }
+// Handle browser startup — also initialize badge
+chrome.runtime.onStartup.addListener(async () => {
+  log('Browser started');
+  await initBadge();
 });
 
 // Handle auth callback from website (deep-link auth flow)
