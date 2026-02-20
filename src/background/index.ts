@@ -25,6 +25,7 @@ import {
   setUserSubscription,
   setUserCredits,
   getFullAuthState,
+  updateCreditsAfterFilter,
 } from '../utils/storage';
 import {
   requestFilter,
@@ -292,8 +293,8 @@ async function handleGetPreview(
 async function handleStartFilter(
   payload: FilterConfirmPayload
 ): Promise<MessageResponse<{ status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string }>> {
-  const { youtubeId, filterType = 'mute', customWords } = payload;
-  log('handleStartFilter called:', { youtubeId, filterType });
+  const { youtubeId, filterType = 'mute', customWords, creditCost } = payload;
+  log('handleStartFilter called:', { youtubeId, filterType, creditCost });
 
   // Check local cache first
   const cached = await getCachedTranscript(youtubeId);
@@ -331,10 +332,16 @@ async function handleStartFilter(
       };
     }
 
+    // Optimistic badge update: deduct credits immediately so the badge reflects
+    // the cost without waiting for the API balance endpoint (which may lag).
+    if (creditCost && creditCost > 0) {
+      await updateCreditsAfterFilter(creditCost);
+    }
+
     if (response.status === 'completed' && response.transcript) {
       log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
-      // Refresh credits so badge reflects the deduction
+      // Also refresh from API for accuracy (corrects the optimistic update if needed)
       await refreshCredits();
       return {
         success: true,

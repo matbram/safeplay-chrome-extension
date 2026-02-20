@@ -60,6 +60,7 @@ class SafePlayContentScript {
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
   private navigationId = 0; // Incremented on each navigation to cancel stale async operations
   private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
+  private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -242,6 +243,7 @@ class SafePlayContentScript {
       }
 
       const previewData: PreviewData = previewResponse.data;
+      this.lastCreditCost = previewData.creditCost;
 
       // If cached and has sufficient credits (free), skip confirmation
       if (previewData.isCached && previewData.creditCost === 0) {
@@ -336,7 +338,7 @@ class SafePlayContentScript {
         data?: { status: string; transcript?: Transcript; jobId?: string; error?: string; error_code?: string };
       }>({
         type: 'START_FILTER',
-        payload: { youtubeId, filterType: this.preferences.filterMode },
+        payload: { youtubeId, filterType: this.preferences.filterMode, creditCost: this.lastCreditCost },
       });
 
       // Check if user navigated away during the request
