@@ -25,7 +25,6 @@ import {
   setUserSubscription,
   setUserCredits,
   getFullAuthState,
-  updateCreditsAfterFilter,
 } from '../utils/storage';
 import {
   requestFilter,
@@ -44,6 +43,31 @@ function log(...args: unknown[]): void {
 
 function logError(...args: unknown[]): void {
   console.error('[SafePlay BG ERROR]', ...args);
+}
+
+// Track credit costs for in-flight processing jobs so we can update
+// the badge optimistically when they complete (before the API catches up).
+const pendingJobCosts = new Map<string, number>();
+
+// Optimistically deduct credits and update badge immediately.
+// Reads directly from storage (bypassing cache TTL) and calls updateBadge()
+// directly (not relying on the storage change listener) for reliability.
+async function deductCreditsOptimistic(creditCost: number): Promise<void> {
+  const result = await chrome.storage.local.get('safeplay_credit_info');
+  const currentInfo = result['safeplay_credit_info'] as CreditInfo | undefined;
+  if (!currentInfo) return;
+
+  const updatedInfo: CreditInfo = {
+    ...currentInfo,
+    available: Math.max(0, currentInfo.available - creditCost),
+    used_this_period: currentInfo.used_this_period + creditCost,
+    percent_consumed: Math.min(
+      100,
+      ((currentInfo.used_this_period + creditCost) / currentInfo.plan_allocation) * 100
+    ),
+  };
+  await setCreditInfo(updatedInfo);
+  updateBadge(updatedInfo);
 }
 
 // Badge management - shows remaining credits on extension icon
@@ -335,13 +359,11 @@ async function handleStartFilter(
     if (response.status === 'completed' && response.transcript) {
       log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
-      // Optimistic badge update: deduct credits immediately so the badge reflects
-      // the cost without waiting for the API balance endpoint (which may lag).
-      // Only on confirmed completion — failed/processing jobs don't charge credits.
+      // Deduct credits immediately so badge updates without waiting for the API
       if (creditCost && creditCost > 0) {
-        await updateCreditsAfterFilter(creditCost);
+        await deductCreditsOptimistic(creditCost);
       }
-      // Also refresh from API for accuracy (corrects the optimistic update if needed)
+      // Then refresh from API for accuracy (corrects the optimistic value if needed)
       await refreshCredits();
       return {
         success: true,
@@ -351,8 +373,10 @@ async function handleStartFilter(
 
     if (response.status === 'processing' && response.job_id) {
       log('API returned processing status, job_id:', response.job_id);
-      // No credit deduction here — credits are only charged on successful completion.
-      // handleCheckJob will refresh credits when the job finishes.
+      // Store credit cost so handleCheckJob can deduct optimistically on completion
+      if (creditCost && creditCost > 0) {
+        pendingJobCosts.set(response.job_id, creditCost);
+      }
       return {
         success: true,
         data: { status: 'processing', jobId: response.job_id },
@@ -491,8 +515,21 @@ async function handleCheckJob(
 
       await setCachedTranscript(cacheKey, status.transcript);
 
-      // Fetch fresh credit balance from server so badge reflects actual remaining credits
+      // Deduct stored credit cost immediately so badge updates without waiting
+      // for the balance API (which may still return stale data right after completion)
+      const creditCost = pendingJobCosts.get(jobId);
+      if (creditCost && creditCost > 0) {
+        pendingJobCosts.delete(jobId);
+        await deductCreditsOptimistic(creditCost);
+      }
+
+      // Then refresh from API for accuracy
       await refreshCredits();
+    }
+
+    // Clean up pending cost if job failed
+    if (status.status === 'failed') {
+      pendingJobCosts.delete(jobId);
     }
 
     return { success: true, data: status };
@@ -503,12 +540,13 @@ async function handleCheckJob(
   }
 }
 
-// Fetch fresh credit balance from API and update storage (which updates the badge)
+// Fetch fresh credit balance from API and update storage + badge directly
 async function refreshCredits(): Promise<void> {
   try {
     const response = await getCreditBalance();
     if (response.success && response.credits) {
       await setCreditInfo(response.credits);
+      updateBadge(response.credits);
       log('Credits refreshed from API:', response.credits.available);
     }
   } catch (error) {
