@@ -18,7 +18,6 @@ import {
   getAuthToken,
   clearCachedTranscripts,
   isAuthenticated,
-  isAuthenticatedStrict,
   getCreditInfo,
   setCreditInfo,
   clearAuthData,
@@ -134,7 +133,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // Message handler
 chrome.runtime.onMessage.addListener(
   (message: Message, sender, sendResponse: (response: MessageResponse) => void) => {
-    handleMessage(message, sender).then(sendResponse);
+    handleMessage(message, sender)
+      .then(sendResponse)
+      .catch((error) => sendResponse({ success: false, error: String(error) }));
     return true; // Keep channel open for async
   }
 );
@@ -578,18 +579,11 @@ async function handleGetAuthStatus(): Promise<
 async function handleCheckAuthStrict(): Promise<
   MessageResponse<{ authenticated: boolean }>
 > {
-  // Fast path: token is still valid locally
-  const strictAuth = await isAuthenticatedStrict();
-  if (strictAuth) {
-    log('handleCheckAuthStrict: authenticated (token valid)');
-    return { success: true, data: { authenticated: true } };
-  }
-
-  // Token expired or missing — attempt refresh via stored refresh token
-  log('handleCheckAuthStrict: strict check failed, attempting token refresh');
-  const refreshedToken = await getAuthToken();
-  const authenticated = refreshedToken !== null;
-  log('handleCheckAuthStrict after refresh:', authenticated);
+  // Single source of truth: use getAuthToken() which handles expiry, refresh, etc.
+  // This is the same path the popup and alarm use, so auth behaves consistently.
+  const token = await getAuthToken();
+  const authenticated = token !== null;
+  log('handleCheckAuthStrict:', authenticated);
   return { success: true, data: { authenticated } };
 }
 

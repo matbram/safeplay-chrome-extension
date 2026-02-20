@@ -178,14 +178,20 @@ class SafePlayContentScript {
 
     log('Filter button clicked for:', youtubeId);
 
-    // Step 0: Check authentication FIRST - strict check without auto-refresh
-    // This prevents the extension from silently re-authenticating via website cookies
+    // Step 0: Check authentication via background script (uses getAuthToken with auto-refresh)
     try {
       const authResponse = await safeSendMessage<{ success: boolean; data?: { authenticated: boolean } }>({
         type: 'CHECK_AUTH_STRICT',
       });
 
-      if (!authResponse?.success || !authResponse?.data?.authenticated) {
+      // Null response means extension context invalidated (extension was reloaded)
+      if (!authResponse) {
+        log('Extension context invalidated, showing reload message');
+        this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: youtubeId });
+        return;
+      }
+
+      if (!authResponse.success || !authResponse.data?.authenticated) {
         log('User not authenticated, showing sign in modal');
         this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
         showAuthRequiredMessage();
