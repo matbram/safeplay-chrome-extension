@@ -297,8 +297,8 @@ class SafePlayContentScript {
       });
       this.isProcessing = false;
       this.filteringVideoId = null;
-      // Show notification about the filtering issue
-      showFilterErrorNotification();
+      // Show notification about the filtering issue with auto-retry
+      showFilterErrorNotification(() => this.onFilterButtonClick(youtubeId));
     }
   }
 
@@ -387,8 +387,8 @@ class SafePlayContentScript {
             error: (error || 'Failed to filter video') + ' - Click to retry',
             videoId: youtubeId,
           });
-          // Show notification about the filtering issue
-          showFilterErrorNotification();
+          // Show notification about the filtering issue with auto-retry
+          showFilterErrorNotification(() => this.onFilterButtonClick(youtubeId));
         }
         // Resume video since we can't filter
         if (this.videoWasPlaying) {
@@ -443,8 +443,8 @@ class SafePlayContentScript {
       }
       this.isProcessing = false;
       this.filteringVideoId = null;
-      // Show notification about the filtering issue
-      showFilterErrorNotification();
+      // Show notification about the filtering issue with auto-retry
+      showFilterErrorNotification(() => this.onFilterButtonClick(youtubeId));
     }
   }
 
@@ -633,8 +633,8 @@ class SafePlayContentScript {
         });
         this.isProcessing = false;
         this.filteringVideoId = null;
-        // Show notification about the filtering issue
-        showFilterErrorNotification();
+        // Show notification about the filtering issue with auto-retry
+        showFilterErrorNotification(videoId ? () => this.onFilterButtonClick(videoId) : undefined);
         return;
       }
     }
@@ -652,8 +652,8 @@ class SafePlayContentScript {
     });
     this.isProcessing = false;
     this.filteringVideoId = null;
-    // Show notification about the filtering issue
-    showFilterErrorNotification();
+    // Show notification about the filtering issue with auto-retry
+    showFilterErrorNotification(videoId ? () => this.onFilterButtonClick(videoId) : undefined);
   }
 
   // Apply the filter using the transcript

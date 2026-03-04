@@ -478,8 +478,12 @@ export class CreditConfirmation {
   }
 }
 
-// Helper function to show a filter error notification
-export function showFilterErrorNotification(): void {
+// Helper function to show a filter error notification with optional auto-retry
+export function showFilterErrorNotification(onRetry?: () => void, autoRetryDelay = 10): void {
+  const hasAutoRetry = !!(onRetry && autoRetryDelay > 0);
+  let countdownSeconds = autoRetryDelay;
+  let countdownTimer: ReturnType<typeof setInterval> | null = null;
+
   const overlay = document.createElement('div');
   // Use inline styles to avoid conflicts with CreditConfirmation styles
   overlay.style.cssText = `
@@ -509,25 +513,68 @@ export function showFilterErrorNotification(): void {
         <p style="color: #AAAAAA; font-size: 14px; line-height: 1.5; margin: 0;">
           We're experiencing some difficulty censoring this video right now. Our team has been notified and is working on it.
         </p>
-        <p style="color: #888888; font-size: 14px; line-height: 1.5; margin: 12px 0 0 0;">
-          We'll notify you when the video is ready to be filtered. You can also try again later by clicking the Retry button.
+        ${hasAutoRetry ? `
+        <p data-countdown style="color: #888888; font-size: 14px; line-height: 1.5; margin: 12px 0 0 0;">
+          Retrying automatically in <span data-countdown-value style="color: #F1F1F1; font-weight: 600;">${countdownSeconds}s</span>...
         </p>
+        ` : `
+        <p style="color: #888888; font-size: 14px; line-height: 1.5; margin: 12px 0 0 0;">
+          You can try again later by clicking the Retry button.
+        </p>
+        `}
       </div>
       <div style="display: flex; gap: 12px; justify-content: flex-end;">
-        <button data-action="close" style="padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; background: #FF0000; color: white;">
-          Got It
+        <button data-action="close" style="padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; background: ${hasAutoRetry ? '#272727' : '#FF0000'}; color: white; ${hasAutoRetry ? 'border: 1px solid #3F3F3F;' : ''}">
+          ${hasAutoRetry ? 'Dismiss' : 'Got It'}
         </button>
+        ${hasAutoRetry ? `
+        <button data-action="retry-now" style="padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; background: #FF0000; color: white;">
+          Retry Now
+        </button>
+        ` : ''}
       </div>
     </div>
   `;
 
   document.body.appendChild(overlay);
 
-  // Set up close handlers
-  const closeDialog = () => {
+  // Set up close/cleanup handlers
+  const cleanup = () => {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
     overlay.remove();
   };
 
+  const closeDialog = () => {
+    cleanup();
+  };
+
+  const retryNow = () => {
+    cleanup();
+    onRetry?.();
+  };
+
+  // Start countdown timer for auto-retry
+  if (hasAutoRetry) {
+    const countdownValueEl = overlay.querySelector('[data-countdown-value]');
+
+    countdownTimer = setInterval(() => {
+      countdownSeconds--;
+      if (countdownValueEl) {
+        countdownValueEl.textContent = `${countdownSeconds}s`;
+      }
+      if (countdownSeconds <= 0) {
+        retryNow();
+      }
+    }, 1000);
+  }
+
+  // "Retry Now" button
+  overlay.querySelector('[data-action="retry-now"]')?.addEventListener('click', retryNow);
+
+  // "Dismiss" / "Got It" button
   overlay.querySelector('[data-action="close"]')?.addEventListener('click', closeDialog);
   overlay.addEventListener('click', (e) => {
     if (e.target === overlay) closeDialog();
