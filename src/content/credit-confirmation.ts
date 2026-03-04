@@ -510,7 +510,7 @@ export function showFilterErrorNotification(): void {
           We're experiencing some difficulty censoring this video right now. Our team has been notified and is working on it.
         </p>
         <p style="color: #888888; font-size: 14px; line-height: 1.5; margin: 12px 0 0 0;">
-          We'll notify you when the video is ready to be filtered. You can also try again later by clicking the Retry button.
+          We'll automatically retry shortly. You can also try again later by clicking the Retry button.
         </p>
       </div>
       <div style="display: flex; gap: 12px; justify-content: flex-end;">
