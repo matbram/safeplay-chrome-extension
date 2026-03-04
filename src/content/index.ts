@@ -61,6 +61,8 @@ class SafePlayContentScript {
   private navigationId = 0; // Incremented on each navigation to cancel stale async operations
   private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
   private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
+  private autoRetryTimer: ReturnType<typeof setTimeout> | null = null; // Timer for automatic retry after error
+  private skipNextConfirmation = false; // Skip credit confirmation on auto-retry
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -148,6 +150,26 @@ class SafePlayContentScript {
 
   private updateButtonState(stateInfo: ButtonStateInfo): void {
     this.injector.updateButtonState(stateInfo);
+  }
+
+  // Schedule a silent auto-retry after a delay, dismissing the error modal automatically
+  private scheduleAutoRetry(videoId: string, delayMs = 5000): void {
+    // Clear any existing auto-retry timer
+    if (this.autoRetryTimer) {
+      clearTimeout(this.autoRetryTimer);
+    }
+    this.autoRetryTimer = setTimeout(() => {
+      this.autoRetryTimer = null;
+      // Dismiss the error modal if it's still showing
+      const errorOverlay = document.querySelector('[role="dialog"]')?.closest('div[style*="z-index: 999999"]');
+      if (errorOverlay) {
+        errorOverlay.remove();
+      }
+      // Skip confirmation on retry since user already intended to filter
+      this.skipNextConfirmation = true;
+      log('Auto-retrying filter for:', videoId);
+      this.onFilterButtonClick(videoId);
+    }, delayMs);
   }
 
   // Get the video element
@@ -245,9 +267,10 @@ class SafePlayContentScript {
       const previewData: PreviewData = previewResponse.data;
       this.lastCreditCost = previewData.creditCost;
 
-      // If cached and has sufficient credits (free), skip confirmation
-      if (previewData.isCached && previewData.creditCost === 0) {
-        log('Video is cached, skipping confirmation');
+      // If cached and has sufficient credits (free), or auto-retrying, skip confirmation
+      if ((previewData.isCached && previewData.creditCost === 0) || this.skipNextConfirmation) {
+        log(this.skipNextConfirmation ? 'Auto-retry, skipping confirmation' : 'Video is cached, skipping confirmation');
+        this.skipNextConfirmation = false;
         // Reset isProcessing since proceedWithFiltering will set it again
         this.isProcessing = false;
         await this.proceedWithFiltering(youtubeId);
@@ -297,8 +320,10 @@ class SafePlayContentScript {
       });
       this.isProcessing = false;
       this.filteringVideoId = null;
-      // Show notification about the filtering issue with auto-retry
-      showFilterErrorNotification(() => this.onFilterButtonClick(youtubeId));
+      // Show notification about the filtering issue
+      showFilterErrorNotification();
+      // Silently auto-retry after a delay
+      this.scheduleAutoRetry(youtubeId);
     }
   }
 
@@ -387,8 +412,10 @@ class SafePlayContentScript {
             error: (error || 'Failed to filter video') + ' - Click to retry',
             videoId: youtubeId,
           });
-          // Show notification about the filtering issue with auto-retry
-          showFilterErrorNotification(() => this.onFilterButtonClick(youtubeId));
+          // Show notification about the filtering issue
+          showFilterErrorNotification();
+          // Silently auto-retry after a delay
+          this.scheduleAutoRetry(youtubeId);
         }
         // Resume video since we can't filter
         if (this.videoWasPlaying) {
@@ -443,8 +470,10 @@ class SafePlayContentScript {
       }
       this.isProcessing = false;
       this.filteringVideoId = null;
-      // Show notification about the filtering issue with auto-retry
-      showFilterErrorNotification(() => this.onFilterButtonClick(youtubeId));
+      // Show notification about the filtering issue
+      showFilterErrorNotification();
+      // Silently auto-retry after a delay
+      this.scheduleAutoRetry(youtubeId);
     }
   }
 
@@ -633,8 +662,10 @@ class SafePlayContentScript {
         });
         this.isProcessing = false;
         this.filteringVideoId = null;
-        // Show notification about the filtering issue with auto-retry
-        showFilterErrorNotification(videoId ? () => this.onFilterButtonClick(videoId) : undefined);
+        // Show notification about the filtering issue
+        showFilterErrorNotification();
+        // Silently auto-retry after a delay
+        if (videoId) this.scheduleAutoRetry(videoId);
         return;
       }
     }
@@ -652,8 +683,10 @@ class SafePlayContentScript {
     });
     this.isProcessing = false;
     this.filteringVideoId = null;
-    // Show notification about the filtering issue with auto-retry
-    showFilterErrorNotification(videoId ? () => this.onFilterButtonClick(videoId) : undefined);
+    // Show notification about the filtering issue
+    showFilterErrorNotification();
+    // Silently auto-retry after a delay
+    if (videoId) this.scheduleAutoRetry(videoId);
   }
 
   // Apply the filter using the transcript
@@ -960,6 +993,13 @@ class SafePlayContentScript {
 
     // Stop caption filter
     this.captionFilter.stop();
+
+    // Cancel any pending auto-retry
+    if (this.autoRetryTimer) {
+      clearTimeout(this.autoRetryTimer);
+      this.autoRetryTimer = null;
+    }
+    this.skipNextConfirmation = false;
 
     // Stop progress animator if running (prevents stale state updates)
     if (this.progressAnimator) {
