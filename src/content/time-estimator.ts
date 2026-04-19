@@ -34,16 +34,17 @@ export function computeEstimate(durationSeconds: number | undefined): number | n
   return Math.max(20, Math.round(10 + durationSeconds / 13));
 }
 
-// Status-text map used when we're showing text only (no countdown). Also
-// used as the prefix when a countdown is present.
-function statusPrefix(phase: TranscriptionPhase, serverStatus?: string): string {
+// User-facing status text. Kept deliberately generic — we don't reveal
+// download/transcription internals to the user. The popup reads this
+// verbatim; the button renderer derives its own compact form.
+function statusPrefix(phase: TranscriptionPhase): string {
   switch (phase) {
     case 'connecting':
-      return 'Connecting';
+      return 'Getting ready';
     case 'preparing':
-      return serverStatus === 'downloading' ? 'Downloading audio' : 'Preparing video';
+      return 'Processing video';
     case 'transcribing':
-      return 'Transcribing';
+      return 'Processing video';
     case 'almost-done':
       return 'Almost done';
     case 'done':
@@ -58,7 +59,6 @@ export class TimeEstimator {
   private totalEstimate: number | null;
   private remaining: number | null;
   private phase: TranscriptionPhase = 'connecting';
-  private serverStatus: string | undefined;
   private closed = false;
   private readonly listener: EstimatorListener;
 
@@ -81,7 +81,6 @@ export class TimeEstimator {
   // the server-reported status.
   setServerStatus(status: string): void {
     if (this.closed) return;
-    this.serverStatus = status;
     if (this.phase === 'done' || this.phase === 'error') return;
     if (status === 'pending' || status === 'downloading') {
       this.phase = 'preparing';
@@ -144,8 +143,12 @@ export class TimeEstimator {
     }
   }
 
+  private lastEmittedPhase: TranscriptionPhase | null = null;
+  private lastEmittedRemaining: number | null | undefined = undefined;
+  private lastEmittedText: string | null = null;
+
   private emit(errorCode?: string, errorMessage?: string): void {
-    const prefix = statusPrefix(this.phase, this.serverStatus);
+    const prefix = statusPrefix(this.phase);
     let text: string;
     if (this.phase === 'error') {
       text = errorMessage || 'Error';
@@ -154,8 +157,22 @@ export class TimeEstimator {
     } else if (this.phase === 'almost-done' || this.remaining === null) {
       text = `${prefix}...`;
     } else {
-      text = `${prefix}... about ${this.remaining}s remaining`;
+      text = `${prefix} — ETA ${this.remaining}s`;
     }
+
+    // Dedup: the same server status arriving during a stable tick will
+    // otherwise fire back-to-back identical emits and clutter the console.
+    if (
+      this.phase === this.lastEmittedPhase &&
+      this.remaining === this.lastEmittedRemaining &&
+      text === this.lastEmittedText
+    ) {
+      return;
+    }
+    this.lastEmittedPhase = this.phase;
+    this.lastEmittedRemaining = this.remaining;
+    this.lastEmittedText = text;
+
     this.listener({
       phase: this.phase,
       remainingSeconds: this.remaining,

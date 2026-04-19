@@ -17,19 +17,19 @@ const SHORTS_BUTTON_CLASS = 'safeplay-shorts-button';
 // Compact button text during transcription. We keep this short because
 // the YouTube header has limited space next to Subscribe. The popup
 // renders the full statusText for users who want more detail.
+// Short, neutral text for the watch-page button. Deliberately brandless —
+// we don't say "transcribing" or "downloading" because those hint at the
+// pipeline. "ETA Ns" conveys remaining time in the tightest possible form.
 function compactButtonText(info: ButtonStateInfo): string {
   if (info.phase === 'done') return 'Done!';
   if (info.phase === 'error') return 'Retry';
   // Connecting doesn't get a countdown even if we know the total — we
   // haven't actually started the work yet.
-  if (info.phase === 'connecting') return 'Connecting...';
+  if (info.phase === 'connecting') return 'Starting...';
   if (info.phase === 'almost-done' || info.remainingSeconds == null) {
-    if (info.phase === 'preparing') return 'Preparing...';
     return 'Almost done...';
   }
-  const seconds = Math.max(0, info.remainingSeconds);
-  if (info.phase === 'preparing') return `Preparing ${seconds}s`;
-  return `Transcribing ${seconds}s`;
+  return `ETA ${Math.max(0, info.remainingSeconds)}s`;
 }
 
 function compactShortsLabel(info: ButtonStateInfo): string {
@@ -130,6 +130,10 @@ export class ResilientInjector {
   // Track Shorts button states by video ID
   private shortsButtonStates: Map<string, ButtonState> = new Map();
   private shortsScrollObserver: IntersectionObserver | null = null;
+  // Remember last logged state per surface so we only log transitions, not
+  // every per-second countdown tick during the transcription phase.
+  private lastLoggedWatchState: string | null = null;
+  private lastLoggedShortsState: Map<string, string> = new Map();
 
   constructor(options: InjectorOptions) {
     this.options = options;
@@ -864,7 +868,11 @@ export class ResilientInjector {
         button.title = 'Click to filter profanity with SafePlay';
     }
 
-    this.log(`Button state updated to: ${stateInfo.state}`, stateInfo);
+    const logKey = `${stateInfo.state}|${stateInfo.phase ?? ''}|${stateInfo.error ?? ''}`;
+    if (logKey !== this.lastLoggedWatchState) {
+      this.lastLoggedWatchState = logKey;
+      this.log(`Button state updated to: ${stateInfo.state}`, stateInfo);
+    }
   }
 
   // Convenience method for simple state updates
@@ -917,7 +925,11 @@ export class ResilientInjector {
       button.style.cursor = 'default';
     }
 
-    this.log(`Shorts button state updated to: ${stateInfo.state} for ${videoId}`);
+    const logKey = `${stateInfo.state}|${stateInfo.phase ?? ''}|${stateInfo.error ?? ''}`;
+    if (this.lastLoggedShortsState.get(videoId) !== logKey) {
+      this.lastLoggedShortsState.set(videoId, logKey);
+      this.log(`Shorts button state updated to: ${stateInfo.state} for ${videoId}`);
+    }
   }
 
   // Set up mutation observer for dynamic content changes
