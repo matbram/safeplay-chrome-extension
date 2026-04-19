@@ -16,10 +16,10 @@ import {
 } from '../types';
 
 const API_BASE_URL = 'https://trysafeplay.com';
-// Match the existing polling budget (180 attempts × 2s = 6 min). Applied
-// both to the SSE safety timeout AND to the polling fallback, so either
-// path gets up to 6 minutes from when *it* starts.
-const TRANSCRIPTION_BUDGET_MS = 6 * 60 * 1000;
+// Floor for the transcription budget (applies to short/medium videos).
+// The actual budget scales up with the ETA estimate for long videos —
+// see SafePlayContentScript.transcriptionBudgetMs().
+const TRANSCRIPTION_BUDGET_FLOOR_MS = 6 * 60 * 1000;
 const FALLBACK_POLL_INTERVAL_MS = 2000;
 import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
 import './styles.css';
@@ -499,10 +499,20 @@ class SafePlayContentScript {
     }
   }
 
+  // Budget for both SSE safety timer and polling fallback. Scales with
+  // the ETA estimate so long videos (where transcription legitimately
+  // takes tens of minutes) don't get killed at 6 minutes while the
+  // server is still actively working. 2× the estimate gives comfortable
+  // headroom; short/medium jobs stay at the 6-min floor.
+  private transcriptionBudgetMs(): number {
+    const est = this.lastTranscriptionState?.totalEstimatedSeconds;
+    if (!est || est <= 0) return TRANSCRIPTION_BUDGET_FLOOR_MS;
+    return Math.max(TRANSCRIPTION_BUDGET_FLOOR_MS, est * 2 * 1000);
+  }
+
   // Open the SSE connection for live transcription updates and kick off the
   // countdown. Falls back to polling on transport/HTTP failure or if the
-  // server never sends 'complete' within TRANSCRIPTION_BUDGET_MS. The
-  // polling path is preserved verbatim-in-shape as pollJobStatusFallback.
+  // server never sends 'complete' within the transcription budget.
   private async runTranscriptionFlow(jobId: string, videoId: string): Promise<void> {
     this.jobStartedAt = Date.now();
     this.startEstimator(videoId);
@@ -528,14 +538,15 @@ class SafePlayContentScript {
       return;
     }
 
+    const budgetMs = this.transcriptionBudgetMs();
     const safetyTimer = setTimeout(() => {
-      log('SSE budget expired, falling back to polling');
+      log(`SSE budget expired after ${budgetMs}ms, falling back to polling`);
       if (this.sseClient) {
         this.sseClient.close();
         this.sseClient = null;
       }
       if (isStillCurrent()) this.pollJobStatusFallback(jobId, videoId);
-    }, TRANSCRIPTION_BUDGET_MS);
+    }, budgetMs);
 
     const clearSafety = () => clearTimeout(safetyTimer);
 
@@ -667,13 +678,14 @@ class SafePlayContentScript {
 
     if (!this.estimator) this.startEstimator(videoId);
     const startedAt = Date.now();
+    const budgetMs = this.transcriptionBudgetMs();
     const navigationId = this.navigationId;
     const isStillCurrent = () =>
       this.navigationId === navigationId && this.filteringVideoId === videoId;
 
     const tick = async (): Promise<void> => {
       if (!isStillCurrent()) return;
-      if (Date.now() - startedAt > TRANSCRIPTION_BUDGET_MS) {
+      if (Date.now() - startedAt > budgetMs) {
         this.estimator?.markError(undefined, 'Processing timed out');
         this.surfaceJobError(videoId, 'Processing timed out', undefined);
         return;
