@@ -6,6 +6,7 @@ import {
   SeverityLevel,
   CreditInfo,
   AuthState,
+  TranscriptionStateBroadcast,
 } from '../types';
 import { PROFANITY_LIST } from '../filter/profanity-list';
 import './popup.css';
@@ -18,6 +19,7 @@ class PopupController {
   private preferences: UserPreferences = DEFAULT_PREFERENCES;
   private creditInfo: CreditInfo | null = null;
   private authState: AuthState | null = null;
+  private transcriptionState: TranscriptionStateBroadcast | null = null;
 
   // Polling intervals
   private creditPollTimer: number | null = null;
@@ -358,10 +360,24 @@ class PopupController {
         return;
       }
 
-      const response = await chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_STATE' });
+      // Pull both the playback-filter state and any active transcription
+      // state from the content script. The transcription state is pushed
+      // proactively, but we also hydrate here in case the popup opens
+      // mid-transcription.
+      const [videoResp, transcriptionResp] = await Promise.all([
+        chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_STATE' }).catch(() => null),
+        chrome.tabs.sendMessage(tab.id, { type: 'GET_TRANSCRIPTION_STATE' }).catch(() => null),
+      ]);
 
-      if (response?.success && response.data) {
-        this.updateVideoStatus(response.data);
+      if (transcriptionResp?.success) {
+        this.transcriptionState = transcriptionResp.data as TranscriptionStateBroadcast | null;
+      }
+
+      if (videoResp?.success && videoResp.data) {
+        this.updateVideoStatus(videoResp.data);
+      } else if (this.transcriptionState) {
+        // No video-controller state yet but transcription is running.
+        this.renderTranscriptionState();
       }
     } catch (error) {
       this.videoStatusSection.style.display = 'none';
@@ -376,6 +392,15 @@ class PopupController {
     currentlyMuting: boolean;
   }): void {
     this.videoStatusSection.style.display = 'block';
+
+    // If a transcription is in flight, the transcription state takes
+    // precedence for the status text and the progress bar. We still
+    // render the filtered count from the video controller.
+    if (this.transcriptionState && this.transcriptionState.phase !== 'done' && this.transcriptionState.phase !== 'error') {
+      this.renderTranscriptionState();
+      this.filteredCount.textContent = state.intervalCount.toString();
+      return;
+    }
 
     const statusMap: Record<string, string> = {
       idle: 'Ready',
@@ -403,12 +428,51 @@ class PopupController {
     // Update filtered count
     this.filteredCount.textContent = state.intervalCount.toString();
 
-    // Update progress bar
-    if (state.status === 'processing') {
-      this.progressBar.style.display = 'block';
-      this.progressFill.style.width = `${state.progress}%`;
-    } else {
+    // No percentage bar during transcription — that lives in
+    // renderTranscriptionState() and is driven by the honest countdown.
+    this.progressBar.style.display = 'none';
+  }
+
+  // Render the transcription countdown received from the content script.
+  // The status text is authoritative (computed by TimeEstimator); the fill
+  // bar represents elapsed/estimated, not server progress.
+  private renderTranscriptionState(): void {
+    if (!this.transcriptionState) {
       this.progressBar.style.display = 'none';
+      return;
+    }
+    this.videoStatusSection.style.display = 'block';
+
+    const { phase, statusText, remainingSeconds, totalEstimatedSeconds } = this.transcriptionState;
+    this.videoStatusValue.textContent = statusText;
+
+    this.statusPill.classList.remove('error', 'warning');
+    if (phase === 'error') {
+      this.statusPill.classList.add('error');
+      this.statusLabel.textContent = 'Error';
+    }
+
+    // Show the bar while we have a live countdown. Fill represents
+    // elapsed time against the initial estimate, capped at 95% until we
+    // know the job is done.
+    if (phase === 'done') {
+      this.progressBar.style.display = 'block';
+      this.progressFill.style.width = '100%';
+    } else if (phase === 'error') {
+      this.progressBar.style.display = 'none';
+    } else if (totalEstimatedSeconds && remainingSeconds != null && remainingSeconds >= 0) {
+      const elapsed = totalEstimatedSeconds - remainingSeconds;
+      const pct = Math.max(0, Math.min(95, (elapsed / totalEstimatedSeconds) * 100));
+      this.progressBar.style.display = 'block';
+      this.progressFill.style.width = `${pct}%`;
+    } else if (phase === 'almost-done') {
+      // Indeterminate — show near-full to imply we're waiting on the
+      // tail end.
+      this.progressBar.style.display = 'block';
+      this.progressFill.style.width = '95%';
+    } else {
+      this.progressBar.style.display = 'block';
+      this.progressFill.style.width = '8%';
     }
   }
 
@@ -416,6 +480,18 @@ class PopupController {
     chrome.runtime.onMessage.addListener((message) => {
       if (message.type === 'VIDEO_STATE_CHANGED' && message.payload) {
         this.updateVideoStatus(message.payload);
+      }
+      if (message.type === 'TRANSCRIPTION_STATE_CHANGED' && message.payload) {
+        this.transcriptionState = message.payload as TranscriptionStateBroadcast;
+        // Once the job reaches done/error the video-controller will take
+        // over the status section; until then render the countdown.
+        if (this.transcriptionState.phase === 'done' || this.transcriptionState.phase === 'error') {
+          // Leave one last frame visible (Done!/Error) then let the next
+          // video-controller update replace it.
+          this.renderTranscriptionState();
+        } else {
+          this.renderTranscriptionState();
+        }
       }
       if (message.type === 'PREFERENCES_UPDATED' && message.payload) {
         this.preferences = message.payload;

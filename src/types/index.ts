@@ -117,6 +117,25 @@ export interface ButtonStateInfo {
   intervalCount?: number;
   error?: string;
   videoId?: string; // Track which video this state belongs to (for Shorts)
+  // Countdown-based progress (replaces the old percentage-driven display).
+  // When set, renderers show `statusText` verbatim and MAY animate a fill
+  // using remainingSeconds/totalEstimatedSeconds. progress is ignored if
+  // these are present.
+  remainingSeconds?: number | null;
+  totalEstimatedSeconds?: number | null;
+  phase?: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'done' | 'error';
+  statusText?: string;
+}
+
+// Snapshot shared between content script and popup so both show the same
+// countdown without running independent timers.
+export interface TranscriptionStateBroadcast {
+  youtubeId: string;
+  phase: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'done' | 'error';
+  remainingSeconds: number | null;
+  totalEstimatedSeconds: number | null;
+  statusText: string;
+  errorCode?: string;
 }
 
 // Profanity Types
@@ -213,7 +232,9 @@ export type MessageType =
   | 'GET_USER_PROFILE'
   | 'LOGOUT'
   | 'OPEN_LOGIN'
-  | 'CLEAR_CACHE';
+  | 'CLEAR_CACHE'
+  | 'TRANSCRIPTION_STATE_CHANGED'
+  | 'GET_TRANSCRIPTION_STATE';
 
 export interface Message<T = unknown> {
   type: MessageType;

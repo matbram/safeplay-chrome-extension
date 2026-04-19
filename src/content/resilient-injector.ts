@@ -14,6 +14,49 @@ const PROCESSED_ATTR = 'data-safeplay-processed';
 const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
 const SHORTS_BUTTON_CLASS = 'safeplay-shorts-button';
 
+// Compact button text during transcription. We keep this short because
+// the YouTube header has limited space next to Subscribe. The popup
+// renders the full statusText for users who want more detail.
+function compactButtonText(info: ButtonStateInfo): string {
+  if (info.phase === 'done') return 'Done!';
+  if (info.phase === 'error') return 'Retry';
+  // Connecting doesn't get a countdown even if we know the total — we
+  // haven't actually started the work yet.
+  if (info.phase === 'connecting') return 'Connecting...';
+  if (info.phase === 'almost-done' || info.remainingSeconds == null) {
+    if (info.phase === 'preparing') return 'Preparing...';
+    return 'Almost done...';
+  }
+  const seconds = Math.max(0, info.remainingSeconds);
+  if (info.phase === 'preparing') return `Preparing ${seconds}s`;
+  return `Transcribing ${seconds}s`;
+}
+
+function compactShortsLabel(info: ButtonStateInfo): string {
+  if (info.phase === 'done') return 'Done';
+  if (info.phase === 'error') return 'Retry';
+  if (info.phase === 'almost-done' || info.remainingSeconds == null) return '…';
+  return `${Math.max(0, info.remainingSeconds)}s`;
+}
+
+// Elapsed-time-based fill. Honest because the countdown is what we're
+// tracking against — not inventing a server percentage. Caps at 95%
+// while we're still waiting so the button doesn't imply completion.
+function waterFillPercent(info: ButtonStateInfo): number {
+  if (info.phase === 'done') return 100;
+  if (info.phase === 'almost-done') return 95;
+  const total = info.totalEstimatedSeconds;
+  const remaining = info.remainingSeconds;
+  if (total && total > 0 && remaining != null) {
+    const elapsed = total - remaining;
+    const pct = (elapsed / total) * 100;
+    return Math.max(0, Math.min(95, pct));
+  }
+  // Unknown duration / pre-connect — a small visible slice so the user
+  // sees activity without implying real progress.
+  return 8;
+}
+
 // Button state configurations with YouTube theme colors
 // Water fill uses blue (#3b82f6) that fills from bottom to top during processing
 const BUTTON_STATES: Record<ButtonState, { bg: string; hoverBg: string; text: string; shadow: string; useWater?: boolean }> = {
@@ -747,13 +790,13 @@ export class ResilientInjector {
     iconWrapper.innerHTML = this.getIconSVG(stateInfo.state);
 
     // Update text
-    let displayText = stateInfo.text || config.text;
-
-    // Add progress percentage for processing states
-    if (stateInfo.progress !== undefined && stateInfo.progress > 0) {
-      if (stateInfo.state === 'downloading' || stateInfo.state === 'transcribing' || stateInfo.state === 'processing') {
-        displayText = `${config.text.replace('...', '')} ${Math.round(stateInfo.progress)}%`;
-      }
+    let displayText: string;
+    if (stateInfo.phase || stateInfo.statusText) {
+      // New countdown-driven path — renderer shows compact text on the
+      // button; the full statusText goes to the popup.
+      displayText = compactButtonText(stateInfo);
+    } else {
+      displayText = stateInfo.text || config.text;
     }
 
     // Add interval count for filtering state (completed)
@@ -763,22 +806,20 @@ export class ResilientInjector {
 
     textSpan.textContent = displayText;
 
-    // Update water fill effect
+    // Update water fill effect — now driven by elapsed/estimated time
+    // rather than server-reported progress, so the animation represents
+    // real wall-clock passage against our published estimate.
     if (waterFill) {
-      if (config.useWater && stateInfo.progress !== undefined && stateInfo.progress > 0) {
-        // Show water filling up during processing states
-        waterFill.style.height = `${stateInfo.progress}%`;
-        waterFill.classList.remove('safeplay-water-full');
-      } else if (stateInfo.state === 'filtering') {
-        // Fully filled when complete - solid blue
+      if (stateInfo.state === 'filtering') {
         waterFill.style.height = '100%';
         waterFill.classList.add('safeplay-water-full');
       } else if (stateInfo.state === 'paused') {
-        // Paused - drain the water (animate to empty)
         waterFill.style.height = '0%';
         waterFill.classList.remove('safeplay-water-full');
+      } else if (config.useWater) {
+        waterFill.style.height = `${waterFillPercent(stateInfo)}%`;
+        waterFill.classList.remove('safeplay-water-full');
       } else {
-        // Reset water for other states
         waterFill.style.height = '0%';
         waterFill.classList.remove('safeplay-water-full');
       }
@@ -860,13 +901,9 @@ export class ResilientInjector {
         labelText = `${stateInfo.intervalCount}`;
       } else if (stateInfo.state === 'filtering') {
         labelText = 'Censored';
-      }
-
-      // Show progress for processing states
-      if (stateInfo.progress !== undefined && stateInfo.progress > 0) {
-        if (stateInfo.state === 'downloading' || stateInfo.state === 'transcribing' || stateInfo.state === 'processing') {
-          labelText = `${Math.round(stateInfo.progress)}%`;
-        }
+      } else if (stateInfo.phase || stateInfo.statusText) {
+        // Shorts label is narrow — show either seconds or a short word.
+        labelText = compactShortsLabel(stateInfo);
       }
 
       label.textContent = labelText;
