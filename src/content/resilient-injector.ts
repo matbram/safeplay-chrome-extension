@@ -3,6 +3,7 @@
 // and above the like button on YouTube Shorts
 
 import { ButtonState, ButtonStateInfo } from '../types';
+import { formatEta } from './time-estimator';
 
 export interface InjectorOptions {
   onButtonClick: (youtubeId: string) => void;
@@ -29,14 +30,14 @@ function compactButtonText(info: ButtonStateInfo): string {
   if (info.phase === 'almost-done' || info.remainingSeconds == null) {
     return 'Almost done...';
   }
-  return `ETA ${Math.max(0, info.remainingSeconds)}s`;
+  return `ETA ${formatEta(info.remainingSeconds)}`;
 }
 
 function compactShortsLabel(info: ButtonStateInfo): string {
   if (info.phase === 'done') return 'Done';
   if (info.phase === 'error') return 'Retry';
   if (info.phase === 'almost-done' || info.remainingSeconds == null) return '…';
-  return `${Math.max(0, info.remainingSeconds)}s`;
+  return formatEta(info.remainingSeconds);
 }
 
 // Elapsed-time-based fill. Honest because the countdown is what we're

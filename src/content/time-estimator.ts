@@ -35,6 +35,18 @@ export function computeEstimate(durationSeconds: number | undefined): number | n
   return Math.max(25, Math.round(20 + durationSeconds / 13));
 }
 
+// Compact countdown format. Sub-minute stays as seconds ("45s") so the
+// per-second tick reads naturally. Above 60s we switch to M:SS clock
+// format ("2:06") which is width-stable and matches how users read
+// video durations.
+export function formatEta(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}:${rem.toString().padStart(2, '0')}`;
+}
+
 // User-facing status text. Kept deliberately generic — we don't reveal
 // download/transcription internals to the user. The popup reads this
 // verbatim; the button renderer derives its own compact form.
@@ -158,7 +170,7 @@ export class TimeEstimator {
     } else if (this.phase === 'almost-done' || this.remaining === null) {
       text = `${prefix}...`;
     } else {
-      text = `${prefix} — ETA ${this.remaining}s`;
+      text = `${prefix} — ETA ${formatEta(this.remaining)}`;
     }
 
     // Dedup: the same server status arriving during a stable tick will
