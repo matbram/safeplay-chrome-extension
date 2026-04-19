@@ -82,6 +82,7 @@ class SafePlayContentScript {
   private sseClient: TranscriptionSSEClient | null = null;
   private fallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
   private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
+  private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
   private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
 
   constructor() {
@@ -503,6 +504,7 @@ class SafePlayContentScript {
   // server never sends 'complete' within TRANSCRIPTION_BUDGET_MS. The
   // polling path is preserved verbatim-in-shape as pollJobStatusFallback.
   private async runTranscriptionFlow(jobId: string, videoId: string): Promise<void> {
+    this.jobStartedAt = Date.now();
     this.startEstimator(videoId);
 
     const navigationId = this.navigationId;
@@ -748,6 +750,7 @@ class SafePlayContentScript {
     }
     this.statusCallInFlight = false;
     this.lastTranscriptionState = null;
+    this.jobStartedAt = 0;
   }
 
   // Create the estimator and wire its updates to the button UI + popup.
@@ -797,6 +800,22 @@ class SafePlayContentScript {
   // Apply a completed transcript — wraps the existing applyFilter to make
   // sure estimator/SSE resources are torn down first.
   private async applyCompletedTranscript(transcript: Transcript, videoId: string): Promise<void> {
+    // Eyeball-friendly completion log for tuning the ETA formula during
+    // early launch. Intentionally console-only — no persistence, no
+    // reporting endpoint. Captured BEFORE stopTranscriptionResources()
+    // because that clears lastTranscriptionState.
+    if (this.jobStartedAt > 0) {
+      const actualSec = Math.round((Date.now() - this.jobStartedAt) / 1000);
+      const estimateSec = this.lastTranscriptionState?.totalEstimatedSeconds ?? null;
+      const deltaSec = estimateSec != null ? actualSec - estimateSec : null;
+      const sign = deltaSec != null && deltaSec >= 0 ? '+' : '';
+      console.log(
+        `[SafePlay ETA] video=${videoId} duration=${this.lastVideoDuration ?? '?'}s ` +
+        `estimate=${estimateSec ?? '?'}s actual=${actualSec}s ` +
+        `delta=${deltaSec != null ? sign + deltaSec + 's' : '?'}`
+      );
+      this.jobStartedAt = 0;
+    }
     this.stopTranscriptionResources();
     this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
     await this.applyFilter(transcript);

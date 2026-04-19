@@ -25,13 +25,14 @@ export interface TranscriptionStateSnapshot {
 
 export type EstimatorListener = (state: TranscriptionStateSnapshot) => void;
 
-// Scribe v2 is ~13x real-time for the core transcription step, but our
-// pipeline also has yt-dlp download + queue + webhook round-trip before
-// and after. Adding a 10s constant covers overhead, floor of 20s keeps
-// short clips honest.
+// Biases toward ~5s overshoot on median so the countdown rarely hits 0
+// before completion. Constants are chosen from early production runs
+// showing ~5s undershoot with the previous formula; this shifts by +10s.
+// Floor of 25s keeps short videos from displaying a near-instant ETA
+// that the overhead can't actually meet.
 export function computeEstimate(durationSeconds: number | undefined): number | null {
   if (!durationSeconds || durationSeconds <= 0) return null;
-  return Math.max(20, Math.round(10 + durationSeconds / 13));
+  return Math.max(25, Math.round(20 + durationSeconds / 13));
 }
 
 // User-facing status text. Kept deliberately generic — we don't reveal
