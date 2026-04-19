@@ -838,34 +838,42 @@ export class ResilientInjector {
       button.style.cursor = 'default';
     }
 
-    // Update title/tooltip
-    switch (stateInfo.state) {
-      case 'connecting':
-        button.title = 'Connecting to SafePlay service...';
-        break;
-      case 'downloading':
-        button.title = `Filtering: Downloading audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
-        break;
-      case 'transcribing':
-        button.title = `Filtering: Transcribing audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
-        break;
-      case 'processing':
-        button.title = 'Filtering: Processing transcript...';
-        break;
-      case 'filtering':
-        button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''} - Click to disable`;
-        break;
-      case 'paused':
-        button.title = 'Filter paused - Click to re-enable';
-        break;
-      case 'error':
-        button.title = stateInfo.error || 'Something went wrong - Click to retry';
-        break;
-      case 'age-restricted':
-        button.title = stateInfo.error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.';
-        break;
-      default:
-        button.title = 'Click to filter profanity with SafePlay';
+    // Update title/tooltip. When the estimator has provided a statusText
+    // (during the transcription flow), use it verbatim so the tooltip
+    // matches the countdown instead of leaking internal terms like
+    // "Transcribing audio" or "Processing transcript".
+    if (stateInfo.statusText && (stateInfo.state === 'connecting' ||
+        stateInfo.state === 'downloading' ||
+        stateInfo.state === 'transcribing' ||
+        stateInfo.state === 'processing')) {
+      button.title = stateInfo.statusText;
+    } else {
+      switch (stateInfo.state) {
+        case 'connecting':
+          button.title = 'Connecting...';
+          break;
+        case 'downloading':
+        case 'transcribing':
+          button.title = 'Processing video...';
+          break;
+        case 'processing':
+          button.title = 'Applying filter...';
+          break;
+        case 'filtering':
+          button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''} - Click to disable`;
+          break;
+        case 'paused':
+          button.title = 'Filter paused - Click to re-enable';
+          break;
+        case 'error':
+          button.title = stateInfo.error || 'Something went wrong - Click to retry';
+          break;
+        case 'age-restricted':
+          button.title = stateInfo.error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.';
+          break;
+        default:
+          button.title = 'Click to filter profanity with SafePlay';
+      }
     }
 
     const logKey = `${stateInfo.state}|${stateInfo.phase ?? ''}|${stateInfo.error ?? ''}`;
