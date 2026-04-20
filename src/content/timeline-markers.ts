@@ -88,19 +88,38 @@ export class TimelineMarkers {
     // Shorts: scope lookups to the ACTIVE reel, otherwise we'd attach
     // markers to a preloaded neighbor's progress bar and they'd never
     // appear to the user.
+    //
+    // IMPORTANT: the Shorts page embeds a *hidden* copy of the legacy
+    // player (#shorts-player has ytp-hide-controls). That hidden player
+    // still contains .ytp-progress-bar-container in the DOM — but since
+    // it's not rendered, markers attached to it are invisible. So we
+    // explicitly avoid .ytp-* selectors in the Shorts branch and target
+    // the real visible progress bar, which lives under
+    //   <div id="scrubber"> → <desktop-shorts-player-controls>
+    //     → <yt-progress-bar> → .ytPlayerProgressBarDragContainer
+    //       → .ytProgressBarLineProgressBarLine
     if (isShorts) {
       const activeReel = document.querySelector<HTMLElement>('ytd-reel-video-renderer[is-active]');
-      // Look within the active reel first, then fall back to document-
-      // scoped Shorts containers. Selectors cover the current YouTube
-      // Shorts DOM and known variants (yt-progress-bar web component,
-      // legacy ytp-progress-bar re-use, slider role).
       const shortsSelectors = [
-        '.ytp-progress-bar-container',
-        '.ytp-progress-bar',
+        // Line element — the visually rendered horizontal bar. Most
+        // accurate anchor because our overlay inherits its height.
+        '.ytProgressBarLineProgressBarLine',
+        // Drag container — the role="slider" that spans the full bar
+        // hit area. Slightly taller than the line, still the right width.
+        '.ytPlayerProgressBarDragContainer',
+        // Inner wrapper around the line/loaded/played divs.
+        '.ytPlayerProgressBarProgressBar',
+        // yt-progress-bar host element (custom element wrapping the above).
+        'yt-progress-bar.ytPlayerProgressBarHostCustom',
         'yt-progress-bar',
-        '[role="slider"][aria-label*="progress" i]',
+        // Desktop-shorts-player-controls host — broader fallback.
+        'desktop-shorts-player-controls',
+        // Legacy/alt names used in older Shorts builds.
         '.YtProgressBarProgressBarLine',
         '.ytReelPlayerProgressBarHost',
+        // Last-ditch slider-role lookup scoped by aria-label.
+        '[role="slider"][aria-label*="Seek" i]',
+        '[role="slider"][aria-label*="progress" i]',
       ];
 
       const roots: (HTMLElement | Document)[] = activeReel ? [activeReel, document] : [document];
@@ -108,6 +127,14 @@ export class TimelineMarkers {
         for (const selector of shortsSelectors) {
           const element = root.querySelector<HTMLElement>(selector);
           if (element) {
+            // Skip elements that aren't actually visible — e.g. the
+            // hidden legacy player inside ytp-hide-controls that still
+            // exposes its DOM.
+            const rect = element.getBoundingClientRect();
+            if (rect.width < 10 || rect.height < 1) {
+              this.log('Skipping hidden/zero-size candidate:', selector, `(${rect.width}x${rect.height})`);
+              continue;
+            }
             this.log('Found Shorts progress bar:', selector, 'root:', root === document ? 'document' : 'active reel');
             return element;
           }
