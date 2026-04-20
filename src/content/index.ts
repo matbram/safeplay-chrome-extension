@@ -294,9 +294,12 @@ class SafePlayContentScript {
       this.lastCreditCost = previewData.creditCost;
       this.lastVideoDuration = previewData.video.duration || undefined;
 
-      // If cached and has sufficient credits (free), or auto-retrying, skip confirmation
+      // Skip the confirmation modal when the video is cached/free, or when
+      // skipNextConfirmation was explicitly set by an auto-trigger path
+      // (auto-filter-all with confirmBeforeAutoFilter off, or silent
+      // auto-retry after a transient error).
       if ((previewData.isCached && previewData.creditCost === 0) || this.skipNextConfirmation) {
-        log(this.skipNextConfirmation ? 'Auto-retry, skipping confirmation' : 'Video is cached, skipping confirmation');
+        log(this.skipNextConfirmation ? 'Skipping confirmation (auto-trigger or retry)' : 'Video is cached, skipping confirmation');
         this.skipNextConfirmation = false;
         // Reset isProcessing since proceedWithFiltering will set it again
         this.isProcessing = false;
@@ -1298,7 +1301,17 @@ class SafePlayContentScript {
       }
 
       if (autoFilterAll) {
-        log(`Auto-enabling filter (auto-filter-all on) for video: ${this.currentVideoId}`);
+        // Auto-filter-all is the user's explicit opt-in to a low-friction
+        // workflow. Unless they've asked for per-video credit prompts via
+        // the sub-toggle, suppress the confirmation modal. The existing
+        // `skipNextConfirmation` one-shot is reused for this (same flag
+        // the auto-retry path uses) so the rest of onFilterButtonClick
+        // doesn't need to know about auto-filter specifically.
+        const requireConfirmation = this.preferences.confirmBeforeAutoFilter === true;
+        if (!requireConfirmation) {
+          this.skipNextConfirmation = true;
+        }
+        log(`Auto-enabling filter (auto-filter-all on, confirm=${requireConfirmation}) for: ${this.currentVideoId}`);
         this.onFilterButtonClick(this.currentVideoId);
         return;
       }

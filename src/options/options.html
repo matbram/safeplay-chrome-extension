@@ -137,10 +137,20 @@
             <div class="setting-item toggle-setting">
               <label for="autoFilterAllVideos">
                 <span class="setting-label">Auto-filter every video</span>
-                <span class="setting-desc">Start the SafePlay filter automatically on every YouTube video and Short. Credit confirmation still appears for videos that haven't been processed before.</span>
+                <span class="setting-desc">Start the SafePlay filter automatically on every YouTube video and Short. Cached videos filter instantly and free; new videos spend credits.</span>
               </label>
               <label class="toggle-switch">
                 <input type="checkbox" id="autoFilterAllVideos">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-item toggle-setting setting-sub" id="confirmBeforeAutoFilterRow">
+              <label for="confirmBeforeAutoFilter">
+                <span class="setting-label">Confirm credit cost before auto-filtering</span>
+                <span class="setting-desc">When on, new videos pause briefly to show their credit cost before filtering — useful for long videos that can spend many credits. When off, auto-filter runs without interruption, which is smoother but can silently spend credits on longer videos. Cached videos are always free and never prompt.</span>
+              </label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="confirmBeforeAutoFilter">
                 <span class="toggle-slider"></span>
               </label>
             </div>
