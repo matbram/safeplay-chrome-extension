@@ -76,6 +76,41 @@ export class TimelineMarkers {
    * We need to find the parent of .ytp-timed-markers-container to be at the same level
    */
   private findProgressBar(): HTMLElement | null {
+    const isShorts = window.location.pathname.startsWith('/shorts');
+
+    // Shorts: scope lookups to the ACTIVE reel, otherwise we'd attach
+    // markers to a preloaded neighbor's progress bar and they'd never
+    // appear to the user.
+    if (isShorts) {
+      const activeReel = document.querySelector<HTMLElement>('ytd-reel-video-renderer[is-active]');
+      // Look within the active reel first, then fall back to document-
+      // scoped Shorts containers. Selectors cover the current YouTube
+      // Shorts DOM and known variants (yt-progress-bar web component,
+      // legacy ytp-progress-bar re-use, slider role).
+      const shortsSelectors = [
+        '.ytp-progress-bar-container',
+        '.ytp-progress-bar',
+        'yt-progress-bar',
+        '[role="slider"][aria-label*="progress" i]',
+        '.YtProgressBarProgressBarLine',
+        '.ytReelPlayerProgressBarHost',
+      ];
+
+      const roots: (HTMLElement | Document)[] = activeReel ? [activeReel, document] : [document];
+      for (const root of roots) {
+        for (const selector of shortsSelectors) {
+          const element = root.querySelector<HTMLElement>(selector);
+          if (element) {
+            log('Found Shorts progress bar:', selector, 'root:', root === document ? 'document' : 'active reel');
+            return element;
+          }
+        }
+      }
+
+      log('No Shorts progress bar found');
+      return null;
+    }
+
     // First, try to find where ytp-timed-markers-container lives
     // and inject as a sibling to it
     const timedMarkersContainer = document.querySelector<HTMLElement>('.ytp-timed-markers-container');

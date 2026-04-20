@@ -193,12 +193,17 @@ class SafePlayContentScript {
     }, delayMs);
   }
 
-  // Get the video element
+  // Get the video element. On Shorts we must target the ACTIVE reel —
+  // YouTube keeps preloaded neighbor <video> elements in the DOM, and the
+  // first generic `video` selector used to return the wrong one, causing
+  // timeline markers to be positioned against the neighbor's duration.
   private getVideoElement(): HTMLVideoElement | null {
-    return document.querySelector('video.html5-main-video') ||
-           document.querySelector('video.video-stream') ||
-           document.querySelector('#movie_player video') ||
-           document.querySelector('video');
+    return document.querySelector<HTMLVideoElement>('ytd-reel-video-renderer[is-active] video') ||
+           document.querySelector<HTMLVideoElement>('#shorts-player video') ||
+           document.querySelector<HTMLVideoElement>('video.html5-main-video') ||
+           document.querySelector<HTMLVideoElement>('video.video-stream') ||
+           document.querySelector<HTMLVideoElement>('#movie_player video') ||
+           document.querySelector<HTMLVideoElement>('video');
   }
 
   // Resume video if it was playing before we paused it
