@@ -1,14 +1,6 @@
 // Timeline Markers - Visual indicators on YouTube's progress bar showing profanity locations
 import { MuteInterval } from '../types';
 
-const DEBUG = false;
-
-function log(...args: unknown[]): void {
-  if (DEBUG) {
-    console.log('[SafePlay Timeline]', ...args);
-  }
-}
-
 export interface TimelineMarkersOptions {
   debug?: boolean;
 }
@@ -25,9 +17,16 @@ export class TimelineMarkers {
   private maxRetries = 20;
   private retryDelay = 500;
   private retryTimeoutId: number | null = null; // Track timeout for cleanup
+  private debug: boolean;
 
-  constructor(_options?: TimelineMarkersOptions) {
-    // Options for future use
+  constructor(options?: TimelineMarkersOptions) {
+    this.debug = options?.debug ?? false;
+  }
+
+  private log(...args: unknown[]): void {
+    if (this.debug) {
+      console.log('[SafePlay Timeline]', ...args);
+    }
   }
 
   /**
@@ -37,7 +36,7 @@ export class TimelineMarkers {
     this.video = video;
     this.muteIntervals = muteIntervals;
 
-    log('Initializing timeline markers with', muteIntervals.length, 'intervals');
+    this.log('Initializing timeline markers with', muteIntervals.length, 'intervals');
 
     // Try to inject the overlay
     this.injectOverlayWithRetry();
@@ -52,7 +51,7 @@ export class TimelineMarkers {
   private injectOverlayWithRetry(): void {
     // Don't do anything if destroyed
     if (this.isDestroyed) {
-      log('Skipping retry - markers were destroyed');
+      this.log('Skipping retry - markers were destroyed');
       return;
     }
 
@@ -62,12 +61,20 @@ export class TimelineMarkers {
       this.progressBarElement = progressBar;
       this.createOverlay();
       this.isInitialized = true;
-      log('Timeline overlay injected successfully');
+      this.log('Timeline overlay injected successfully');
     } else if (this.retryCount < this.maxRetries) {
       this.retryCount++;
       this.retryTimeoutId = window.setTimeout(() => this.injectOverlayWithRetry(), this.retryDelay);
     } else {
-      log('Failed to find progress bar after', this.maxRetries, 'attempts');
+      this.log('Failed to find progress bar after', this.maxRetries, 'attempts');
+      // Last-resort on Shorts: paint our own thin bar at the bottom of the
+      // video element so users still see profanity markers even when
+      // YouTube's DOM has no addressable progress bar for us.
+      const isShorts = window.location.pathname.startsWith('/shorts');
+      if (isShorts) {
+        this.log('Shorts: falling back to video-anchored overlay');
+        this.injectVideoAnchoredOverlay();
+      }
     }
   }
 
@@ -101,13 +108,13 @@ export class TimelineMarkers {
         for (const selector of shortsSelectors) {
           const element = root.querySelector<HTMLElement>(selector);
           if (element) {
-            log('Found Shorts progress bar:', selector, 'root:', root === document ? 'document' : 'active reel');
+            this.log('Found Shorts progress bar:', selector, 'root:', root === document ? 'document' : 'active reel');
             return element;
           }
         }
       }
 
-      log('No Shorts progress bar found');
+      this.log('No Shorts progress bar found');
       return null;
     }
 
@@ -115,7 +122,7 @@ export class TimelineMarkers {
     // and inject as a sibling to it
     const timedMarkersContainer = document.querySelector<HTMLElement>('.ytp-timed-markers-container');
     if (timedMarkersContainer?.parentElement) {
-      log('Found ytp-timed-markers-container, using its parent:', timedMarkersContainer.parentElement.className);
+      this.log('Found ytp-timed-markers-container, using its parent:', timedMarkersContainer.parentElement.className);
       return timedMarkersContainer.parentElement;
     }
 
@@ -130,7 +137,7 @@ export class TimelineMarkers {
     for (const selector of selectors) {
       const element = document.querySelector<HTMLElement>(selector);
       if (element) {
-        log('Found progress bar element:', selector);
+        this.log('Found progress bar element:', selector);
         return element;
       }
     }
@@ -174,10 +181,10 @@ export class TimelineMarkers {
     const timedMarkersContainer = document.querySelector<HTMLElement>('.ytp-timed-markers-container');
     if (timedMarkersContainer) {
       timedMarkersContainer.style.pointerEvents = 'none';
-      log('Disabled pointer events on ytp-timed-markers-container');
+      this.log('Disabled pointer events on ytp-timed-markers-container');
     }
 
-    log('Overlay container created and appended');
+    this.log('Overlay container created and appended');
 
     // Create markers for each mute interval
     this.renderMarkers();
@@ -188,6 +195,67 @@ export class TimelineMarkers {
   }
 
   /**
+   * Fallback for Shorts when YouTube's progress bar can't be found via
+   * any of our selectors. Creates a 6px bar anchored to the bottom of
+   * the video element's nearest positioned ancestor — users get the
+   * same marker visualization without depending on YouTube's DOM.
+   *
+   * We prefer a YouTube-provided player container as the anchor (so the
+   * overlay follows theater/fullscreen resize), and only fall back to
+   * the direct video parent if none is available.
+   */
+  private injectVideoAnchoredOverlay(): void {
+    if (!this.video || this.isDestroyed) return;
+
+    const anchor: HTMLElement | null =
+      this.video.closest<HTMLElement>('.html5-video-container') ||
+      this.video.closest<HTMLElement>('#movie_player') ||
+      this.video.closest<HTMLElement>('ytd-reel-video-renderer') ||
+      this.video.parentElement;
+
+    if (!anchor) {
+      this.log('Video-anchored fallback: no usable anchor element');
+      return;
+    }
+
+    // Tear down any existing overlay (from an earlier attempt)
+    this.removeOverlay();
+
+    // Ensure the anchor is a positioned container for our absolute overlay.
+    const computed = window.getComputedStyle(anchor);
+    if (computed.position === 'static') {
+      anchor.style.position = 'relative';
+    }
+
+    this.overlayContainer = document.createElement('div');
+    this.overlayContainer.className = 'safeplay-timeline-overlay safeplay-timeline-overlay-shorts';
+    // Thin bar flush with the bottom edge. Background tint mimics the
+    // look of YouTube's native progress track so the markers feel at
+    // home. pointer-events: none on the container lets YouTube's own
+    // UI underneath (comments button etc.) still be clickable; markers
+    // themselves re-enable pointer-events so clicking seeks.
+    this.overlayContainer.style.cssText = `
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 6px;
+      width: 100%;
+      pointer-events: none;
+      z-index: 100;
+      background: rgba(255, 255, 255, 0.12);
+    `;
+    anchor.appendChild(this.overlayContainer);
+
+    this.progressBarElement = anchor;
+    this.isInitialized = true;
+    this.log('Video-anchored overlay injected on', anchor.tagName, anchor.id || anchor.className);
+
+    this.renderMarkers();
+    this.setupResizeObserver();
+  }
+
+  /**
    * Render all profanity markers on the timeline
    */
   private renderMarkers(): void {
@@ -195,7 +263,7 @@ export class TimelineMarkers {
 
     const duration = this.video.duration;
     if (!duration || !isFinite(duration)) {
-      log('Video duration not available yet, waiting...');
+      this.log('Video duration not available yet, waiting...');
       // Retry when duration becomes available
       this.video.addEventListener('loadedmetadata', () => this.renderMarkers(), { once: true });
       return;
@@ -204,7 +272,7 @@ export class TimelineMarkers {
     // Clear existing markers
     this.overlayContainer.innerHTML = '';
 
-    log('Rendering', this.muteIntervals.length, 'markers for video duration:', duration);
+    this.log('Rendering', this.muteIntervals.length, 'markers for video duration:', duration);
 
     // Create a marker for each mute interval
     for (const interval of this.muteIntervals) {
@@ -274,13 +342,13 @@ export class TimelineMarkers {
 
     // Click to seek to that position
     marker.addEventListener('click', (e) => {
-      log('CLICK on marker:', interval.word);
+      this.log('CLICK on marker:', interval.word);
       e.stopPropagation();
       e.preventDefault();
       if (this.video) {
         // Seek to slightly before the profanity
         this.video.currentTime = Math.max(0, interval.start - 2);
-        log('Seeked to', interval.start - 2, 'for interval:', interval.word);
+        this.log('Seeked to', interval.start - 2, 'for interval:', interval.word);
       }
     });
 
@@ -304,7 +372,7 @@ export class TimelineMarkers {
 
     // Re-render markers when video duration becomes available or changes
     this.video.addEventListener('durationchange', () => {
-      log('Duration changed:', this.video?.duration);
+      this.log('Duration changed:', this.video?.duration);
       if (this.isInitialized) {
         this.renderMarkers();
       }
@@ -312,7 +380,7 @@ export class TimelineMarkers {
 
     // Handle video source changes (for playlists, etc.)
     this.video.addEventListener('loadedmetadata', () => {
-      log('Metadata loaded, duration:', this.video?.duration);
+      this.log('Metadata loaded, duration:', this.video?.duration);
       if (this.isInitialized) {
         this.renderMarkers();
       }
@@ -328,7 +396,7 @@ export class TimelineMarkers {
     this.resizeObserver = new ResizeObserver(() => {
       // Markers use percentages, so they scale automatically
       // But we log for debugging
-      log('Progress bar resized');
+      this.log('Progress bar resized');
     });
 
     this.resizeObserver.observe(this.progressBarElement);
@@ -376,7 +444,7 @@ export class TimelineMarkers {
    * Clean up resources
    */
   destroy(): void {
-    log('Destroying timeline markers');
+    this.log('Destroying timeline markers');
 
     // Set destroyed flag first to prevent any pending operations
     this.isDestroyed = true;
