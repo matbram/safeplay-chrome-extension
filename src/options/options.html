@@ -135,12 +135,32 @@
           </div>
           <div class="section-content">
             <div class="setting-item toggle-setting">
+              <label for="autoFilterAllVideos">
+                <span class="setting-label">Auto-filter every video</span>
+                <span class="setting-desc">Start the SafePlay filter automatically on every YouTube video and Short. Credit confirmation still appears for videos that haven't been processed before.</span>
+              </label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="autoFilterAllVideos">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-item toggle-setting">
               <label for="autoEnableFiltered">
                 <span class="setting-label">Auto-filter previously filtered videos</span>
                 <span class="setting-desc">Automatically enable filtering when you revisit a video you've filtered before</span>
               </label>
               <label class="toggle-switch">
                 <input type="checkbox" id="autoEnableFiltered" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="setting-item toggle-setting">
+              <label for="showTimelineMarkers">
+                <span class="setting-label">Show profanity markers on timeline</span>
+                <span class="setting-desc">Display tick marks on the video progress bar at each profanity location. Click a marker to jump to that moment.</span>
+              </label>
+              <label class="toggle-switch">
+                <input type="checkbox" id="showTimelineMarkers" checked>
                 <span class="toggle-slider"></span>
               </label>
             </div>
