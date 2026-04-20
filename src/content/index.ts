@@ -1219,9 +1219,13 @@ class SafePlayContentScript {
     const currentNavId = this.navigationId;
     log(`Navigation detected, navigationId: ${currentNavId}`);
 
-    // Stop current filter if any
+    // Fully tear down the filter for the previous video. Must be destroy(),
+    // not stop() — the Web Audio graph is permanently attached to the prior
+    // <video> element, and if we carry it forward, the next video's audio
+    // will silently bypass our gain node and play profanity unmuted while
+    // the button reports "Censored". See audio-filter.ts teardownAudioGraph.
     if (this.videoController) {
-      this.videoController.stop();
+      this.videoController.destroy();
     }
 
     // Stop caption filter

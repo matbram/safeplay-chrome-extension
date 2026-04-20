@@ -52,21 +52,88 @@ export class AudioFilter {
     this.boundHandleVisibilityChange = this.handleVisibilityChange.bind(this);
   }
 
-  // Initialize with video element and mute intervals
+  // Initialize with video element and mute intervals.
+  //
+  // IMPORTANT: If called again with a DIFFERENT <video> element (e.g. after
+  // YouTube SPA navigation swaps the player), we tear down the old Web Audio
+  // graph first. Web Audio's MediaElementAudioSourceNode is permanently
+  // attached to the element it was created from — reusing the old graph
+  // against a new element silently fails (new element plays audio natively
+  // while our muted gain node sits orphaned). That was the root cause of
+  // "filter says Censored but audio still plays" after SPA navigation.
   initialize(
     video: HTMLVideoElement,
     intervals: MuteInterval[],
     mode: FilterMode = 'mute'
   ): void {
+    // Rebuild the audio graph if the video element changed, OR if the old
+    // element is no longer attached to the document (YouTube detached it).
+    const videoChanged = this.video !== null && this.video !== video;
+    const oldVideoDetached = this.video !== null && !this.video.isConnected;
+    if (videoChanged || oldVideoDetached) {
+      this.teardownAudioGraph();
+    }
+
     this.video = video;
     this.muteIntervals = intervals;
     this.filterMode = mode;
+
+    // Reset per-video runtime flags so stale state from a previous video
+    // doesn't leak into the new one (e.g. isMuted=true carried across nav).
+    this.isMuted = false;
+    this.isFading = false;
+    this.isBleeping = false;
+    this.currentGainTarget = 1;
 
     // Sort intervals by start time for efficient lookup
     this.muteIntervals.sort((a, b) => a.start - b.start);
 
     // Initialize Web Audio API for smooth volume control
     this.initializeAudioContext();
+  }
+
+  // Tear down the Web Audio graph and detach video event listeners — called
+  // when the target <video> element changes. Does NOT clear mute intervals
+  // or state like isActive; the caller decides what to do next.
+  private teardownAudioGraph(): void {
+    // Stop any active bleep oscillator(s) before disconnecting nodes.
+    if (this.bleepOscillator) {
+      const secondOsc = (this.bleepOscillator as any)._secondOscillator;
+      const mixer = (this.bleepOscillator as any)._mixer;
+      try { this.bleepOscillator.stop(); } catch { /* already stopped */ }
+      try { this.bleepOscillator.disconnect(); } catch { /* already disconnected */ }
+      if (secondOsc) {
+        try { secondOsc.stop(); } catch { /* already stopped */ }
+        try { secondOsc.disconnect(); } catch { /* already disconnected */ }
+      }
+      if (mixer) {
+        try { mixer.disconnect(); } catch { /* already disconnected */ }
+      }
+      this.bleepOscillator = null;
+    }
+
+    // Remove listeners from the OLD video before we drop the reference.
+    this.removeVideoEventListeners();
+
+    if (this.sourceNode) {
+      try { this.sourceNode.disconnect(); } catch { /* already disconnected */ }
+      this.sourceNode = null;
+    }
+    if (this.gainNode) {
+      try { this.gainNode.disconnect(); } catch { /* already disconnected */ }
+      this.gainNode = null;
+    }
+    if (this.bleepGain) {
+      try { this.bleepGain.disconnect(); } catch { /* already disconnected */ }
+      this.bleepGain = null;
+    }
+    if (this.audioContext) {
+      // close() is async; we don't need to await it for correctness, and a
+      // synchronous caller shouldn't be blocked. Swallow the rejection that
+      // can fire if the context was already closed.
+      this.audioContext.close().catch(() => { /* already closed */ });
+      this.audioContext = null;
+    }
   }
 
   private initializeAudioContext(): void {
@@ -98,8 +165,18 @@ export class AudioFilter {
 
       console.log('[SafePlay] Audio context initialized with smooth fading');
     } catch (error) {
+      // The most common failure here is "HTMLMediaElement has already been
+      // connected to a different MediaElementAudioSourceNode" — can happen
+      // if a prior graph wasn't torn down. Drop refs so fadeToVolume's
+      // fallback branch (video.muted) kicks in.
       console.error('[SafePlay] Failed to initialize audio context:', error);
-      // Fallback: will use video.muted instead
+      if (this.audioContext) {
+        try { this.audioContext.close(); } catch { /* ignore */ }
+      }
+      this.audioContext = null;
+      this.sourceNode = null;
+      this.gainNode = null;
+      this.bleepGain = null;
     }
   }
 
@@ -232,24 +309,9 @@ export class AudioFilter {
   // Clean up resources
   destroy(): void {
     this.stop();
-
-    // Remove event listeners
-    this.removeVideoEventListeners();
-
-    if (this.sourceNode) {
-      this.sourceNode.disconnect();
-      this.sourceNode = null;
-    }
-
-    if (this.gainNode) {
-      this.gainNode.disconnect();
-      this.gainNode = null;
-    }
-
-    if (this.audioContext) {
-      this.audioContext.close();
-      this.audioContext = null;
-    }
+    this.teardownAudioGraph();
+    this.video = null;
+    this.muteIntervals = [];
   }
 
   // Check if current time falls within or is approaching any mute interval

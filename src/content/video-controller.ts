@@ -184,10 +184,25 @@ export class VideoController {
     this.updateStatus('error', 0, error);
   }
 
-  // Stop filtering
+  // Stop filtering. Preserves the Web Audio graph so pause/resume from the
+  // player controls can re-enable without re-fetching the transcript.
   stop(): void {
     this.audioFilter.stop();
     this.hideStatusOverlay();
+    this.updateStatus('idle');
+  }
+
+  // Fully tear down — call this on SPA navigation so the next filter starts
+  // with a fresh Web Audio graph wired to the current <video> element.
+  // Without this, a stale graph attached to a detached element would leak
+  // across videos and cause "Censored" to display without actually muting.
+  destroy(): void {
+    this.audioFilter.destroy();
+    this.hideStatusOverlay();
+    this.transcript = null;
+    this.muteIntervals = [];
+    this.video = null;
+    this.youtubeId = null;
     this.updateStatus('idle');
   }
 

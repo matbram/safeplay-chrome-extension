@@ -148,7 +148,7 @@ export class TimelineMarkers {
     // First, try to find where ytp-timed-markers-container lives
     // and inject as a sibling to it
     const timedMarkersContainer = document.querySelector<HTMLElement>('.ytp-timed-markers-container');
-    if (timedMarkersContainer?.parentElement) {
+    if (timedMarkersContainer?.parentElement && this.isUsableContainer(timedMarkersContainer.parentElement)) {
       this.log('Found ytp-timed-markers-container, using its parent:', timedMarkersContainer.parentElement.className);
       return timedMarkersContainer.parentElement;
     }
@@ -163,13 +163,32 @@ export class TimelineMarkers {
 
     for (const selector of selectors) {
       const element = document.querySelector<HTMLElement>(selector);
-      if (element) {
+      if (element && this.isUsableContainer(element)) {
         this.log('Found progress bar element:', selector);
         return element;
       }
     }
 
     return null;
+  }
+
+  // Reject progress-bar candidates that YouTube has already detached from
+  // the document or hasn't rendered yet. Without this check, a mid-SPA-nav
+  // findProgressBar() call could return a doomed element, we'd append our
+  // overlay to it, and YouTube would remove the whole subtree — leaving
+  // markers invisible until the user refreshes. Mirrors the guard the
+  // Shorts branch already applies.
+  private isUsableContainer(el: HTMLElement): boolean {
+    if (!el.isConnected) {
+      this.log('Rejecting detached progress-bar candidate');
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 10 || rect.height < 1) {
+      this.log(`Rejecting zero-size progress-bar candidate (${rect.width}x${rect.height})`);
+      return false;
+    }
+    return true;
   }
 
   /**
