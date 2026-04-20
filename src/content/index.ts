@@ -193,12 +193,17 @@ class SafePlayContentScript {
     }, delayMs);
   }
 
-  // Get the video element
+  // Get the video element. On Shorts we must target the ACTIVE reel —
+  // YouTube keeps preloaded neighbor <video> elements in the DOM, and the
+  // first generic `video` selector used to return the wrong one, causing
+  // timeline markers to be positioned against the neighbor's duration.
   private getVideoElement(): HTMLVideoElement | null {
-    return document.querySelector('video.html5-main-video') ||
-           document.querySelector('video.video-stream') ||
-           document.querySelector('#movie_player video') ||
-           document.querySelector('video');
+    return document.querySelector<HTMLVideoElement>('ytd-reel-video-renderer[is-active] video') ||
+           document.querySelector<HTMLVideoElement>('#shorts-player video') ||
+           document.querySelector<HTMLVideoElement>('video.html5-main-video') ||
+           document.querySelector<HTMLVideoElement>('video.video-stream') ||
+           document.querySelector<HTMLVideoElement>('#movie_player video') ||
+           document.querySelector<HTMLVideoElement>('video');
   }
 
   // Resume video if it was playing before we paused it
@@ -289,9 +294,12 @@ class SafePlayContentScript {
       this.lastCreditCost = previewData.creditCost;
       this.lastVideoDuration = previewData.video.duration || undefined;
 
-      // If cached and has sufficient credits (free), or auto-retrying, skip confirmation
+      // Skip the confirmation modal when the video is cached/free, or when
+      // skipNextConfirmation was explicitly set by an auto-trigger path
+      // (auto-filter-all with confirmBeforeAutoFilter off, or silent
+      // auto-retry after a transient error).
       if ((previewData.isCached && previewData.creditCost === 0) || this.skipNextConfirmation) {
-        log(this.skipNextConfirmation ? 'Auto-retry, skipping confirmation' : 'Video is cached, skipping confirmation');
+        log(this.skipNextConfirmation ? 'Skipping confirmation (auto-trigger or retry)' : 'Video is cached, skipping confirmation');
         this.skipNextConfirmation = false;
         // Reset isProcessing since proceedWithFiltering will set it again
         this.isProcessing = false;
@@ -929,12 +937,17 @@ class SafePlayContentScript {
       this.captionFilter.start();
       log('Caption filter started');
 
-      // Initialize timeline markers to show profanity locations on progress bar
+      // Initialize timeline markers to show profanity locations on progress bar.
+      // Gated on the user's showTimelineMarkers preference — see the
+      // PREFERENCES_UPDATED handler for dynamic toggling mid-video.
+      const showMarkers = this.preferences.showTimelineMarkers !== false;
       const video = this.getVideoElement();
-      if (video && muteIntervals.length > 0) {
+      if (showMarkers && video && muteIntervals.length > 0) {
         this.timelineMarkers = new TimelineMarkers({ debug: DEBUG });
         this.timelineMarkers.initialize(video, muteIntervals);
         log('Timeline markers initialized');
+      } else if (!showMarkers) {
+        log('Timeline markers skipped (disabled in preferences)');
       }
 
       // Update button to filtering state
@@ -1107,9 +1120,42 @@ class SafePlayContentScript {
     switch (message.type) {
       case 'PREFERENCES_UPDATED': {
         const newPrefs = message.payload as UserPreferences;
+        const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
+        const prevAutoAll = this.preferences.autoFilterAllVideos === true;
         this.preferences = newPrefs;
         this.videoController?.updatePreferences(newPrefs);
         this.captionFilter.updatePreferences(newPrefs);
+
+        const nowShowMarkers = newPrefs.showTimelineMarkers !== false;
+        if (prevShowMarkers !== nowShowMarkers) {
+          if (!nowShowMarkers && this.timelineMarkers) {
+            // Toggled off — tear down markers immediately.
+            this.timelineMarkers.destroy();
+            this.timelineMarkers = null;
+            log('Timeline markers destroyed (toggled off)');
+          } else if (nowShowMarkers && this.isFilterActive && !this.timelineMarkers) {
+            // Toggled on while a filter is already active — materialize them
+            // from the intervals the video controller already parsed.
+            const muteIntervals = this.videoController?.getMuteIntervals() || [];
+            const video = this.getVideoElement();
+            if (video && muteIntervals.length > 0) {
+              this.timelineMarkers = new TimelineMarkers({ debug: DEBUG });
+              this.timelineMarkers.initialize(video, muteIntervals);
+              log('Timeline markers initialized (toggled on)');
+            }
+          }
+        }
+
+        // If the user just turned on auto-filter-all while sitting on a
+        // YouTube video page that isn't already filtering, kick one off.
+        // Matches the UX of toggling it on from the options page without
+        // having to refresh or navigate away.
+        const nowAutoAll = newPrefs.autoFilterAllVideos === true;
+        if (!prevAutoAll && nowAutoAll && this.currentVideoId && !this.isFilterActive && !this.isProcessing) {
+          log('Auto-filter-all just enabled — running checkAutoEnable for current video');
+          this.checkAutoEnable();
+        }
+
         return { success: true };
       }
 
@@ -1223,11 +1269,24 @@ class SafePlayContentScript {
     }
   }
 
-  // Check if we should auto-enable filter for this video
+  // Check if we should auto-enable filter for this video.
+  // Two paths, in order of user intent:
+  //   1. autoFilterAllVideos — user opted into filtering every video. Triggers
+  //      regardless of whether they've filtered this one before.
+  //   2. autoEnableForFilteredVideos + previously filtered — legacy behavior,
+  //      triggers only for known videos.
+  // Both paths are gated on master `enabled`, auth, and no in-flight filter.
   private async checkAutoEnable(): Promise<void> {
     if (!this.currentVideoId) return;
-    if (this.preferences.autoEnableForFilteredVideos === false) return;
     if (this.isProcessing) return;
+    if (this.isFilterActive) return;
+    // Master toggle off — don't auto-trigger (would burn credits on a
+    // filter that VideoController.applyFilter would then short-circuit).
+    if (this.preferences.enabled === false) return;
+
+    const autoFilterAll = this.preferences.autoFilterAllVideos === true;
+    const autoEnableFiltered = this.preferences.autoEnableForFilteredVideos !== false;
+    if (!autoFilterAll && !autoEnableFiltered) return;
 
     try {
       // First check if user is authenticated - silently skip if not
@@ -1238,6 +1297,22 @@ class SafePlayContentScript {
 
       if (!authResponse?.success || !authResponse?.data?.authenticated) {
         log('Auto-enable skipped: user not authenticated');
+        return;
+      }
+
+      if (autoFilterAll) {
+        // Auto-filter-all is the user's explicit opt-in to a low-friction
+        // workflow. Unless they've asked for per-video credit prompts via
+        // the sub-toggle, suppress the confirmation modal. The existing
+        // `skipNextConfirmation` one-shot is reused for this (same flag
+        // the auto-retry path uses) so the rest of onFilterButtonClick
+        // doesn't need to know about auto-filter specifically.
+        const requireConfirmation = this.preferences.confirmBeforeAutoFilter === true;
+        if (!requireConfirmation) {
+          this.skipNextConfirmation = true;
+        }
+        log(`Auto-enabling filter (auto-filter-all on, confirm=${requireConfirmation}) for: ${this.currentVideoId}`);
+        this.onFilterButtonClick(this.currentVideoId);
         return;
       }
 

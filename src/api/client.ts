@@ -6,7 +6,7 @@ import {
   CreditBalanceResponse,
   UserProfileResponse,
 } from '../types';
-import { getAuthToken, refreshAuthToken, clearAuthData, hasRefreshToken } from '../utils/storage';
+import { getAuthToken, refreshAuthTokenDetailed, clearAuthData, hasRefreshToken } from '../utils/storage';
 
 // API URL for the SafePlay website API
 const API_BASE_URL = 'https://trysafeplay.com';
@@ -80,31 +80,47 @@ async function request<T>(
       if (response.status === 401 && requiresAuth && !_isRetry) {
         logApi('Got 401, checking if refresh is possible...');
 
-        // Only attempt refresh if we have a stored refresh token
+        // Only attempt refresh if we have a stored refresh token.
         // This prevents silently re-authenticating via website cookies
         // when the user has explicitly logged out from the extension
+        // (clearAuthData removes the refresh token).
         const canRefresh = await hasRefreshToken();
 
         if (canRefresh) {
           logApi('Has refresh token, attempting token refresh...');
-          const newToken = await refreshAuthToken();
+          const result = await refreshAuthTokenDetailed();
 
-          if (newToken) {
+          if (result.kind === 'ok') {
             logApi('Token refreshed, retrying request...');
-            // Retry the request with the new token
             return request<T>(endpoint, { ...options, _isRetry: true });
           }
+
+          if (result.kind === 'transient') {
+            // Refresh couldn't complete (network blip, 5xx, or cookie
+            // fallback failed). Preserve stored auth so the next caller
+            // can try again. Surface the 401 without wiping profile/
+            // credits/subscription. This is the key change that stops a
+            // single transient failure from logging users out.
+            logApi('Refresh transient failure — keeping stored auth, surfacing 401');
+            throw new ApiError(
+              'Could not reach authentication service. Please try again.',
+              401,
+              errorData,
+              'SESSION_TRANSIENT'
+            );
+          }
+          // result.kind === 'revoked' — fall through to full clear
+          logApi('Refresh token revoked by server — clearing auth');
         } else {
           logApi('No refresh token stored - user is logged out, skipping refresh');
         }
 
-        logApi('Token refresh failed or skipped, clearing auth data and notifying UI');
-        // Clear auth data so UI updates to show sign-in state
+        logApi('Clearing auth data and notifying UI');
         await clearAuthData();
 
-        // Broadcast logout to all tabs so UI updates
+        // Broadcast logout to YouTube tabs (only where content scripts run).
         if (typeof chrome !== 'undefined' && chrome.tabs) {
-          chrome.tabs.query({}).then(tabs => {
+          chrome.tabs.query({ url: '*://*.youtube.com/*' }).then(tabs => {
             for (const tab of tabs) {
               if (tab.id) {
                 chrome.tabs.sendMessage(tab.id, {

@@ -71,8 +71,13 @@ export class VideoController {
     }
 
     if (!this.video) {
-      this.updateStatus('error', 0, 'Could not find video element');
-      return;
+      // Throw instead of silent-return: the caller (SafePlayContentScript)
+      // wraps the filter flow in try/catch and needs a real error to surface
+      // a "Retry" state to the user. Silent returns let the button flip to
+      // "Censored (0)" while nothing was actually filtered.
+      const message = 'Could not find video element';
+      this.updateStatus('error', 0, message);
+      throw new Error(message);
     }
 
     this.log('Video controller initialized for:', youtubeId);
@@ -81,8 +86,12 @@ export class VideoController {
   // Request and apply filter
   async applyFilter(): Promise<void> {
     if (!this.youtubeId || !this.video || !this.preferences) {
-      this.log('Cannot apply filter: missing required data');
-      return;
+      // Throw so the outer caller's catch block runs — see initialize() for
+      // the rationale. A silent return here is what caused the "filtered
+      // successfully (0 muted)" lie on Shorts when the video lookup failed.
+      const message = 'Cannot apply filter: missing required data';
+      this.updateStatus('error', 0, message);
+      throw new Error(message);
     }
 
     if (!this.preferences.enabled) {
@@ -228,8 +237,13 @@ export class VideoController {
 
   // Find the YouTube video element
   private findVideoElement(): HTMLVideoElement | null {
-    // Main player video
+    // Shorts-specific selectors first — the active reel's <video>. On Shorts,
+    // inactive/preloaded renderers also contain <video> elements, so we
+    // target the active one explicitly before falling through to generic
+    // selectors.
     const selectors = [
+      'ytd-reel-video-renderer[is-active] video',
+      '#shorts-player video',
       'video.html5-main-video',
       'video.video-stream',
       '#movie_player video',
@@ -239,7 +253,11 @@ export class VideoController {
 
     for (const selector of selectors) {
       const video = document.querySelector<HTMLVideoElement>(selector);
-      if (video && video.src) {
+      // Accept any of src (progressive), currentSrc (populated by YouTube's
+      // MSE pipeline once a source buffer attaches), or srcObject (used by
+      // newer player variants). The old `video.src`-only check rejected
+      // Shorts outright because Shorts uses MSE and leaves `.src` empty.
+      if (video && (video.src || video.currentSrc || video.srcObject)) {
         return video;
       }
     }

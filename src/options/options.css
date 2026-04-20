@@ -228,6 +228,18 @@ textarea::placeholder {
   flex: 1;
 }
 
+/* Nested sub-setting — visually belongs to the toggle above it. */
+.setting-sub {
+  margin-left: 24px;
+  padding-left: 12px;
+  border-left: 2px solid var(--yt-border, rgba(255, 255, 255, 0.1));
+}
+
+.setting-sub.is-disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 /* Toggle Switch */
 .toggle-switch {
   position: relative;

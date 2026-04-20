@@ -12,6 +12,10 @@ class OptionsController {
   private paddingAfter!: HTMLInputElement;
   private mergeThreshold!: HTMLInputElement;
   private autoEnableFiltered!: HTMLInputElement;
+  private autoFilterAllVideos!: HTMLInputElement;
+  private confirmBeforeAutoFilter!: HTMLInputElement;
+  private confirmBeforeAutoFilterRow!: HTMLElement;
+  private showTimelineMarkers!: HTMLInputElement;
   private cacheCount!: HTMLElement;
   private clearCacheBtn!: HTMLButtonElement;
   private saveBtn!: HTMLButtonElement;
@@ -25,6 +29,10 @@ class OptionsController {
     this.paddingAfter = document.getElementById('paddingAfter') as HTMLInputElement;
     this.mergeThreshold = document.getElementById('mergeThreshold') as HTMLInputElement;
     this.autoEnableFiltered = document.getElementById('autoEnableFiltered') as HTMLInputElement;
+    this.autoFilterAllVideos = document.getElementById('autoFilterAllVideos') as HTMLInputElement;
+    this.confirmBeforeAutoFilter = document.getElementById('confirmBeforeAutoFilter') as HTMLInputElement;
+    this.confirmBeforeAutoFilterRow = document.getElementById('confirmBeforeAutoFilterRow') as HTMLElement;
+    this.showTimelineMarkers = document.getElementById('showTimelineMarkers') as HTMLInputElement;
     this.cacheCount = document.getElementById('cacheCount') as HTMLElement;
     this.clearCacheBtn = document.getElementById('clearCacheBtn') as HTMLButtonElement;
     this.saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
@@ -64,6 +72,19 @@ class OptionsController {
 
     // Update behavior settings
     this.autoEnableFiltered.checked = this.preferences.autoEnableForFilteredVideos !== false;
+    this.autoFilterAllVideos.checked = this.preferences.autoFilterAllVideos === true;
+    this.confirmBeforeAutoFilter.checked = this.preferences.confirmBeforeAutoFilter === true;
+    this.showTimelineMarkers.checked = this.preferences.showTimelineMarkers !== false;
+    this.updateConfirmBeforeAutoFilterEnabledState();
+  }
+
+  // Greys out the sub-toggle when its parent (auto-filter-all) is off, so
+  // users can see the setting exists but understand it has no effect until
+  // they turn on the parent.
+  private updateConfirmBeforeAutoFilterEnabledState(): void {
+    const parentOn = this.autoFilterAllVideos.checked;
+    this.confirmBeforeAutoFilter.disabled = !parentOn;
+    this.confirmBeforeAutoFilterRow.classList.toggle('is-disabled', !parentOn);
   }
 
   private async loadCacheCount(): Promise<void> {
@@ -87,6 +108,11 @@ class OptionsController {
     // Clear cache button
     this.clearCacheBtn.addEventListener('click', () => {
       this.clearCache();
+    });
+
+    // Keep the sub-toggle's enabled state in sync with its parent.
+    this.autoFilterAllVideos.addEventListener('change', () => {
+      this.updateConfirmBeforeAutoFilterEnabledState();
     });
 
     // Listen for preference updates from other tabs
@@ -114,6 +140,9 @@ class OptionsController {
         paddingAfterMs: parseInt(this.paddingAfter.value, 10) || 30,
         mergeThresholdMs: parseInt(this.mergeThreshold.value, 10) || 100,
         autoEnableForFilteredVideos: this.autoEnableFiltered.checked,
+        autoFilterAllVideos: this.autoFilterAllVideos.checked,
+        confirmBeforeAutoFilter: this.confirmBeforeAutoFilter.checked,
+        showTimelineMarkers: this.showTimelineMarkers.checked,
       };
 
       const response = await chrome.runtime.sendMessage({

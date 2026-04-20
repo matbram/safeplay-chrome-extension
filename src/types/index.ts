@@ -184,6 +184,9 @@ export interface UserPreferences {
   paddingAfterMs?: number; // Padding after word ends (catches release)
   mergeThresholdMs: number;
   autoEnableForFilteredVideos: boolean; // Auto-enable filter for previously filtered videos
+  autoFilterAllVideos: boolean; // Auto-start filter on every YouTube video (opt-in)
+  confirmBeforeAutoFilter: boolean; // When auto-filter-all is on, still show the credit confirmation modal
+  showTimelineMarkers: boolean; // Render profanity markers on the video progress bar
 }
 
 export const DEFAULT_PREFERENCES: UserPreferences = {
@@ -202,6 +205,9 @@ export const DEFAULT_PREFERENCES: UserPreferences = {
   paddingAfterMs: 30, // Padding after word ends
   mergeThresholdMs: 100,
   autoEnableForFilteredVideos: true, // Auto-enable filter for previously filtered videos
+  autoFilterAllVideos: false, // Off by default — users opt in when they want total coverage
+  confirmBeforeAutoFilter: false, // Off by default — auto-filter runs without interrupting. Users can flip on for cost oversight.
+  showTimelineMarkers: true, // On by default — useful visual affordance
 };
 
 // Storage Types
