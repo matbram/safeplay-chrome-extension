@@ -407,6 +407,25 @@ export class ResilientInjector {
     iconWrapper.className = 'safeplay-shorts-icon';
     iconWrapper.style.cssText = 'display: flex; align-items: center; justify-content: center; position: relative; z-index: 1;';
     iconWrapper.innerHTML = this.getShortsIconSVG(state);
+
+    // Water fill element — same animation as the watch-page button, clipped
+    // to the button's circle by border-radius + overflow: hidden above.
+    // Inserted BEFORE the icon so z-index stacking works without the icon
+    // being obscured.
+    const waterFill = document.createElement('div');
+    waterFill.className = 'safeplay-shorts-water-fill';
+    waterFill.style.cssText = `
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 0%;
+      background: linear-gradient(to top, #3b82f6, #60a5fa);
+      transition: height 0.3s ease-out;
+      z-index: 0;
+      pointer-events: none;
+    `;
+    button.appendChild(waterFill);
     button.appendChild(iconWrapper);
 
     // Add label below button
@@ -897,6 +916,7 @@ export class ResilientInjector {
     const button = container.querySelector<HTMLButtonElement>('.safeplay-shorts-action-button');
     const iconWrapper = container.querySelector<HTMLDivElement>('.safeplay-shorts-icon');
     const label = container.querySelector<HTMLSpanElement>('.safeplay-shorts-label');
+    const waterFill = container.querySelector<HTMLDivElement>('.safeplay-shorts-water-fill');
 
     if (!button || !iconWrapper) return;
 
@@ -909,6 +929,21 @@ export class ResilientInjector {
 
     // Update icon
     iconWrapper.innerHTML = this.getShortsIconSVG(stateInfo.state);
+
+    // Update water fill — mirrors updateWatchPageButton's behavior so the
+    // Shorts button shows the same elapsed-time-driven fill animation
+    // during the transcription phase.
+    if (waterFill) {
+      if (stateInfo.state === 'filtering') {
+        waterFill.style.height = '100%';
+      } else if (stateInfo.state === 'paused') {
+        waterFill.style.height = '0%';
+      } else if (config.useWater) {
+        waterFill.style.height = `${waterFillPercent(stateInfo)}%`;
+      } else {
+        waterFill.style.height = '0%';
+      }
+    }
 
     // Update label
     if (label) {
