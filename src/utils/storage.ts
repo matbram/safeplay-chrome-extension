@@ -52,71 +52,180 @@ export async function setPreferences(
   return updated;
 }
 
-// Refresh the auth token by getting fresh session from website
-export async function refreshAuthToken(): Promise<string | null> {
+/**
+ * Refresh result kinds:
+ *   - ok:        got a fresh access token
+ *   - transient: refresh couldn't complete (network, 5xx, 404, cookie missing).
+ *                Stored auth should NOT be wiped — the next caller can retry.
+ *   - revoked:   server explicitly said the refresh token is no longer valid.
+ *                Caller should log the user out.
+ */
+export type RefreshResult =
+  | { kind: 'ok'; token: string }
+  | { kind: 'transient' }
+  | { kind: 'revoked' };
+
+// Normalize a Unix timestamp to seconds. Some endpoints return ms, some
+// return seconds; Supabase's session.expires_at is seconds. Treat values
+// above 10 billion as ms (that threshold is year 2286 in seconds).
+function normalizeExpiresAtToSeconds(value: number): number {
+  if (value > 10000000000) return Math.floor(value / 1000);
+  return Math.floor(value);
+}
+
+async function persistRefreshResult(
+  accessToken: string,
+  refreshToken?: string,
+  expiresAt?: number
+): Promise<void> {
+  const data: Record<string, unknown> = {
+    [STORAGE_KEYS.AUTH_TOKEN]: accessToken,
+  };
+  if (refreshToken) data[STORAGE_KEYS.REFRESH_TOKEN] = refreshToken;
+  if (expiresAt !== undefined && expiresAt !== null) {
+    const seconds = normalizeExpiresAtToSeconds(expiresAt);
+    data[STORAGE_KEYS.TOKEN_EXPIRES_AT] = seconds;
+    console.log('[SafePlay Storage] ✅ Token refreshed; expires at', new Date(seconds * 1000).toISOString());
+  }
+  await chrome.storage.local.set(data);
+}
+
+// Wipe only the three token keys — keep profile/subscription/credits bundle.
+// api/client.ts's clearAuthData() does the bigger wipe when appropriate.
+async function wipeTokensOnly(): Promise<void> {
+  await chrome.storage.local.remove([
+    STORAGE_KEYS.AUTH_TOKEN,
+    STORAGE_KEYS.REFRESH_TOKEN,
+    STORAGE_KEYS.TOKEN_EXPIRES_AT,
+  ]);
+}
+
+// Primary refresh path: POST the stored refresh token to /api/auth/refresh.
+// Succeeds when the server deploys that endpoint and the token is still
+// valid. Returns:
+//   - ok      : got fresh tokens
+//   - revoked : server said 401/403 — refresh token definitively dead
+//   - null    : any other outcome (404 endpoint missing, 5xx, network) —
+//               caller should fall back to the cookie path.
+async function refreshViaToken(refreshToken: string): Promise<RefreshResult | null> {
+  const url = `${API_BASE_URL}/api/auth/refresh`;
+  console.log('[SafePlay Storage] 🔄 Attempting refresh via /api/auth/refresh');
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+  } catch (err) {
+    console.log('[SafePlay Storage] /api/auth/refresh network error:', err);
+    return null; // transient — try cookie fallback
+  }
+
+  if (response.ok) {
+    const data = await response.json();
+    const accessToken = data.access_token || data.token;
+    if (!accessToken) {
+      console.log('[SafePlay Storage] /api/auth/refresh returned 200 without access_token');
+      return null; // malformed — try cookie fallback
+    }
+    await persistRefreshResult(
+      accessToken,
+      data.refresh_token || data.refreshToken,
+      data.expires_at ?? data.expiresAt
+    );
+    return { kind: 'ok', token: accessToken };
+  }
+
+  if (response.status === 401 || response.status === 403) {
+    console.log('[SafePlay Storage] /api/auth/refresh rejected token — revoked');
+    await wipeTokensOnly();
+    return { kind: 'revoked' };
+  }
+
+  // 404 = endpoint not deployed; 5xx = transient. Either way, fall back.
+  console.log(`[SafePlay Storage] /api/auth/refresh returned ${response.status}; falling back to cookie path`);
+  return null;
+}
+
+// Legacy / fallback refresh path: GET /api/extension/session with the
+// website session cookie. Works only when cookies are present. Never
+// returns 'revoked' — cookie absence could mean "user signed out" OR
+// "cookies blocked" OR "cookie TTL shorter than token TTL" and we can't
+// tell those apart. Always transient when it fails.
+async function refreshViaCookie(): Promise<RefreshResult> {
   try {
     const extensionId = chrome.runtime.id;
     const url = `${API_BASE_URL}/api/extension/session?extensionId=${extensionId}`;
 
-    console.log('[SafePlay Storage] 🔄 Refreshing token via website session...');
-    console.log('[SafePlay Storage] Endpoint:', url);
+    console.log('[SafePlay Storage] 🔄 Falling back to cookie refresh (/api/extension/session)');
 
     const response = await fetch(url, {
       method: 'GET',
-      credentials: 'include',  // Include cookies for session
+      credentials: 'include',
     });
 
-    console.log('[SafePlay Storage] Response status:', response.status);
-
     if (!response.ok) {
-      const errorText = await response.text();
-      console.log('[SafePlay Storage] ❌ Session fetch failed:', {
-        status: response.status,
-        statusText: response.statusText,
-        body: errorText.substring(0, 200),
-      });
-      return null;
+      console.log('[SafePlay Storage] Cookie session fetch failed:', response.status);
+      return { kind: 'transient' };
     }
 
     const data = await response.json();
 
-    console.log('[SafePlay Storage] Response data:', {
-      authenticated: data.authenticated,
-      hasToken: !!data.token,
-      tokenLength: data.token?.length,
-      hasRefreshToken: !!data.refreshToken,
-      refreshTokenLength: data.refreshToken?.length,
-      expiresAt: data.expiresAt,
-      expiresAtDate: data.expiresAt ? new Date(data.expiresAt).toISOString() : null,
-    });
-
     if (!data.authenticated) {
-      console.log('[SafePlay Storage] ❌ User not authenticated on website - clearing local tokens');
-      // Clear local tokens since website session is gone
-      await chrome.storage.local.remove([
-        STORAGE_KEYS.AUTH_TOKEN,
-        STORAGE_KEYS.REFRESH_TOKEN,
-        STORAGE_KEYS.TOKEN_EXPIRES_AT,
-      ]);
-      return null;
+      // Soft signal. Previously this wiped the refresh token too, which
+      // caused the re-auth issue: a website cookie expiring would force
+      // the user to sign in again even though their refresh token was
+      // still valid. We now drop only the access token (it's useless if
+      // it was expired anyway) and leave the refresh token alone so the
+      // token path can be retried.
+      console.log('[SafePlay Storage] Cookie session says unauthenticated — keeping refresh token, dropping access token');
+      await chrome.storage.local.remove([STORAGE_KEYS.AUTH_TOKEN]);
+      return { kind: 'transient' };
     }
 
-    // Store the new tokens
-    const expiresAtSeconds = Math.floor(data.expiresAt / 1000);
-    await chrome.storage.local.set({
-      [STORAGE_KEYS.AUTH_TOKEN]: data.token,
-      [STORAGE_KEYS.REFRESH_TOKEN]: data.refreshToken,
-      [STORAGE_KEYS.TOKEN_EXPIRES_AT]: expiresAtSeconds,
-    });
-
-    console.log('[SafePlay Storage] ✅ Token refreshed successfully via website session');
-    console.log('[SafePlay Storage] New token expires:', new Date(expiresAtSeconds * 1000).toISOString());
-
-    return data.token;
-  } catch (error) {
-    console.log('[SafePlay Storage] ❌ Session refresh error:', error);
-    return null;
+    await persistRefreshResult(data.token, data.refreshToken, data.expiresAt);
+    return { kind: 'ok', token: data.token };
+  } catch (err) {
+    console.log('[SafePlay Storage] Cookie session fetch threw:', err);
+    return { kind: 'transient' };
   }
+}
+
+// Singleflight so N parallel callers share one in-flight refresh.
+// Prevents the race where one refresh rotates the token and the other
+// callers' inflight requests fail with 401, causing a cascade logout.
+let inflightRefresh: Promise<RefreshResult> | null = null;
+
+export function refreshAuthTokenDetailed(): Promise<RefreshResult> {
+  if (inflightRefresh) return inflightRefresh;
+
+  inflightRefresh = (async (): Promise<RefreshResult> => {
+    try {
+      const stored = await chrome.storage.local.get(STORAGE_KEYS.REFRESH_TOKEN);
+      const refreshToken = stored[STORAGE_KEYS.REFRESH_TOKEN];
+
+      if (refreshToken) {
+        const tokenResult = await refreshViaToken(refreshToken);
+        if (tokenResult) return tokenResult; // ok or revoked — definitive
+        // null → fall through to cookie fallback (endpoint missing / transient)
+      }
+
+      return await refreshViaCookie();
+    } finally {
+      inflightRefresh = null;
+    }
+  })();
+
+  return inflightRefresh;
+}
+
+// Backward-compatible wrapper — unchanged signature so existing callers
+// (api/client.ts and this file's own getAuthToken) keep working.
+export async function refreshAuthToken(): Promise<string | null> {
+  const result = await refreshAuthTokenDetailed();
+  return result.kind === 'ok' ? result.token : null;
 }
 
 // Get auth token - automatically refreshes if expired
