@@ -3,6 +3,7 @@
 // and above the like button on YouTube Shorts
 
 import { ButtonState, ButtonStateInfo } from '../types';
+import { formatEta } from './time-estimator';
 
 export interface InjectorOptions {
   onButtonClick: (youtubeId: string) => void;
@@ -13,6 +14,49 @@ export interface InjectorOptions {
 const PROCESSED_ATTR = 'data-safeplay-processed';
 const BUTTON_CONTAINER_CLASS = 'safeplay-video-page-button-container';
 const SHORTS_BUTTON_CLASS = 'safeplay-shorts-button';
+
+// Compact button text during transcription. We keep this short because
+// the YouTube header has limited space next to Subscribe. The popup
+// renders the full statusText for users who want more detail.
+// Short, neutral text for the watch-page button. Deliberately brandless —
+// we don't say "transcribing" or "downloading" because those hint at the
+// pipeline. "ETA Ns" conveys remaining time in the tightest possible form.
+function compactButtonText(info: ButtonStateInfo): string {
+  if (info.phase === 'done') return 'Done!';
+  if (info.phase === 'error') return 'Retry';
+  // Connecting doesn't get a countdown even if we know the total — we
+  // haven't actually started the work yet.
+  if (info.phase === 'connecting') return 'Starting...';
+  if (info.phase === 'almost-done' || info.remainingSeconds == null) {
+    return 'Almost done...';
+  }
+  return `ETA ${formatEta(info.remainingSeconds)}`;
+}
+
+function compactShortsLabel(info: ButtonStateInfo): string {
+  if (info.phase === 'done') return 'Done';
+  if (info.phase === 'error') return 'Retry';
+  if (info.phase === 'almost-done' || info.remainingSeconds == null) return '…';
+  return formatEta(info.remainingSeconds);
+}
+
+// Elapsed-time-based fill. Honest because the countdown is what we're
+// tracking against — not inventing a server percentage. Caps at 95%
+// while we're still waiting so the button doesn't imply completion.
+function waterFillPercent(info: ButtonStateInfo): number {
+  if (info.phase === 'done') return 100;
+  if (info.phase === 'almost-done') return 95;
+  const total = info.totalEstimatedSeconds;
+  const remaining = info.remainingSeconds;
+  if (total && total > 0 && remaining != null) {
+    const elapsed = total - remaining;
+    const pct = (elapsed / total) * 100;
+    return Math.max(0, Math.min(95, pct));
+  }
+  // Unknown duration / pre-connect — a small visible slice so the user
+  // sees activity without implying real progress.
+  return 8;
+}
 
 // Button state configurations with YouTube theme colors
 // Water fill uses blue (#3b82f6) that fills from bottom to top during processing
@@ -87,6 +131,10 @@ export class ResilientInjector {
   // Track Shorts button states by video ID
   private shortsButtonStates: Map<string, ButtonState> = new Map();
   private shortsScrollObserver: IntersectionObserver | null = null;
+  // Remember last logged state per surface so we only log transitions, not
+  // every per-second countdown tick during the transcription phase.
+  private lastLoggedWatchState: string | null = null;
+  private lastLoggedShortsState: Map<string, string> = new Map();
 
   constructor(options: InjectorOptions) {
     this.options = options;
@@ -747,13 +795,13 @@ export class ResilientInjector {
     iconWrapper.innerHTML = this.getIconSVG(stateInfo.state);
 
     // Update text
-    let displayText = stateInfo.text || config.text;
-
-    // Add progress percentage for processing states
-    if (stateInfo.progress !== undefined && stateInfo.progress > 0) {
-      if (stateInfo.state === 'downloading' || stateInfo.state === 'transcribing' || stateInfo.state === 'processing') {
-        displayText = `${config.text.replace('...', '')} ${Math.round(stateInfo.progress)}%`;
-      }
+    let displayText: string;
+    if (stateInfo.phase || stateInfo.statusText) {
+      // New countdown-driven path — renderer shows compact text on the
+      // button; the full statusText goes to the popup.
+      displayText = compactButtonText(stateInfo);
+    } else {
+      displayText = stateInfo.text || config.text;
     }
 
     // Add interval count for filtering state (completed)
@@ -763,22 +811,20 @@ export class ResilientInjector {
 
     textSpan.textContent = displayText;
 
-    // Update water fill effect
+    // Update water fill effect — now driven by elapsed/estimated time
+    // rather than server-reported progress, so the animation represents
+    // real wall-clock passage against our published estimate.
     if (waterFill) {
-      if (config.useWater && stateInfo.progress !== undefined && stateInfo.progress > 0) {
-        // Show water filling up during processing states
-        waterFill.style.height = `${stateInfo.progress}%`;
-        waterFill.classList.remove('safeplay-water-full');
-      } else if (stateInfo.state === 'filtering') {
-        // Fully filled when complete - solid blue
+      if (stateInfo.state === 'filtering') {
         waterFill.style.height = '100%';
         waterFill.classList.add('safeplay-water-full');
       } else if (stateInfo.state === 'paused') {
-        // Paused - drain the water (animate to empty)
         waterFill.style.height = '0%';
         waterFill.classList.remove('safeplay-water-full');
+      } else if (config.useWater) {
+        waterFill.style.height = `${waterFillPercent(stateInfo)}%`;
+        waterFill.classList.remove('safeplay-water-full');
       } else {
-        // Reset water for other states
         waterFill.style.height = '0%';
         waterFill.classList.remove('safeplay-water-full');
       }
@@ -793,37 +839,49 @@ export class ResilientInjector {
       button.style.cursor = 'default';
     }
 
-    // Update title/tooltip
-    switch (stateInfo.state) {
-      case 'connecting':
-        button.title = 'Connecting to SafePlay service...';
-        break;
-      case 'downloading':
-        button.title = `Filtering: Downloading audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
-        break;
-      case 'transcribing':
-        button.title = `Filtering: Transcribing audio${stateInfo.progress ? ` (${Math.round(stateInfo.progress)}%)` : '...'}`;
-        break;
-      case 'processing':
-        button.title = 'Filtering: Processing transcript...';
-        break;
-      case 'filtering':
-        button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''} - Click to disable`;
-        break;
-      case 'paused':
-        button.title = 'Filter paused - Click to re-enable';
-        break;
-      case 'error':
-        button.title = stateInfo.error || 'Something went wrong - Click to retry';
-        break;
-      case 'age-restricted':
-        button.title = stateInfo.error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.';
-        break;
-      default:
-        button.title = 'Click to filter profanity with SafePlay';
+    // Update title/tooltip. When the estimator has provided a statusText
+    // (during the transcription flow), use it verbatim so the tooltip
+    // matches the countdown instead of leaking internal terms like
+    // "Transcribing audio" or "Processing transcript".
+    if (stateInfo.statusText && (stateInfo.state === 'connecting' ||
+        stateInfo.state === 'downloading' ||
+        stateInfo.state === 'transcribing' ||
+        stateInfo.state === 'processing')) {
+      button.title = stateInfo.statusText;
+    } else {
+      switch (stateInfo.state) {
+        case 'connecting':
+          button.title = 'Connecting...';
+          break;
+        case 'downloading':
+        case 'transcribing':
+          button.title = 'Processing video...';
+          break;
+        case 'processing':
+          button.title = 'Applying filter...';
+          break;
+        case 'filtering':
+          button.title = `Censored${stateInfo.intervalCount ? ` - ${stateInfo.intervalCount} words filtered` : ''} - Click to disable`;
+          break;
+        case 'paused':
+          button.title = 'Filter paused - Click to re-enable';
+          break;
+        case 'error':
+          button.title = stateInfo.error || 'Something went wrong - Click to retry';
+          break;
+        case 'age-restricted':
+          button.title = stateInfo.error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.';
+          break;
+        default:
+          button.title = 'Click to filter profanity with SafePlay';
+      }
     }
 
-    this.log(`Button state updated to: ${stateInfo.state}`, stateInfo);
+    const logKey = `${stateInfo.state}|${stateInfo.phase ?? ''}|${stateInfo.error ?? ''}`;
+    if (logKey !== this.lastLoggedWatchState) {
+      this.lastLoggedWatchState = logKey;
+      this.log(`Button state updated to: ${stateInfo.state}`, stateInfo);
+    }
   }
 
   // Convenience method for simple state updates
@@ -860,13 +918,9 @@ export class ResilientInjector {
         labelText = `${stateInfo.intervalCount}`;
       } else if (stateInfo.state === 'filtering') {
         labelText = 'Censored';
-      }
-
-      // Show progress for processing states
-      if (stateInfo.progress !== undefined && stateInfo.progress > 0) {
-        if (stateInfo.state === 'downloading' || stateInfo.state === 'transcribing' || stateInfo.state === 'processing') {
-          labelText = `${Math.round(stateInfo.progress)}%`;
-        }
+      } else if (stateInfo.phase || stateInfo.statusText) {
+        // Shorts label is narrow — show either seconds or a short word.
+        labelText = compactShortsLabel(stateInfo);
       }
 
       label.textContent = labelText;
@@ -880,7 +934,11 @@ export class ResilientInjector {
       button.style.cursor = 'default';
     }
 
-    this.log(`Shorts button state updated to: ${stateInfo.state} for ${videoId}`);
+    const logKey = `${stateInfo.state}|${stateInfo.phase ?? ''}|${stateInfo.error ?? ''}`;
+    if (this.lastLoggedShortsState.get(videoId) !== logKey) {
+      this.lastLoggedShortsState.set(videoId, logKey);
+      this.log(`Shorts button state updated to: ${stateInfo.state} for ${videoId}`);
+    }
   }
 
   // Set up mutation observer for dynamic content changes

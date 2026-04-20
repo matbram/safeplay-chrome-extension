@@ -1,11 +1,26 @@
 // SafePlay Content Script - Main Entry Point
 import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
-import { SmoothProgressAnimator } from './smooth-progress';
 import { CaptionFilter } from './caption-filter';
 import { TimelineMarkers } from './timeline-markers';
 import { CreditConfirmation, showAuthRequiredMessage, showFilterErrorNotification } from './credit-confirmation';
-import { UserPreferences, DEFAULT_PREFERENCES, Transcript, ButtonStateInfo, PreviewData } from '../types';
+import { TranscriptionSSEClient } from './sse-client';
+import { TimeEstimator, TranscriptionStateSnapshot } from './time-estimator';
+import {
+  UserPreferences,
+  DEFAULT_PREFERENCES,
+  Transcript,
+  ButtonStateInfo,
+  PreviewData,
+  TranscriptionStateBroadcast,
+} from '../types';
+
+const API_BASE_URL = 'https://trysafeplay.com';
+// Floor for the transcription budget (applies to short/medium videos).
+// The actual budget scales up with the ETA estimate for long videos —
+// see SafePlayContentScript.transcriptionBudgetMs().
+const TRANSCRIPTION_BUDGET_FLOOR_MS = 6 * 60 * 1000;
+const FALLBACK_POLL_INTERVAL_MS = 2000;
 import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
 import './styles.css';
 
@@ -54,15 +69,21 @@ class SafePlayContentScript {
   private filteringVideoId: string | null = null; // Track which video is being filtered (for Shorts)
   private isProcessing = false;
   private videoWasPlaying = false; // Track if video was playing before we paused it
-  private progressAnimator: SmoothProgressAnimator | null = null;
   private lastIntervalCount = 0; // Store interval count for toggle restore
   private isFilterActive = false; // Track if filter is currently active
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
   private navigationId = 0; // Incremented on each navigation to cancel stale async operations
   private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
   private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
+  private lastVideoDuration: number | undefined; // Duration in seconds from preview, used to compute the transcription countdown
   private autoRetryTimer: ReturnType<typeof setTimeout> | null = null; // Timer for automatic retry after error
   private skipNextConfirmation = false; // Skip credit confirmation on auto-retry
+  private estimator: TimeEstimator | null = null;
+  private sseClient: TranscriptionSSEClient | null = null;
+  private fallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
+  private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
+  private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
+  private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -266,6 +287,7 @@ class SafePlayContentScript {
 
       const previewData: PreviewData = previewResponse.data;
       this.lastCreditCost = previewData.creditCost;
+      this.lastVideoDuration = previewData.video.duration || undefined;
 
       // If cached and has sufficient credits (free), or auto-retrying, skip confirmation
       if ((previewData.isCached && previewData.creditCost === 0) || this.skipNextConfirmation) {
@@ -444,9 +466,9 @@ class SafePlayContentScript {
         this.updateButtonState({ state: 'processing', text: 'Processing...', videoId: youtubeId });
         await this.applyFilter(transcript);
       } else if (status === 'processing' && jobId) {
-        // Need to poll for job completion
-        log('Job started, polling for completion:', jobId);
-        await this.pollJobStatus(jobId);
+        // Kick off SSE for real-time updates; falls back to polling internally.
+        log('Job started, opening SSE for:', jobId);
+        await this.runTranscriptionFlow(jobId, youtubeId);
       } else {
         throw new Error('Unexpected API response');
       }
@@ -477,216 +499,374 @@ class SafePlayContentScript {
     }
   }
 
-  // Poll for job status with progress updates
-  private async pollJobStatus(jobId: string): Promise<void> {
-    const maxAttempts = 180; // 6 minutes max (2s intervals)
-    const pollInterval = 2000;
-    let attempts = 0;
-    // Capture the video ID being filtered at the start
-    const videoId = this.filteringVideoId;
-    // Capture navigation ID to detect if user navigated away during polling
-    const startNavigationId = this.navigationId;
+  // Budget for both SSE safety timer and polling fallback. Scales with
+  // the ETA estimate so long videos (where transcription legitimately
+  // takes tens of minutes) don't get killed at 6 minutes while the
+  // server is still actively working. 2× the estimate gives comfortable
+  // headroom; short/medium jobs stay at the 6-min floor.
+  private transcriptionBudgetMs(): number {
+    const est = this.lastTranscriptionState?.totalEstimatedSeconds;
+    if (!est || est <= 0) return TRANSCRIPTION_BUDGET_FLOOR_MS;
+    return Math.max(TRANSCRIPTION_BUDGET_FLOOR_MS, est * 2 * 1000);
+  }
 
-    // Initialize smooth progress animator
-    this.progressAnimator = new SmoothProgressAnimator(
-      (progress, text) => {
-        this.updateButtonState({
-          state: 'processing',
-          text,
-          progress,
-          videoId: videoId || undefined,
-        });
+  // Open the SSE connection for live transcription updates and kick off the
+  // countdown. Falls back to polling on transport/HTTP failure or if the
+  // server never sends 'complete' within the transcription budget.
+  private async runTranscriptionFlow(jobId: string, videoId: string): Promise<void> {
+    this.jobStartedAt = Date.now();
+    this.startEstimator(videoId);
+
+    const navigationId = this.navigationId;
+    const isStillCurrent = () =>
+      this.navigationId === navigationId && this.filteringVideoId === videoId;
+
+    // Ask the background for a fresh bearer token (it handles refresh).
+    const authResp = await safeSendMessage<{
+      success: boolean;
+      data?: { authenticated: boolean; token?: string };
+    }>({ type: 'GET_AUTH_STATUS' });
+
+    if (!isStillCurrent()) return;
+
+    const token = authResp?.data?.token;
+    if (!token) {
+      // Shouldn't happen (auth was checked in onFilterButtonClick), but be
+      // safe: fall back to polling silently.
+      log('No bearer token for SSE, falling back to polling');
+      this.pollJobStatusFallback(jobId, videoId);
+      return;
+    }
+
+    const budgetMs = this.transcriptionBudgetMs();
+    const safetyTimer = setTimeout(() => {
+      log(`SSE budget expired after ${budgetMs}ms, falling back to polling`);
+      if (this.sseClient) {
+        this.sseClient.close();
+        this.sseClient = null;
+      }
+      if (isStillCurrent()) this.pollJobStatusFallback(jobId, videoId);
+    }, budgetMs);
+
+    const clearSafety = () => clearTimeout(safetyTimer);
+
+    const client = new TranscriptionSSEClient({
+      url: `${API_BASE_URL}/api/filter/events/${encodeURIComponent(jobId)}`,
+      token,
+      debug: DEBUG,
+      onConnected: (data) => {
+        if (!isStillCurrent()) return;
+        log('SSE connected:', data.status);
+        this.estimator?.setServerStatus(data.status);
       },
-      'Analyzing'
-    );
-    this.progressAnimator.start();
-
-    while (attempts < maxAttempts) {
-      // Check if user navigated away - if so, abort polling silently
-      if (this.navigationId !== startNavigationId) {
-        log(`Polling aborted for ${videoId}: user navigated away`);
-        if (this.progressAnimator) {
-          this.progressAnimator.stop();
-          this.progressAnimator = null;
+      onProgress: (data) => {
+        if (!isStillCurrent()) return;
+        this.estimator?.setServerStatus(data.status);
+      },
+      onComplete: async (data) => {
+        clearSafety();
+        if (this.sseClient) {
+          this.sseClient.close();
+          this.sseClient = null;
         }
+        if (!isStillCurrent()) {
+          log(`Ignoring SSE complete for ${data.job_id}: video changed`);
+          return;
+        }
+        this.estimator?.markComplete();
+        await this.finalizeCompletedJob(data.job_id, videoId);
+      },
+      onServerError: (data) => {
+        clearSafety();
+        if (this.sseClient) {
+          this.sseClient.close();
+          this.sseClient = null;
+        }
+        if (!isStillCurrent()) return;
+        this.estimator?.markError(data.error_code, data.error);
+        this.surfaceJobError(videoId, data.error, data.error_code);
+      },
+      onTransportError: (err) => {
+        clearSafety();
+        if (this.sseClient) {
+          this.sseClient.close();
+          this.sseClient = null;
+        }
+        if (!isStillCurrent()) return;
+        log('SSE transport error, falling back to polling:', err.message);
+        this.pollJobStatusFallback(jobId, videoId);
+      },
+    });
+
+    this.sseClient = client;
+    // Fire-and-forget: the client's async run loop is self-contained.
+    client.start().catch((err) => {
+      log('SSE start error (already handled by onTransportError):', err);
+    });
+  }
+
+  // Single status call triggered by SSE 'complete'. The status route does
+  // the server-side bookkeeping (credit charging, history, caching). If it
+  // returns something other than a completed transcript, fall through to
+  // the polling path (idempotent) to wait for server catch-up.
+  private async finalizeCompletedJob(jobId: string, videoId: string): Promise<void> {
+    if (this.statusCallInFlight) return;
+    this.statusCallInFlight = true;
+
+    type JobCheckResponse = {
+      success: boolean;
+      error?: string;
+      data?: { status: string; progress: number; transcript?: Transcript; error?: string; error_code?: string };
+    };
+    let response: JobCheckResponse | null;
+    try {
+      response = await safeSendMessage<JobCheckResponse>({
+        type: 'CHECK_JOB',
+        payload: { jobId },
+      });
+    } catch (err) {
+      log('CHECK_JOB failed after SSE complete:', err);
+      this.statusCallInFlight = false;
+      if (this.filteringVideoId === videoId) this.pollJobStatusFallback(jobId, videoId);
+      return;
+    }
+    this.statusCallInFlight = false;
+
+    if (this.filteringVideoId !== videoId) return;
+
+    if (!response) {
+      // Extension context invalidated
+      this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId });
+      this.stopTranscriptionResources();
+      this.resumeVideoIfNeeded();
+      this.isProcessing = false;
+      this.filteringVideoId = null;
+      return;
+    }
+
+    if (!response.success || !response.data) {
+      log('CHECK_JOB returned unsuccessful after SSE complete, falling back to polling');
+      this.pollJobStatusFallback(jobId, videoId);
+      return;
+    }
+
+    const { status, transcript, error, error_code } = response.data;
+    if (status === 'completed' && transcript) {
+      await this.applyCompletedTranscript(transcript, videoId);
+      return;
+    }
+    if (status === 'failed') {
+      this.estimator?.markError(error_code, error);
+      this.surfaceJobError(videoId, error, error_code);
+      return;
+    }
+    // Server bookkeeping hasn't caught up yet — let the fallback poller
+    // wait for it. This also preserves the 6-min polling budget.
+    this.pollJobStatusFallback(jobId, videoId);
+  }
+
+  // Fallback path: 2s polling loop, preserved as a safety net if SSE can't
+  // connect or dies mid-stream. Gets its own 6-min budget from the moment
+  // it starts.
+  private async pollJobStatusFallback(jobId: string, videoId: string): Promise<void> {
+    // Avoid double-starting if we're already polling (e.g. safety timer
+    // fired while a previous fallback tick was in flight).
+    if (this.fallbackPollTimer !== null) {
+      clearTimeout(this.fallbackPollTimer);
+      this.fallbackPollTimer = null;
+    }
+
+    if (!this.estimator) this.startEstimator(videoId);
+    const startedAt = Date.now();
+    const budgetMs = this.transcriptionBudgetMs();
+    const navigationId = this.navigationId;
+    const isStillCurrent = () =>
+      this.navigationId === navigationId && this.filteringVideoId === videoId;
+
+    const tick = async (): Promise<void> => {
+      if (!isStillCurrent()) return;
+      if (Date.now() - startedAt > budgetMs) {
+        this.estimator?.markError(undefined, 'Processing timed out');
+        this.surfaceJobError(videoId, 'Processing timed out', undefined);
         return;
       }
 
+      let response;
       try {
-        const response = await safeSendMessage<{
+        response = await safeSendMessage<{
           success: boolean;
           error?: string;
           data?: { status: string; progress: number; transcript?: Transcript; error?: string; error_code?: string };
-        }>({
-          type: 'CHECK_JOB',
-          payload: { jobId },
-        });
-
-        // Check again after async call - user may have navigated during the request
-        if (this.navigationId !== startNavigationId) {
-          log(`Polling aborted for ${videoId}: user navigated away during request`);
-          if (this.progressAnimator) {
-            this.progressAnimator.stop();
-            this.progressAnimator = null;
-          }
-          return;
-        }
-
-        // Handle extension context invalidated
-        if (!response) {
-          this.progressAnimator?.stop();
-          this.progressAnimator = null;
-          this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: videoId || undefined });
-          this.resumeVideoIfNeeded();
-          return;
-        }
-
-        if (!response.success) {
-          throw new Error(response.error || 'Failed to check job status');
-        }
-
-        if (!response.data) {
-          throw new Error('No job status data received');
-        }
-
-        const { status, progress, transcript, error, error_code } = response.data;
-
-        log(`Job status: ${status}, progress: ${progress}%`);
-
-        // Calculate actual progress and update animator target
-        switch (status) {
-          case 'pending':
-            this.progressAnimator.setTarget(5);
-            break;
-
-          case 'downloading':
-            // Scale downloading: 0-100% server progress -> 5-30% display
-            this.progressAnimator.setTarget(5 + progress * 0.25);
-            break;
-
-          case 'transcribing':
-            // Scale transcribing: 0-100% server progress -> 30-85% display
-            this.progressAnimator.setTarget(30 + progress * 0.55);
-            break;
-
-          case 'completed':
-            if (transcript) {
-              // Signal completion - animator will smoothly reach 100%
-              this.progressAnimator.setTarget(95);
-              // Give a moment for progress to animate up
-              await new Promise((resolve) => setTimeout(resolve, 300));
-
-              // Check if user navigated away during animation
-              if (this.navigationId !== startNavigationId) {
-                log(`Polling aborted for ${videoId}: user navigated away during completion animation`);
-                if (this.progressAnimator) {
-                  this.progressAnimator.stop();
-                  this.progressAnimator = null;
-                }
-                return;
-              }
-
-              this.progressAnimator.complete();
-              // Wait for animation to finish
-              await new Promise((resolve) => setTimeout(resolve, 500));
-
-              // Final navigation check before applying filter
-              if (this.navigationId !== startNavigationId) {
-                log(`Polling aborted for ${videoId}: user navigated away before filter apply`);
-                if (this.progressAnimator) {
-                  this.progressAnimator.stop();
-                  this.progressAnimator = null;
-                }
-                return;
-              }
-
-              this.progressAnimator.stop();
-              this.progressAnimator = null;
-              await this.applyFilter(transcript);
-              return;
-            } else {
-              throw new Error('Job completed but no transcript returned');
-            }
-
-          case 'failed':
-            // Check for specific error codes that need special handling
-            if (error_code === 'AGE_RESTRICTED') {
-              // Stop animator
-              if (this.progressAnimator) {
-                this.progressAnimator.stop();
-                this.progressAnimator = null;
-              }
-              // Show age-restricted state with helpful message
-              this.updateButtonState({
-                state: 'age-restricted',
-                text: 'Age-Restricted',
-                error: error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.',
-                videoId: videoId || undefined,
-              });
-              this.isProcessing = false;
-              this.filteringVideoId = null;
-              // Resume video since we can't filter
-              if (this.videoWasPlaying) {
-                const video = this.getVideoElement();
-                if (video) {
-                  video.play();
-                  log('Video resumed after age-restricted detection');
-                }
-                this.videoWasPlaying = false;
-              }
-              return;
-            }
-            throw new Error(error || 'Processing failed');
-
-          default:
-            // Generic processing state
-            this.progressAnimator.setTarget(progress);
-        }
-
-        // Wait before next poll
-        await new Promise((resolve) => setTimeout(resolve, pollInterval));
-        attempts++;
-      } catch (error) {
-        log('Poll error:', error);
-        // Stop animator on error
-        if (this.progressAnimator) {
-          this.progressAnimator.stop();
-          this.progressAnimator = null;
-        }
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        this.updateButtonState({
-          state: 'error',
-          text: 'Retry',
-          error: `${errorMessage} - Click to retry`,
-          videoId: videoId || undefined,
-        });
-        this.isProcessing = false;
-        this.filteringVideoId = null;
-        // Show notification about the filtering issue
-        showFilterErrorNotification();
-        // Silently auto-retry after a delay
-        if (videoId) this.scheduleAutoRetry(videoId);
+        }>({ type: 'CHECK_JOB', payload: { jobId } });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Unknown error';
+        log('Poll error:', msg);
+        this.estimator?.markError(undefined, msg);
+        this.surfaceJobError(videoId, msg, undefined);
         return;
       }
+
+      if (!isStillCurrent()) return;
+
+      if (!response) {
+        // Extension context invalidated
+        this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId });
+        this.stopTranscriptionResources();
+        this.resumeVideoIfNeeded();
+        this.isProcessing = false;
+        this.filteringVideoId = null;
+        return;
+      }
+
+      if (!response.success || !response.data) {
+        const msg = response.error || 'Failed to check job status';
+        this.estimator?.markError(undefined, msg);
+        this.surfaceJobError(videoId, msg, undefined);
+        return;
+      }
+
+      const { status, transcript, error, error_code } = response.data;
+      log(`Fallback poll status: ${status}`);
+
+      if (status === 'completed' && transcript) {
+        this.estimator?.markComplete();
+        await this.applyCompletedTranscript(transcript, videoId);
+        return;
+      }
+      if (status === 'failed') {
+        this.estimator?.markError(error_code, error);
+        this.surfaceJobError(videoId, error, error_code);
+        return;
+      }
+
+      this.estimator?.setServerStatus(status);
+      this.fallbackPollTimer = setTimeout(tick, FALLBACK_POLL_INTERVAL_MS);
+    };
+
+    tick();
+  }
+
+  // Tear down SSE, estimator, and any pending fallback poll.
+  private stopTranscriptionResources(): void {
+    if (this.sseClient) {
+      this.sseClient.close();
+      this.sseClient = null;
+    }
+    if (this.estimator) {
+      this.estimator.close();
+      this.estimator = null;
+    }
+    if (this.fallbackPollTimer !== null) {
+      clearTimeout(this.fallbackPollTimer);
+      this.fallbackPollTimer = null;
+    }
+    this.statusCallInFlight = false;
+    this.lastTranscriptionState = null;
+    this.jobStartedAt = 0;
+  }
+
+  // Create the estimator and wire its updates to the button UI + popup.
+  private startEstimator(videoId: string): void {
+    if (this.estimator) return;
+    const estimator = new TimeEstimator(this.lastVideoDuration, (state: TranscriptionStateSnapshot) => {
+      const broadcast: TranscriptionStateBroadcast = {
+        youtubeId: videoId,
+        phase: state.phase,
+        remainingSeconds: state.remainingSeconds,
+        totalEstimatedSeconds: state.totalEstimatedSeconds,
+        statusText: state.statusText,
+        errorCode: state.errorCode,
+      };
+      this.lastTranscriptionState = broadcast;
+
+      // Map estimator phase → ButtonState so existing color/icon logic still works.
+      const buttonState: ButtonStateInfo['state'] =
+        state.phase === 'connecting' ? 'connecting'
+        : state.phase === 'done' ? 'processing'
+        : state.phase === 'error' ? 'error'
+        : 'transcribing';
+
+      this.updateButtonState({
+        state: buttonState,
+        text: state.statusText,
+        videoId,
+        phase: state.phase,
+        remainingSeconds: state.remainingSeconds,
+        totalEstimatedSeconds: state.totalEstimatedSeconds,
+        statusText: state.statusText,
+      });
+
+      if (isExtensionContextValid()) {
+        chrome.runtime.sendMessage({
+          type: 'TRANSCRIPTION_STATE_CHANGED',
+          payload: broadcast,
+        }).catch(() => {
+          // Popup might be closed; that's fine.
+        });
+      }
+    });
+    this.estimator = estimator;
+    estimator.start();
+  }
+
+  // Apply a completed transcript — wraps the existing applyFilter to make
+  // sure estimator/SSE resources are torn down first.
+  private async applyCompletedTranscript(transcript: Transcript, videoId: string): Promise<void> {
+    // Eyeball-friendly completion log for tuning the ETA formula during
+    // early launch. Intentionally console-only — no persistence, no
+    // reporting endpoint. Captured BEFORE stopTranscriptionResources()
+    // because that clears lastTranscriptionState.
+    if (this.jobStartedAt > 0) {
+      const actualSec = Math.round((Date.now() - this.jobStartedAt) / 1000);
+      const estimateSec = this.lastTranscriptionState?.totalEstimatedSeconds ?? null;
+      const deltaSec = estimateSec != null ? actualSec - estimateSec : null;
+      const sign = deltaSec != null && deltaSec >= 0 ? '+' : '';
+      console.log(
+        `[SafePlay ETA] video=${videoId} duration=${this.lastVideoDuration ?? '?'}s ` +
+        `estimate=${estimateSec ?? '?'}s actual=${actualSec}s ` +
+        `delta=${deltaSec != null ? sign + deltaSec + 's' : '?'}`
+      );
+      this.jobStartedAt = 0;
+    }
+    this.stopTranscriptionResources();
+    this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
+    await this.applyFilter(transcript);
+  }
+
+  // Common error-surfacing for SSE server errors, failed statuses, and
+  // polling timeouts. Matches the legacy behavior of the old pollJobStatus.
+  private surfaceJobError(videoId: string, error?: string, error_code?: string): void {
+    this.stopTranscriptionResources();
+
+    if (error_code === 'AGE_RESTRICTED') {
+      this.updateButtonState({
+        state: 'age-restricted',
+        text: 'Age-Restricted',
+        error: error || 'This video is age-restricted by YouTube. SafePlay cannot filter age-restricted content.',
+        videoId,
+      });
+    } else {
+      const msg = (error || 'Processing failed') + ' - Click to retry';
+      this.updateButtonState({
+        state: 'error',
+        text: 'Retry',
+        error: msg,
+        videoId,
+      });
+      showFilterErrorNotification();
+      this.scheduleAutoRetry(videoId);
     }
 
-    // Timeout - stop animator
-    if (this.progressAnimator) {
-      this.progressAnimator.stop();
-      this.progressAnimator = null;
+    if (this.videoWasPlaying) {
+      const video = this.getVideoElement();
+      if (video) {
+        video.play();
+        log('Video resumed after transcription error');
+      }
+      this.videoWasPlaying = false;
     }
-    this.updateButtonState({
-      state: 'error',
-      text: 'Retry',
-      error: 'Processing timed out - Click to retry',
-      videoId: videoId || undefined,
-    });
     this.isProcessing = false;
     this.filteringVideoId = null;
-    // Show notification about the filtering issue
-    showFilterErrorNotification();
-    // Silently auto-retry after a delay
-    if (videoId) this.scheduleAutoRetry(videoId);
   }
 
   // Apply the filter using the transcript
@@ -962,6 +1142,13 @@ class SafePlayContentScript {
         };
       }
 
+      case 'GET_TRANSCRIPTION_STATE': {
+        return {
+          success: true,
+          data: this.lastTranscriptionState,
+        };
+      }
+
       default:
         return { success: false, error: 'Unknown message type' };
     }
@@ -1001,11 +1188,8 @@ class SafePlayContentScript {
     }
     this.skipNextConfirmation = false;
 
-    // Stop progress animator if running (prevents stale state updates)
-    if (this.progressAnimator) {
-      this.progressAnimator.stop();
-      this.progressAnimator = null;
-    }
+    // Close any active SSE connection + fallback poll + estimator tick
+    this.stopTranscriptionResources();
 
     // Clean up timeline markers
     if (this.timelineMarkers) {
