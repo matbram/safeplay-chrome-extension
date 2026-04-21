@@ -1275,9 +1275,13 @@ class SafePlayContentScript {
     const currentNavId = this.navigationId;
     log(`Navigation detected, navigationId: ${currentNavId}`);
 
-    // Stop current filter if any
+    // Stop current filter if any. destroy() (not stop()) tears down the
+    // Web Audio graph so the next video builds a fresh MediaElementSourceNode
+    // bound to the new <video> element. stop() alone leaves the audio pipe
+    // wired to the previous video, which is why audio wasn't being muted on
+    // second/third videos in the same SPA session.
     if (this.videoController) {
-      this.videoController.stop();
+      this.videoController.destroy();
     }
 
     // Stop caption filter
@@ -1318,11 +1322,49 @@ class SafePlayContentScript {
     if (this.isWatchPage() || this.isShortsPage()) {
       this.currentVideoId = this.getVideoIdFromUrl();
 
-      // Check for auto-enable after a short delay (allow button to inject first)
+      // Check for auto-enable once YouTube's new <video> element is actually
+      // in the DOM. Used to be a blind setTimeout(500) that was too slow on
+      // fast devices and potentially too short on slow ones; waiting for the
+      // real signal means auto-filter fires as soon as the video is ready.
       if (this.currentVideoId) {
-        setTimeout(() => this.checkAutoEnable(), 500);
+        this.waitForVideoReady(() => this.checkAutoEnable());
       }
     }
+  }
+
+  /**
+   * Fire the callback once a <video> element is present in the DOM after an
+   * SPA navigation. Resolves immediately if one is already there; otherwise
+   * sets up a MutationObserver on <body> and tears it down as soon as the
+   * video appears. A 5-second safety timeout fires the callback anyway so we
+   * never hang forever if something unexpected happens to YouTube's DOM.
+   */
+  private waitForVideoReady(callback: () => void): void {
+    if (this.getVideoElement()) {
+      callback();
+      return;
+    }
+
+    let fired = false;
+    const fire = () => {
+      if (fired) return;
+      fired = true;
+      observer.disconnect();
+      window.clearTimeout(timeoutId);
+      callback();
+    };
+
+    const observer = new MutationObserver(() => {
+      if (this.getVideoElement()) {
+        fire();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    const timeoutId = window.setTimeout(() => {
+      log('waitForVideoReady: 5s safety timeout fired without seeing <video>');
+      fire();
+    }, 5000);
   }
 
   // Check if we should auto-enable filter for this video.

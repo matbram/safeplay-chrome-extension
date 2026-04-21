@@ -48,10 +48,28 @@ export class VideoController {
 
   constructor(options: VideoControllerOptions = {}) {
     this.options = options;
-    this.audioFilter = new AudioFilter({
+    this.audioFilter = this.createAudioFilter();
+  }
+
+  private createAudioFilter(): AudioFilter {
+    return new AudioFilter({
       onMuteStart: (interval) => this.onMuteStart(interval),
       onMuteEnd: () => this.onMuteEnd(),
     });
+  }
+
+  // Tear down everything that's bound to the current video (audio graph, DOM
+  // overlay, transcript) and spin up a fresh AudioFilter so the next
+  // initialize() builds a new audio graph for the new video.
+  destroy(): void {
+    this.audioFilter.destroy();
+    this.audioFilter = this.createAudioFilter();
+    this.hideStatusOverlay();
+    this.video = null;
+    this.transcript = null;
+    this.muteIntervals = [];
+    this.youtubeId = null;
+    this.updateStatus('idle');
   }
 
   // Initialize controller for a video

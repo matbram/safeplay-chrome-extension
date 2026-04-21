@@ -137,8 +137,16 @@ export class CaptionFilter {
 
     let container: Element | null = null;
     for (const selector of captionContainerSelectors) {
-      container = document.querySelector(selector);
-      if (container) break;
+      const candidate = document.querySelector(selector);
+      // Guard against binding the MutationObserver to a detached "ghost"
+      // container left behind by YouTube's SPA navigation. Same class of
+      // bug as the timeline-markers stale-bar issue — querySelector can
+      // return the previous video's caption container for a brief window
+      // after nav.
+      if (candidate && candidate.isConnected) {
+        container = candidate;
+        break;
+      }
     }
 
     if (!container) {
