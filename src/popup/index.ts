@@ -1,7 +1,6 @@
 import {
   UserPreferences,
   DEFAULT_PREFERENCES,
-  FilterMode,
   AuthState,
   TranscriptionStateBroadcast,
 } from '../types';
@@ -53,13 +52,8 @@ class PopupController {
   private ctxHero!:           HTMLElement;
   private strictnessBtns!:    NodeListOf<HTMLButtonElement>;
   private strictnessExample!: HTMLElement;
-  private modeMute!:          HTMLButtonElement;
-  private modeBleep!:         HTMLButtonElement;
-  private modeMuteOption!:    HTMLElement;
-  private modeBleepOption!:   HTMLElement;
-  private mutePrevBtn!:       HTMLButtonElement;
-  private bleepPrevBtn!:      HTMLButtonElement;
-  private previewNotice!:     HTMLElement;
+  private modeMuteOption!:    HTMLButtonElement;
+  private modeBleepOption!:   HTMLButtonElement;
   private usageBar!:          HTMLElement;
   private usageNumber!:       HTMLElement;
   private usageOf!:           HTMLElement;
@@ -99,13 +93,8 @@ class PopupController {
     this.ctxHero           = document.getElementById('ctxHero')           as HTMLElement;
     this.strictnessBtns    = document.querySelectorAll<HTMLButtonElement>('.strictness-btn');
     this.strictnessExample = document.getElementById('strictnessExample') as HTMLElement;
-    this.modeMute          = document.getElementById('modeMute')          as HTMLButtonElement;
-    this.modeBleep         = document.getElementById('modeBleep')         as HTMLButtonElement;
-    this.modeMuteOption    = document.getElementById('modeMuteOption')    as HTMLElement;
-    this.modeBleepOption   = document.getElementById('modeBleepOption')   as HTMLElement;
-    this.mutePrevBtn       = document.getElementById('mutePrevBtn')       as HTMLButtonElement;
-    this.bleepPrevBtn      = document.getElementById('bleepPrevBtn')      as HTMLButtonElement;
-    this.previewNotice     = document.getElementById('previewNotice')     as HTMLElement;
+    this.modeMuteOption    = document.getElementById('modeMuteOption')    as HTMLButtonElement;
+    this.modeBleepOption   = document.getElementById('modeBleepOption')   as HTMLButtonElement;
     this.usageBar          = document.getElementById('usageBar')          as HTMLElement;
     this.usageNumber       = document.getElementById('usageNumber')       as HTMLElement;
     this.usageOf           = document.getElementById('usageOf')           as HTMLElement;
@@ -143,12 +132,8 @@ class PopupController {
     });
 
     // Mode
-    this.modeMute.addEventListener('click',  () => this.savePrefs({ filterMode: 'mute'  }));
-    this.modeBleep.addEventListener('click', () => this.savePrefs({ filterMode: 'bleep' }));
-
-    // Preview buttons
-    this.mutePrevBtn.addEventListener('click',  (e) => { e.stopPropagation(); this.playPreview('mute');  });
-    this.bleepPrevBtn.addEventListener('click', (e) => { e.stopPropagation(); this.playPreview('bleep'); });
+    this.modeMuteOption.addEventListener('click',  () => this.savePrefs({ filterMode: 'mute'  }));
+    this.modeBleepOption.addEventListener('click', () => this.savePrefs({ filterMode: 'bleep' }));
 
     // Add credits
     this.addCreditsBtn.addEventListener('click', () => {
@@ -164,12 +149,6 @@ class PopupController {
     this.settingsBtn.addEventListener('click', () => {
       chrome.runtime.openOptionsPage?.();
     });
-  }
-
-  private playPreview(mode: FilterMode): void {
-    this.previewNotice.textContent = `playing ${mode} preview…`;
-    setTimeout(() => { this.previewNotice.textContent = ''; }, 900);
-    // In a real extension, play a short audio clip here.
   }
 
   private async loadPreferences(): Promise<void> {
@@ -197,10 +176,11 @@ class PopupController {
   }
 
   private renderPrefs(): void {
-    // Power button
+    // Power button + global paused state
     const on = this.prefs.enabled;
     this.powerLabel.textContent = on ? 'On' : 'Off';
     this.powerDot.classList.toggle('off', !on);
+    document.body.classList.toggle('is-paused', !on);
 
     // Strictness
     const level = severityToStrictness(this.prefs.severityLevels);
@@ -212,6 +192,9 @@ class PopupController {
     // Mode
     this.modeMuteOption.classList.toggle('active',  this.prefs.filterMode === 'mute');
     this.modeBleepOption.classList.toggle('active', this.prefs.filterMode === 'bleep');
+
+    // Re-render the hero since its copy depends on prefs.enabled
+    this.renderHero();
   }
 
   // ── Context detection ──────────────────────────────────────
@@ -273,6 +256,7 @@ class PopupController {
       case 'filtering':      return 'done';
       case 'active':         return 'done';
       case 'paused':         return 'disabled';
+      case 'disabled':       return 'disabled';
       case 'error':          return 'error';
       case 'age-restricted': return 'age-restricted';
       default:               return 'idle';
@@ -280,6 +264,18 @@ class PopupController {
   }
 
   private renderHero(): void {
+    // Master toggle overrides every other state — when paused, nothing filters.
+    if (!this.prefs.enabled) {
+      this.ctxHero.innerHTML = `
+        <div class="ctx-badge">
+          <span class="ctx-dot" style="background:var(--text-muted);box-shadow:0 0 0 3px rgba(138,134,128,0.13)"></span>
+          <span class="ctx-badge-label">Paused</span>
+        </div>
+        <div class="ctx-title">Safeplay is paused.</div>
+        <div class="ctx-sub">Nothing is being filtered. Tap <b>On</b> at the top to resume.</div>`;
+      return;
+    }
+
     if (this.context === 'off-youtube') {
       this.ctxHero.innerHTML = `
         <div class="ctx-title">Safeplay only runs on YouTube.</div>

@@ -203,6 +203,7 @@ export class VideoController {
 
   // Update preferences
   updatePreferences(preferences: UserPreferences): void {
+    const wasDisabled = this.preferences?.enabled === false;
     this.preferences = preferences;
 
     if (!preferences.enabled) {
@@ -215,6 +216,15 @@ export class VideoController {
       this.muteIntervals = parseTranscript(this.transcript, preferences);
       this.audioFilter.updateIntervals(this.muteIntervals);
       this.audioFilter.updateMode(preferences.filterMode);
+
+      // Transitioning from disabled back to enabled with intervals ready —
+      // resume filtering so the user doesn't have to re-click the button.
+      if (wasDisabled && this.muteIntervals.length > 0 && this.video) {
+        this.audioFilter.initialize(this.video, this.muteIntervals, preferences.filterMode);
+        this.audioFilter.start();
+        this.updateStatus('active');
+        this.showStatusOverlay();
+      }
     }
   }
 

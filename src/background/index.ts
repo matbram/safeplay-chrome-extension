@@ -595,7 +595,7 @@ async function handleSetPreferences(
 ): Promise<MessageResponse<UserPreferences>> {
   const updated = await setPreferences(payload);
 
-  // Broadcast to all YouTube tabs
+  // Broadcast to all YouTube tabs (content scripts)
   const tabs = await chrome.tabs.query({ url: '*://www.youtube.com/*' });
   for (const tab of tabs) {
     if (tab.id) {
@@ -605,6 +605,13 @@ async function handleSetPreferences(
       }).catch(() => {});
     }
   }
+
+  // Also broadcast to extension contexts (popup, options page) so an
+  // update from one surface lands on every other surface immediately.
+  chrome.runtime.sendMessage({
+    type: 'PREFERENCES_UPDATED',
+    payload: updated,
+  }).catch(() => {});
 
   return { success: true, data: updated };
 }

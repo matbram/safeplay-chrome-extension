@@ -127,6 +127,19 @@ button {
 }
 .power-dot.off { background: var(--text-muted); }
 
+/* ── Paused (master toggle off) ──────────────────────────── */
+body.is-paused .section,
+body.is-paused .usage-bar {
+  opacity: 0.55;
+  pointer-events: none;
+}
+body.is-paused .popup-header,
+body.is-paused .ctx-hero,
+body.is-paused .popup-footer {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 /* ── Context Hero ────────────────────────────────────────── */
 .ctx-hero {
   padding: 4px 16px 16px;
@@ -203,26 +216,6 @@ button {
   margin-bottom: 8px;
 }
 
-.section-label-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  margin-bottom: 8px;
-}
-.section-label-row .section-label {
-  font-size: inherit;
-  color: inherit;
-  margin-bottom: 0;
-}
-
-.preview-notice {
-  font-size: 10.5px;
-  color: var(--accent);
-  font-weight: 600;
-}
 
 /* ── Strictness ──────────────────────────────────────────── */
 .strictness-stack {
@@ -279,12 +272,6 @@ button {
 .mode-option {
   flex: 1;
   display: flex;
-  align-items: stretch;
-}
-
-.mode-btn {
-  flex: 1;
-  display: flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
@@ -292,33 +279,16 @@ button {
   background: transparent;
   color: var(--text-dim);
   border: none;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+  border-radius: calc(var(--radius-sm) - 1px);
+  font-family: inherit;
   font-size: 12.5px;
   font-weight: 600;
+  cursor: pointer;
   transition: var(--transition);
 }
-.mode-btn:hover { color: var(--text); }
-.mode-option.active .mode-btn {
+.mode-option:hover { color: var(--text); }
+.mode-option.active {
   background: var(--accent);
-  color: var(--accent-cc);
-}
-
-.mode-preview-btn {
-  width: 28px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  color: var(--text-muted);
-  border: none;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  transition: var(--transition);
-  flex-shrink: 0;
-}
-.mode-preview-btn:hover { color: var(--text); }
-.mode-option.active .mode-preview-btn {
-  background: var(--accent-hover);
   color: var(--accent-cc);
 }
 
