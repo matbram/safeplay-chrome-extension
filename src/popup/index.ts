@@ -1,627 +1,517 @@
-// SafePlay Popup Script - Clean Redesign
 import {
   UserPreferences,
   DEFAULT_PREFERENCES,
   FilterMode,
-  SeverityLevel,
-  CreditInfo,
   AuthState,
   TranscriptionStateBroadcast,
 } from '../types';
-import { PROFANITY_LIST } from '../filter/profanity-list';
 import './popup.css';
 
-const THEME_STORAGE_KEY = 'safeplay_theme';
-const CREDIT_POLL_INTERVAL = 5000; // Poll credits every 5 seconds
-const VIDEO_POLL_INTERVAL = 2000; // Poll video status every 2 seconds
+// Strictness level → severityLevels mapping
+type StrictnessLevel = 'kids' | 'family' | 'adult';
+
+const STRICTNESS_SEVERITY: Record<StrictnessLevel, UserPreferences['severityLevels']> = {
+  kids:   { mild: true,  moderate: true,  severe: true,  religious: true  },
+  family: { mild: false, moderate: true,  severe: true,  religious: false },
+  adult:  { mild: false, moderate: false, severe: true,  religious: false },
+};
+
+const STRICTNESS_EXAMPLES: Record<StrictnessLevel, string> = {
+  kids:   'hides crap, hell, & stronger',
+  family: 'hides sh‑t and stronger',
+  adult:  'hides only f‑word & c‑word',
+};
+
+function severityToStrictness(s: UserPreferences['severityLevels']): StrictnessLevel {
+  if (s.mild && s.moderate && s.severe) return 'kids';
+  if (!s.mild && s.moderate && s.severe) return 'family';
+  if (!s.mild && !s.moderate && s.severe) return 'adult';
+  return 'family';
+}
+
+// Context types
+type PopupContext = 'off-youtube' | 'no-video' | 'watching';
+type YTState = 'idle' | 'connecting' | 'processing' | 'almost-done' | 'done' | 'error' | 'age-restricted' | 'disabled';
+
+const CREDIT_POLL_MS = 5000;
+const VIDEO_POLL_MS  = 2000;
 
 class PopupController {
-  private preferences: UserPreferences = DEFAULT_PREFERENCES;
-  private creditInfo: CreditInfo | null = null;
+  private prefs: UserPreferences = DEFAULT_PREFERENCES;
   private authState: AuthState | null = null;
   private transcriptionState: TranscriptionStateBroadcast | null = null;
-
-  // Polling intervals
+  private context: PopupContext = 'off-youtube';
+  private ytState: YTState = 'idle';
+  private wordCount = 0;
   private creditPollTimer: number | null = null;
-  private videoPollTimer: number | null = null;
+  private videoPollTimer:  number | null = null;
 
-  // Word counts by severity
-  private wordCounts: Record<SeverityLevel, number> = {
-    mild: 0,
-    moderate: 0,
-    severe: 0,
-    religious: 0,
-  };
-
-  // DOM Elements
-  private themeToggle!: HTMLButtonElement;
-  private enableToggle!: HTMLInputElement;
-  private filterModeRadios!: NodeListOf<HTMLInputElement>;
-  private severityMild!: HTMLInputElement;
-  private severityModerate!: HTMLInputElement;
-  private severitySevere!: HTMLInputElement;
-  private severityReligious!: HTMLInputElement;
-  private statusPill!: HTMLElement;
-  private statusLabel!: HTMLElement;
-  private videoStatusSection!: HTMLElement;
-  private videoStatusValue!: HTMLElement;
-  private filteredCount!: HTMLElement;
-  private progressBar!: HTMLElement;
-  private progressFill!: HTMLElement;
-  private totalWordCount!: HTMLElement;
-  private mildCount!: HTMLElement;
-  private moderateCount!: HTMLElement;
-  private severeCount!: HTMLElement;
-  private religiousCount!: HTMLElement;
-
-  // Account elements
-  private accountLoggedOut!: HTMLElement;
-  private accountLoggedIn!: HTMLElement;
-  private signInBtn!: HTMLButtonElement;
-  private signOutBtn!: HTMLButtonElement;
-  private accountAvatar!: HTMLElement;
-  private accountName!: HTMLElement;
-  private accountPlanBadge!: HTMLElement;
-  private accountUpgradeLink!: HTMLAnchorElement;
-  private creditValue!: HTMLElement;
+  // Elements
+  private powerBtn!:          HTMLButtonElement;
+  private powerDot!:          HTMLElement;
+  private powerLabel!:        HTMLElement;
+  private ctxHero!:           HTMLElement;
+  private strictnessBtns!:    NodeListOf<HTMLButtonElement>;
+  private strictnessExample!: HTMLElement;
+  private modeMute!:          HTMLButtonElement;
+  private modeBleep!:         HTMLButtonElement;
+  private mutePrevBtn!:       HTMLButtonElement;
+  private bleepPrevBtn!:      HTMLButtonElement;
+  private previewNotice!:     HTMLElement;
+  private usageBar!:          HTMLElement;
+  private usageNumber!:       HTMLElement;
+  private usageOf!:           HTMLElement;
+  private usageMeta!:         HTMLElement;
+  private usageFill!:         HTMLElement;
+  private usageHint!:         HTMLElement;
+  private addCreditsBtn!:     HTMLButtonElement;
+  private accountSignedIn!:   HTMLElement;
+  private accountSignedOut!:  HTMLElement;
+  private accountAvatar!:     HTMLElement;
+  private accountName!:       HTMLElement;
+  private accountEmail!:      HTMLElement;
+  private signInBtn!:         HTMLButtonElement;
+  private settingsBtn!:       HTMLButtonElement;
 
   async initialize(): Promise<void> {
-    // Calculate word counts
-    this.calculateWordCounts();
-
-    // Cache DOM elements
     this.cacheElements();
-
-    // Load and apply theme
     this.loadTheme();
+    this.setupListeners();
 
-    // Display word counts
-    this.displayWordCounts();
+    // Load prefs + context in parallel
+    await Promise.all([
+      this.loadPreferences(),
+      this.detectContext(),
+    ]);
 
-    // Load preferences
-    await this.loadPreferences();
-
-    // Set up event listeners
-    this.setupEventListeners();
-
-    // Check current video status
-    await this.checkVideoStatus();
-
-    // Load auth state and user profile
     await this.loadAuthState();
-
-    // Listen for status updates
     this.setupMessageListener();
-
-    // Start real-time polling
     this.startPolling();
-
-    // Cleanup on popup close
     window.addEventListener('unload', () => this.stopPolling());
   }
 
-  private startPolling(): void {
-    // Poll credits every 5 seconds
-    this.creditPollTimer = window.setInterval(() => {
-      if (this.authState?.isAuthenticated) {
-        this.loadCredits();
-      }
-    }, CREDIT_POLL_INTERVAL);
-
-    // Poll video status every 2 seconds
-    this.videoPollTimer = window.setInterval(() => {
-      this.checkVideoStatus();
-    }, VIDEO_POLL_INTERVAL);
-  }
-
-  private stopPolling(): void {
-    if (this.creditPollTimer !== null) {
-      clearInterval(this.creditPollTimer);
-      this.creditPollTimer = null;
-    }
-    if (this.videoPollTimer !== null) {
-      clearInterval(this.videoPollTimer);
-      this.videoPollTimer = null;
-    }
-  }
-
   private cacheElements(): void {
-    this.themeToggle = document.getElementById('themeToggle') as HTMLButtonElement;
-    this.enableToggle = document.getElementById('enableToggle') as HTMLInputElement;
-    this.filterModeRadios = document.querySelectorAll('input[name="filterMode"]');
-    this.severityMild = document.getElementById('severityMild') as HTMLInputElement;
-    this.severityModerate = document.getElementById('severityModerate') as HTMLInputElement;
-    this.severitySevere = document.getElementById('severitySevere') as HTMLInputElement;
-    this.severityReligious = document.getElementById('severityReligious') as HTMLInputElement;
-    this.statusPill = document.getElementById('statusPill') as HTMLElement;
-    this.statusLabel = document.getElementById('statusLabel') as HTMLElement;
-    this.videoStatusSection = document.getElementById('videoStatus') as HTMLElement;
-    this.videoStatusValue = document.getElementById('videoStatusValue') as HTMLElement;
-    this.filteredCount = document.getElementById('filteredCount') as HTMLElement;
-    this.progressBar = document.getElementById('progressBar') as HTMLElement;
-    this.progressFill = document.getElementById('progressFill') as HTMLElement;
-    this.totalWordCount = document.getElementById('totalWordCount') as HTMLElement;
-    this.mildCount = document.getElementById('mildCount') as HTMLElement;
-    this.moderateCount = document.getElementById('moderateCount') as HTMLElement;
-    this.severeCount = document.getElementById('severeCount') as HTMLElement;
-    this.religiousCount = document.getElementById('religiousCount') as HTMLElement;
-
-    // Account elements
-    this.accountLoggedOut = document.getElementById('accountLoggedOut') as HTMLElement;
-    this.accountLoggedIn = document.getElementById('accountLoggedIn') as HTMLElement;
-    this.signInBtn = document.getElementById('signInBtn') as HTMLButtonElement;
-    this.signOutBtn = document.getElementById('signOutBtn') as HTMLButtonElement;
-    this.accountAvatar = document.getElementById('accountAvatar') as HTMLElement;
-    this.accountName = document.getElementById('accountName') as HTMLElement;
-    this.accountPlanBadge = document.getElementById('accountPlanBadge') as HTMLElement;
-    this.accountUpgradeLink = document.getElementById('accountUpgradeLink') as HTMLAnchorElement;
-    this.creditValue = document.getElementById('creditValue') as HTMLElement;
+    this.powerBtn          = document.getElementById('powerBtn')         as HTMLButtonElement;
+    this.powerDot          = document.getElementById('powerDot')         as HTMLElement;
+    this.powerLabel        = document.getElementById('powerLabel')        as HTMLElement;
+    this.ctxHero           = document.getElementById('ctxHero')           as HTMLElement;
+    this.strictnessBtns    = document.querySelectorAll<HTMLButtonElement>('.strictness-btn');
+    this.strictnessExample = document.getElementById('strictnessExample') as HTMLElement;
+    this.modeMute          = document.getElementById('modeMute')          as HTMLButtonElement;
+    this.modeBleep         = document.getElementById('modeBleep')         as HTMLButtonElement;
+    this.mutePrevBtn       = document.getElementById('mutePrevBtn')       as HTMLButtonElement;
+    this.bleepPrevBtn      = document.getElementById('bleepPrevBtn')      as HTMLButtonElement;
+    this.previewNotice     = document.getElementById('previewNotice')     as HTMLElement;
+    this.usageBar          = document.getElementById('usageBar')          as HTMLElement;
+    this.usageNumber       = document.getElementById('usageNumber')       as HTMLElement;
+    this.usageOf           = document.getElementById('usageOf')           as HTMLElement;
+    this.usageMeta         = document.getElementById('usageMeta')         as HTMLElement;
+    this.usageFill         = document.getElementById('usageFill')         as HTMLElement;
+    this.usageHint         = document.getElementById('usageHint')         as HTMLElement;
+    this.addCreditsBtn     = document.getElementById('addCreditsBtn')     as HTMLButtonElement;
+    this.accountSignedIn   = document.getElementById('accountSignedIn')   as HTMLElement;
+    this.accountSignedOut  = document.getElementById('accountSignedOut')  as HTMLElement;
+    this.accountAvatar     = document.getElementById('accountAvatar')     as HTMLElement;
+    this.accountName       = document.getElementById('accountName')       as HTMLElement;
+    this.accountEmail      = document.getElementById('accountEmail')      as HTMLElement;
+    this.signInBtn         = document.getElementById('signInBtn')         as HTMLButtonElement;
+    this.settingsBtn       = document.getElementById('settingsBtn')       as HTMLButtonElement;
   }
 
   private loadTheme(): void {
-    const savedTheme = localStorage.getItem(THEME_STORAGE_KEY);
-    if (savedTheme === 'light') {
-      document.body.classList.add('light-theme');
-    }
+    const saved = localStorage.getItem('safeplay_theme');
+    if (saved === 'light') document.body.classList.add('light');
   }
 
-  private toggleTheme(): void {
-    const isLight = document.body.classList.toggle('light-theme');
-    localStorage.setItem(THEME_STORAGE_KEY, isLight ? 'light' : 'dark');
-  }
-
-  private async loadCredits(): Promise<void> {
-    if (!this.authState?.isAuthenticated) {
-      this.creditValue.textContent = '0';
-      return;
-    }
-
-    try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_CREDITS' });
-
-      if (response.success && response.data) {
-        this.creditInfo = response.data;
-        this.displayCredits();
-      }
-    } catch (error) {
-      console.error('Failed to load credits:', error);
-    }
-  }
-
-  private displayCredits(): void {
-    if (!this.creditInfo) return;
-
-    const { available, used_this_period, plan_allocation } = this.creditInfo;
-
-    // Update credit value
-    this.creditValue.textContent = available.toString();
-    this.creditValue.classList.remove('low', 'empty');
-
-    // Calculate remaining base credits
-    const baseRemaining = Math.max(0, plan_allocation - used_this_period);
-    const bonusRemaining = Math.max(0, available - baseRemaining);
-
-    if (available === 0) {
-      this.creditValue.classList.add('empty');
-    } else if (baseRemaining === 0 && bonusRemaining <= 5) {
-      this.creditValue.classList.add('low');
-    }
-  }
-
-  private calculateWordCounts(): void {
-    for (const item of PROFANITY_LIST) {
-      this.wordCounts[item.severity]++;
-    }
-  }
-
-  private displayWordCounts(): void {
-    this.mildCount.textContent = this.wordCounts.mild.toString();
-    this.moderateCount.textContent = this.wordCounts.moderate.toString();
-    this.severeCount.textContent = this.wordCounts.severe.toString();
-    this.religiousCount.textContent = this.wordCounts.religious.toString();
-
-    this.updateTotalWordCount();
-  }
-
-  private updateTotalWordCount(): void {
-    let total = 0;
-    if (this.severityMild?.checked) total += this.wordCounts.mild;
-    if (this.severityModerate?.checked) total += this.wordCounts.moderate;
-    if (this.severitySevere?.checked) total += this.wordCounts.severe;
-    if (this.severityReligious?.checked) total += this.wordCounts.religious;
-
-    total += this.preferences.customBlacklist.length;
-
-    this.totalWordCount.textContent = `${total} words`;
-  }
-
-  private async loadPreferences(): Promise<void> {
-    try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_PREFERENCES' });
-      if (response.success && response.data) {
-        this.preferences = response.data;
-        this.updateUI();
-      }
-    } catch (error) {
-      console.error('Failed to load preferences:', error);
-    }
-  }
-
-  private updateUI(): void {
-    // Update toggle
-    this.enableToggle.checked = this.preferences.enabled;
-    document.body.classList.toggle('disabled', !this.preferences.enabled);
-
-    // Update status pill
-    this.updateStatusPill();
-
-    // Update filter mode
-    this.filterModeRadios.forEach((radio) => {
-      radio.checked = radio.value === this.preferences.filterMode;
+  private setupListeners(): void {
+    // Power toggle
+    this.powerBtn.addEventListener('click', () => {
+      const next = !this.prefs.enabled;
+      this.savePrefs({ enabled: next });
     });
 
-    // Update severity checkboxes
-    this.severityMild.checked = this.preferences.severityLevels.mild;
-    this.severityModerate.checked = this.preferences.severityLevels.moderate;
-    this.severitySevere.checked = this.preferences.severityLevels.severe;
-    this.severityReligious.checked = this.preferences.severityLevels.religious;
-
-    // Update total word count
-    this.updateTotalWordCount();
-  }
-
-  private updateStatusPill(): void {
-    this.statusPill.classList.remove('inactive', 'error', 'warning');
-
-    if (!this.preferences.enabled) {
-      this.statusPill.classList.add('inactive');
-      this.statusLabel.textContent = 'Disabled';
-    } else {
-      this.statusLabel.textContent = 'Active';
-    }
-  }
-
-  private setupEventListeners(): void {
-    // Theme toggle
-    this.themeToggle.addEventListener('click', () => {
-      this.toggleTheme();
-    });
-
-    // Enable toggle
-    this.enableToggle.addEventListener('change', () => {
-      this.savePreferences({ enabled: this.enableToggle.checked });
-    });
-
-    // Filter mode
-    this.filterModeRadios.forEach((radio) => {
-      radio.addEventListener('change', () => {
-        if (radio.checked) {
-          this.savePreferences({ filterMode: radio.value as FilterMode });
-        }
+    // Strictness
+    this.strictnessBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const level = btn.dataset.level as StrictnessLevel;
+        this.savePrefs({ severityLevels: STRICTNESS_SEVERITY[level] });
       });
     });
 
-    // Severity levels
-    const severityHandler = () => {
-      this.saveSeverityLevels();
-      this.updateTotalWordCount();
-    };
+    // Mode
+    this.modeMute.addEventListener('click',  () => this.savePrefs({ filterMode: 'mute'  }));
+    this.modeBleep.addEventListener('click', () => this.savePrefs({ filterMode: 'bleep' }));
 
-    this.severityMild.addEventListener('change', severityHandler);
-    this.severityModerate.addEventListener('change', severityHandler);
-    this.severitySevere.addEventListener('change', severityHandler);
-    this.severityReligious.addEventListener('change', severityHandler);
+    // Preview buttons
+    this.mutePrevBtn.addEventListener('click',  (e) => { e.stopPropagation(); this.playPreview('mute');  });
+    this.bleepPrevBtn.addEventListener('click', (e) => { e.stopPropagation(); this.playPreview('bleep'); });
 
-    // Account listeners
-    this.signInBtn?.addEventListener('click', () => this.handleSignIn());
-    this.signOutBtn?.addEventListener('click', () => this.handleSignOut());
+    // Add credits
+    this.addCreditsBtn.addEventListener('click', () => {
+      chrome.tabs.create({ url: 'https://trysafeplay.com/billing' });
+    });
 
-    // Settings link
-    const settingsLink = document.getElementById('settingsLink');
-    settingsLink?.addEventListener('click', (e) => {
-      e.preventDefault();
+    // Sign in
+    this.signInBtn?.addEventListener('click', () => {
+      chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+    });
+
+    // Settings
+    this.settingsBtn.addEventListener('click', () => {
       chrome.runtime.openOptionsPage?.();
     });
   }
 
-  private saveSeverityLevels(): void {
-    this.savePreferences({
-      severityLevels: {
-        mild: this.severityMild.checked,
-        moderate: this.severityModerate.checked,
-        severe: this.severitySevere.checked,
-        religious: this.severityReligious.checked,
-      },
-    });
+  private playPreview(mode: FilterMode): void {
+    this.previewNotice.textContent = `playing ${mode} preview…`;
+    setTimeout(() => { this.previewNotice.textContent = ''; }, 900);
+    // In a real extension, play a short audio clip here.
   }
 
-  private async savePreferences(updates: Partial<UserPreferences>): Promise<void> {
+  private async loadPreferences(): Promise<void> {
     try {
-      const response = await chrome.runtime.sendMessage({
-        type: 'SET_PREFERENCES',
-        payload: updates,
-      });
-
-      if (response.success && response.data) {
-        this.preferences = response.data;
-        this.updateUI();
+      const res = await chrome.runtime.sendMessage({ type: 'GET_PREFERENCES' });
+      if (res?.success && res.data) {
+        this.prefs = res.data;
       }
-    } catch (error) {
-      console.error('Failed to save preferences:', error);
-    }
+    } catch { /* popup opened before BG ready */ }
+    this.renderPrefs();
   }
 
-  private async checkVideoStatus(): Promise<void> {
+  private async savePrefs(updates: Partial<UserPreferences>): Promise<void> {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'SET_PREFERENCES', payload: updates });
+      if (res?.success && res.data) {
+        this.prefs = res.data;
+      } else {
+        Object.assign(this.prefs, updates);
+      }
+    } catch {
+      Object.assign(this.prefs, updates);
+    }
+    this.renderPrefs();
+  }
+
+  private renderPrefs(): void {
+    // Power button
+    const on = this.prefs.enabled;
+    this.powerLabel.textContent = on ? 'On' : 'Off';
+    this.powerDot.classList.toggle('off', !on);
+
+    // Strictness
+    const level = severityToStrictness(this.prefs.severityLevels);
+    this.strictnessBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.level === level);
+    });
+    this.strictnessExample.textContent = STRICTNESS_EXAMPLES[level];
+
+    // Mode
+    this.modeMute.classList.toggle('active',  this.prefs.filterMode === 'mute');
+    this.modeBleep.classList.toggle('active', this.prefs.filterMode === 'bleep');
+  }
+
+  // ── Context detection ──────────────────────────────────────
+
+  private async detectContext(): Promise<void> {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const url = tab?.url ?? '';
 
-      if (!tab?.id || !tab.url?.includes('youtube.com/watch')) {
-        this.videoStatusSection.style.display = 'none';
+      if (!url.includes('youtube.com')) {
+        this.context = 'off-youtube';
+        this.renderHero();
         return;
       }
 
-      // Pull both the playback-filter state and any active transcription
-      // state from the content script. The transcription state is pushed
-      // proactively, but we also hydrate here in case the popup opens
-      // mid-transcription.
-      const [videoResp, transcriptionResp] = await Promise.all([
+      if (!url.includes('/watch')) {
+        this.context = 'no-video';
+        this.renderHero();
+        return;
+      }
+
+      this.context = 'watching';
+
+      // Get video state from content script
+      if (tab?.id) {
+        const [videoResp, transcResp] = await Promise.all([
+          chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_STATE' }).catch(() => null),
+          chrome.tabs.sendMessage(tab.id, { type: 'GET_TRANSCRIPTION_STATE' }).catch(() => null),
+        ]);
+
+        if (transcResp?.success && transcResp.data) {
+          this.transcriptionState = transcResp.data as TranscriptionStateBroadcast;
+          this.ytState = this.phaseToYTState(this.transcriptionState.phase);
+        } else if (videoResp?.success && videoResp.data) {
+          this.ytState = this.videoStatusToYTState(videoResp.data.status);
+          this.wordCount = videoResp.data.intervalCount ?? 0;
+        }
+      }
+    } catch {
+      this.context = 'off-youtube';
+    }
+    this.renderHero();
+  }
+
+  private phaseToYTState(phase: TranscriptionStateBroadcast['phase']): YTState {
+    switch (phase) {
+      case 'connecting':   return 'connecting';
+      case 'preparing':    return 'connecting';
+      case 'transcribing': return 'processing';
+      case 'almost-done':  return 'almost-done';
+      case 'done':         return 'done';
+      case 'error':        return 'error';
+      default:             return 'idle';
+    }
+  }
+
+  private videoStatusToYTState(status: string): YTState {
+    switch (status) {
+      case 'filtering':      return 'done';
+      case 'active':         return 'done';
+      case 'paused':         return 'disabled';
+      case 'error':          return 'error';
+      case 'age-restricted': return 'age-restricted';
+      default:               return 'idle';
+    }
+  }
+
+  private renderHero(): void {
+    if (this.context === 'off-youtube') {
+      this.ctxHero.innerHTML = `
+        <div class="ctx-title">Safeplay only runs on YouTube.</div>
+        <div class="ctx-sub">Your settings below are saved and will apply the next time you open a video.</div>
+        <a href="https://youtube.com" class="ctx-cta" target="_blank">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="#e5232b"><path d="M19.615 3.184c-3.604-.246-11.631-.245-15.23 0-3.897.266-4.356 2.62-4.385 8.816.029 6.185.484 8.549 4.385 8.816 3.6.245 11.626.246 15.23 0 3.897-.266 4.356-2.62 4.385-8.816-.029-6.185-.484-8.549-4.385-8.816zm-10.615 12.816v-8l8 3.993-8 4.007z"/></svg>
+          Open YouTube
+        </a>`;
+      return;
+    }
+
+    if (this.context === 'no-video') {
+      this.ctxHero.innerHTML = `
+        <div class="ctx-title">Ready when you are.</div>
+        <div class="ctx-sub">Open any video and click the <b>Filter with Safeplay</b> button next to Subscribe.</div>`;
+      return;
+    }
+
+    // watching — state-specific
+    const stateMap: Record<YTState, { dot: string; pulse?: boolean; label: string; title: string; sub: string }> = {
+      idle: {
+        dot: 'var(--text-muted)', label: 'This video',
+        title: "This video isn't filtered yet.",
+        sub: 'Click <b>Filter with Safeplay</b> next to Subscribe to start.',
+      },
+      connecting: {
+        dot: '#7c3aed', pulse: true, label: 'This video',
+        title: 'Getting ready…',
+        sub: 'Fetching captions for this video.',
+      },
+      processing: {
+        dot: '#7c3aed', pulse: true, label: 'This video',
+        title: 'Finding bad words…',
+        sub: this.transcriptionState?.statusText || 'You can keep watching.',
+      },
+      'almost-done': {
+        dot: '#7c3aed', pulse: true, label: 'This video',
+        title: 'Almost there…',
+        sub: 'Wrapping up.',
+      },
+      done: {
+        dot: 'var(--success)', label: 'This video',
+        title: "You're protected.",
+        sub: this.wordCount > 0
+          ? `<b style="color:var(--accent);font-weight:700">${this.wordCount}</b> bad words being hidden in this video.`
+          : 'This video is being filtered.',
+      },
+      error: {
+        dot: 'var(--danger)', label: 'This video',
+        title: "Couldn't filter this one.",
+        sub: "YouTube didn't return captions. Hit Retry on the video.",
+      },
+      'age-restricted': {
+        dot: '#d97706', label: 'This video',
+        title: 'Age-restricted video.',
+        sub: 'Sign into YouTube so Safeplay can read the captions.',
+      },
+      disabled: {
+        dot: 'var(--text-muted)', label: 'This video',
+        title: 'Safeplay is off here.',
+        sub: 'Paused for this channel. Tap the toggle below to turn it back on.',
+      },
+    };
+
+    const s = stateMap[this.ytState] ?? stateMap.idle;
+    this.ctxHero.innerHTML = `
+      <div class="ctx-badge">
+        <span class="ctx-dot${s.pulse ? ' pulsing' : ''}" style="background:${s.dot};box-shadow:0 0 0 3px ${s.dot}22"></span>
+        <span class="ctx-badge-label">${s.label}</span>
+      </div>
+      <div class="ctx-title">${s.title}</div>
+      <div class="ctx-sub">${s.sub}</div>`;
+  }
+
+  // ── Credits / Usage ────────────────────────────────────────
+
+  private renderUsage(available: number, total: number, plan: string, resetDate: string): void {
+    this.usageBar.style.display = '';
+    const pct  = Math.max(0, Math.min(1, available / total));
+    const low  = pct < 0.15;
+    const warn = pct < 0.30;
+
+    this.usageNumber.textContent = available.toLocaleString();
+    this.usageOf.textContent     = `of ${total.toLocaleString()} credits`;
+    this.usageMeta.textContent   = `${plan} · resets ${resetDate}`;
+
+    this.usageFill.style.width = `${pct * 100}%`;
+    this.usageFill.classList.toggle('low',  low);
+    this.usageFill.classList.toggle('warn', warn && !low);
+
+    if (low) {
+      this.usageHint.textContent = 'Running low.';
+      this.usageHint.classList.add('low');
+      this.addCreditsBtn.classList.add('urgent');
+    } else if (warn) {
+      this.usageHint.textContent = 'Getting low.';
+      this.usageHint.classList.remove('low');
+      this.addCreditsBtn.classList.add('urgent');
+    } else {
+      this.usageHint.textContent = '1 credit ≈ 1 minute of video.';
+      this.usageHint.classList.remove('low');
+      this.addCreditsBtn.classList.remove('urgent');
+    }
+  }
+
+  // ── Auth ───────────────────────────────────────────────────
+
+  private async loadAuthState(): Promise<void> {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'GET_USER_PROFILE' });
+      if (res?.success && res.data) {
+        this.authState = res.data as AuthState;
+      } else {
+        this.authState = { isAuthenticated: false, user: null, subscription: null, credits: null, token: null };
+      }
+    } catch {
+      this.authState = { isAuthenticated: false, user: null, subscription: null, credits: null, token: null };
+    }
+    this.renderAccount();
+    if (this.authState?.isAuthenticated) await this.loadCredits();
+  }
+
+  private renderAccount(): void {
+    if (!this.authState) return;
+    const signedIn = this.authState.isAuthenticated && !!this.authState.user;
+    this.accountSignedIn.style.display  = signedIn ? '' : 'none';
+    this.accountSignedOut.style.display = signedIn ? 'none' : '';
+
+    if (signedIn && this.authState.user) {
+      const { full_name, email } = this.authState.user;
+      const initials = (full_name ?? email ?? '?')
+        .split(' ')
+        .map(w => w[0])
+        .slice(0, 2)
+        .join('')
+        .toUpperCase();
+      this.accountAvatar.textContent = initials;
+      this.accountName.textContent   = full_name ?? email ?? '';
+      this.accountEmail.textContent  = email ?? '';
+    }
+  }
+
+  private async loadCredits(): Promise<void> {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'GET_CREDITS' });
+      if (res?.success && res.data) {
+        const { available, plan_allocation, plan, reset_date } = res.data;
+        const planName  = this.formatPlanName(plan ?? '');
+        const resetDate = reset_date ? new Date(reset_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+        this.renderUsage(available, plan_allocation, planName, resetDate);
+      }
+    } catch { /* offline */ }
+  }
+
+  private formatPlanName(plan: string): string {
+    switch (plan) {
+      case 'base':         return 'Base';
+      case 'professional': return 'Pro';
+      case 'unlimited':    return 'Unlimited';
+      default:             return 'Free';
+    }
+  }
+
+  // ── Polling ────────────────────────────────────────────────
+
+  private startPolling(): void {
+    this.creditPollTimer = window.setInterval(() => {
+      if (this.authState?.isAuthenticated) this.loadCredits();
+    }, CREDIT_POLL_MS);
+
+    this.videoPollTimer = window.setInterval(() => {
+      this.pollVideoState();
+    }, VIDEO_POLL_MS);
+  }
+
+  private stopPolling(): void {
+    if (this.creditPollTimer !== null) { clearInterval(this.creditPollTimer); this.creditPollTimer = null; }
+    if (this.videoPollTimer  !== null) { clearInterval(this.videoPollTimer);  this.videoPollTimer  = null; }
+  }
+
+  private async pollVideoState(): Promise<void> {
+    if (this.context !== 'watching') return;
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return;
+      const [videoResp, transcResp] = await Promise.all([
         chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_STATE' }).catch(() => null),
         chrome.tabs.sendMessage(tab.id, { type: 'GET_TRANSCRIPTION_STATE' }).catch(() => null),
       ]);
 
-      if (transcriptionResp?.success) {
-        this.transcriptionState = transcriptionResp.data as TranscriptionStateBroadcast | null;
+      let changed = false;
+      if (transcResp?.success && transcResp.data) {
+        const next = transcResp.data as TranscriptionStateBroadcast;
+        const nextState = this.phaseToYTState(next.phase);
+        if (nextState !== this.ytState || next.statusText !== this.transcriptionState?.statusText) {
+          this.transcriptionState = next;
+          this.ytState = nextState;
+          changed = true;
+        }
+      } else if (videoResp?.success && videoResp.data) {
+        const nextState = this.videoStatusToYTState(videoResp.data.status);
+        const nextCount = videoResp.data.intervalCount ?? 0;
+        if (nextState !== this.ytState || nextCount !== this.wordCount) {
+          this.ytState = nextState;
+          this.wordCount = nextCount;
+          changed = true;
+        }
       }
-
-      if (videoResp?.success && videoResp.data) {
-        this.updateVideoStatus(videoResp.data);
-      } else if (this.transcriptionState) {
-        // No video-controller state yet but transcription is running.
-        this.renderTranscriptionState();
-      }
-    } catch (error) {
-      this.videoStatusSection.style.display = 'none';
-    }
-  }
-
-  private updateVideoStatus(state: {
-    status: string;
-    progress: number;
-    error?: string;
-    intervalCount: number;
-    currentlyMuting: boolean;
-  }): void {
-    this.videoStatusSection.style.display = 'block';
-
-    // If a transcription is in flight, the transcription state takes
-    // precedence for the status text and the progress bar. We still
-    // render the filtered count from the video controller.
-    if (this.transcriptionState && this.transcriptionState.phase !== 'done' && this.transcriptionState.phase !== 'error') {
-      this.renderTranscriptionState();
-      this.filteredCount.textContent = state.intervalCount.toString();
-      return;
-    }
-
-    const statusMap: Record<string, string> = {
-      idle: 'Ready',
-      loading: 'Loading',
-      processing: 'Processing',
-      active: 'Filtering',
-      error: 'Error',
-      disabled: 'Disabled',
-      'age-restricted': 'Restricted',
-    };
-
-    this.videoStatusValue.textContent = statusMap[state.status] || state.status;
-
-    // Update status pill for special states
-    this.statusPill.classList.remove('error', 'warning');
-
-    if (state.status === 'age-restricted') {
-      this.statusPill.classList.add('warning');
-      this.statusLabel.textContent = 'Restricted';
-    } else if (state.status === 'error') {
-      this.statusPill.classList.add('error');
-      this.statusLabel.textContent = 'Error';
-    }
-
-    // Update filtered count
-    this.filteredCount.textContent = state.intervalCount.toString();
-
-    // No percentage bar during transcription — that lives in
-    // renderTranscriptionState() and is driven by the honest countdown.
-    this.progressBar.style.display = 'none';
-  }
-
-  // Render the transcription countdown received from the content script.
-  // The status text is authoritative (computed by TimeEstimator); the fill
-  // bar represents elapsed/estimated, not server progress.
-  private renderTranscriptionState(): void {
-    if (!this.transcriptionState) {
-      this.progressBar.style.display = 'none';
-      return;
-    }
-    this.videoStatusSection.style.display = 'block';
-
-    const { phase, statusText, remainingSeconds, totalEstimatedSeconds } = this.transcriptionState;
-    this.videoStatusValue.textContent = statusText;
-
-    this.statusPill.classList.remove('error', 'warning');
-    if (phase === 'error') {
-      this.statusPill.classList.add('error');
-      this.statusLabel.textContent = 'Error';
-    }
-
-    // Show the bar while we have a live countdown. Fill represents
-    // elapsed time against the initial estimate, capped at 95% until we
-    // know the job is done.
-    if (phase === 'done') {
-      this.progressBar.style.display = 'block';
-      this.progressFill.style.width = '100%';
-    } else if (phase === 'error') {
-      this.progressBar.style.display = 'none';
-    } else if (totalEstimatedSeconds && remainingSeconds != null && remainingSeconds >= 0) {
-      const elapsed = totalEstimatedSeconds - remainingSeconds;
-      const pct = Math.max(0, Math.min(95, (elapsed / totalEstimatedSeconds) * 100));
-      this.progressBar.style.display = 'block';
-      this.progressFill.style.width = `${pct}%`;
-    } else if (phase === 'almost-done') {
-      // Indeterminate — show near-full to imply we're waiting on the
-      // tail end.
-      this.progressBar.style.display = 'block';
-      this.progressFill.style.width = '95%';
-    } else {
-      this.progressBar.style.display = 'block';
-      this.progressFill.style.width = '8%';
-    }
+      if (changed) this.renderHero();
+    } catch { /* tab closed */ }
   }
 
   private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message.type === 'VIDEO_STATE_CHANGED' && message.payload) {
-        this.updateVideoStatus(message.payload);
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg.type === 'TRANSCRIPTION_STATE_CHANGED' && msg.payload && this.context === 'watching') {
+        this.transcriptionState = msg.payload as TranscriptionStateBroadcast;
+        this.ytState = this.phaseToYTState(this.transcriptionState.phase);
+        this.renderHero();
       }
-      if (message.type === 'TRANSCRIPTION_STATE_CHANGED' && message.payload) {
-        this.transcriptionState = message.payload as TranscriptionStateBroadcast;
-        // Once the job reaches done/error the video-controller will take
-        // over the status section; until then render the countdown.
-        if (this.transcriptionState.phase === 'done' || this.transcriptionState.phase === 'error') {
-          // Leave one last frame visible (Done!/Error) then let the next
-          // video-controller update replace it.
-          this.renderTranscriptionState();
-        } else {
-          this.renderTranscriptionState();
-        }
+      if (msg.type === 'VIDEO_STATE_CHANGED' && msg.payload && this.context === 'watching') {
+        const nextState = this.videoStatusToYTState(msg.payload.status);
+        this.ytState = nextState;
+        this.wordCount = msg.payload.intervalCount ?? 0;
+        this.renderHero();
       }
-      if (message.type === 'PREFERENCES_UPDATED' && message.payload) {
-        this.preferences = message.payload;
-        this.updateUI();
+      if (msg.type === 'PREFERENCES_UPDATED' && msg.payload) {
+        this.prefs = msg.payload as UserPreferences;
+        this.renderPrefs();
       }
-      if (message.type === 'CREDIT_UPDATE' && message.payload) {
-        this.creditInfo = message.payload;
-        this.displayCredits();
-      }
-      if (message.type === 'AUTH_STATE_CHANGED' && message.payload) {
+      if (msg.type === 'AUTH_STATE_CHANGED') {
         this.loadAuthState();
       }
     });
   }
-
-  private async loadAuthState(): Promise<void> {
-    try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_USER_PROFILE' });
-
-      if (response.success && response.data) {
-        this.authState = response.data;
-        this.updateAccountUI();
-
-        if (this.authState?.isAuthenticated) {
-          await this.loadCredits();
-        }
-      } else {
-        this.authState = {
-          isAuthenticated: false,
-          user: null,
-          subscription: null,
-          credits: null,
-          token: null,
-        };
-        this.updateAccountUI();
-      }
-    } catch (error) {
-      console.error('Failed to load auth state:', error);
-      this.authState = {
-        isAuthenticated: false,
-        user: null,
-        subscription: null,
-        credits: null,
-        token: null,
-      };
-      this.updateAccountUI();
-    }
-  }
-
-  private updateAccountUI(): void {
-    if (!this.authState) return;
-
-    if (this.authState.isAuthenticated && this.authState.user) {
-      // Show logged in state
-      this.accountLoggedOut.style.display = 'none';
-      this.accountLoggedIn.style.display = 'flex';
-
-      const user = this.authState.user;
-      this.accountName.textContent = user.full_name || user.email?.split('@')[0] || 'User';
-
-      // Update avatar
-      if (user.avatar_url) {
-        this.accountAvatar.innerHTML = `<img src="${this.escapeHtml(user.avatar_url)}" alt="Avatar">`;
-      } else {
-        this.accountAvatar.innerHTML = `
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
-            <circle cx="12" cy="7" r="4"/>
-          </svg>
-        `;
-      }
-
-      // Update plan badge
-      const subscription = this.authState.subscription;
-      const planName = subscription?.plans?.name || 'Free';
-      const planId = planName.toLowerCase();
-      this.accountPlanBadge.textContent = planName;
-      this.accountPlanBadge.className = `account-plan ${planId}`;
-
-      // Hide upgrade link for unlimited plans
-      if (planId === 'unlimited' || planId === 'organization') {
-        this.accountUpgradeLink.style.display = 'none';
-      } else {
-        this.accountUpgradeLink.style.display = 'flex';
-      }
-    } else {
-      // Show logged out state
-      this.accountLoggedOut.style.display = 'flex';
-      this.accountLoggedIn.style.display = 'none';
-      this.creditValue.textContent = '0';
-    }
-  }
-
-  private escapeHtml(text: string): string {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  private async handleSignIn(): Promise<void> {
-    try {
-      await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
-      window.close();
-    } catch (error) {
-      console.error('Failed to open login:', error);
-    }
-  }
-
-  private async handleSignOut(): Promise<void> {
-    try {
-      await chrome.runtime.sendMessage({ type: 'LOGOUT' });
-
-      this.authState = {
-        isAuthenticated: false,
-        user: null,
-        subscription: null,
-        credits: null,
-        token: null,
-      };
-      this.creditInfo = null;
-
-      this.updateAccountUI();
-    } catch (error) {
-      console.error('Failed to sign out:', error);
-    }
-  }
 }
 
-// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-  const popup = new PopupController();
-  popup.initialize();
+  new PopupController().initialize();
 });

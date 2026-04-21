@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Welcome to Safeplay</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="onboarding.css">
+</head>
+<body>
+
+<div class="ob-shell">
+
+  <!-- Progress bar at top -->
+  <div class="ob-progress">
+    <div class="ob-progress-track">
+      <div class="ob-progress-fill" id="obProgressFill"></div>
+    </div>
+    <div class="ob-progress-steps" id="obProgressSteps">
+      <!-- dots injected by JS -->
+    </div>
+  </div>
+
+  <!-- Card -->
+  <div class="ob-card">
+
+    <!-- Step 0: Welcome -->
+    <div class="ob-step" data-step="0">
+      <div class="ob-logo-wrap">
+        <svg width="60" height="60" viewBox="0 0 24 24" fill="none" class="ob-logo-mark">
+          <path d="M12 2.5 4 5.2V12c0 5.2 3.5 8.4 8 9.5 4.5-1.1 8-4.3 8-9.5V5.2L12 2.5Z"
+                fill="currentColor" opacity="0.15"/>
+          <path d="M12 2.5 4 5.2V12c0 5.2 3.5 8.4 8 9.5 4.5-1.1 8-4.3 8-9.5V5.2L12 2.5Z"
+                stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M10 9.2v5.6l4.8-2.8L10 9.2Z" fill="currentColor"/>
+        </svg>
+      </div>
+      <h1 class="ob-heading">Watch YouTube<br>without the bad words.</h1>
+      <p class="ob-sub">Safeplay quietly mutes profanity as videos play. Nothing to set up — just pick how strict you want it.</p>
+
+      <div class="ob-demo">
+        <div class="ob-demo-label">WHAT YOU HEAR</div>
+        <div class="ob-demo-row">
+          <span class="ob-demo-col-label">Before</span>
+          <div class="ob-demo-text">
+            "What the <span class="ob-before-word">****</span> is going on here?"
+          </div>
+        </div>
+        <div class="ob-demo-row">
+          <span class="ob-demo-col-label">After</span>
+          <div class="ob-demo-text">
+            "What the <span class="ob-after-word">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
+                <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+              </svg>
+              muted</span> is going on here?"
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 1: Pick strictness -->
+    <div class="ob-step" data-step="1" style="display:none">
+      <h2 class="ob-heading-sm">How strict should it be?</h2>
+      <p class="ob-sub-sm">You can change this anytime from the popup.</p>
+
+      <div class="ob-levels" id="obLevels">
+        <button class="ob-level" data-level="kids">
+          <span class="ob-level-emoji">🧒</span>
+          <div class="ob-level-body">
+            <div class="ob-level-name">Kid-safe</div>
+            <div class="ob-level-desc">Hide all bad language — the whole list.</div>
+          </div>
+          <span class="ob-level-radio" data-radio="kids"></span>
+        </button>
+        <button class="ob-level active" data-level="family">
+          <span class="ob-level-emoji">👪</span>
+          <div class="ob-level-body">
+            <div class="ob-level-name">Family</div>
+            <div class="ob-level-desc">Hide stronger swears. Let mild words through.</div>
+          </div>
+          <span class="ob-level-radio active" data-radio="family"></span>
+        </button>
+        <button class="ob-level" data-level="adult">
+          <span class="ob-level-emoji">🎧</span>
+          <div class="ob-level-body">
+            <div class="ob-level-name">Light touch</div>
+            <div class="ob-level-desc">Only the worst words. For personal taste.</div>
+          </div>
+          <span class="ob-level-radio" data-radio="adult"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Step 2: Ready -->
+    <div class="ob-step" data-step="2" style="display:none">
+      <div class="ob-ready-icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      </div>
+      <h2 class="ob-heading-sm">You're all set.</h2>
+      <p class="ob-sub-sm">On any YouTube video, click the red Safeplay button next to Subscribe to start filtering.</p>
+
+      <div class="ob-button-preview">
+        <div class="ob-button-preview-label">LOOK FOR THIS ON ANY VIDEO</div>
+        <div class="ob-button-preview-row">
+          <div class="ob-fake-channel">
+            <div class="ob-fake-avatar"></div>
+            <div>
+              <div class="ob-fake-name">Channel</div>
+              <div class="ob-fake-subs">284K subs</div>
+            </div>
+          </div>
+          <div class="ob-fake-subscribe">Subscribe</div>
+          <div class="ob-safeplay-btn-preview">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            Filter with Safeplay
+          </div>
+        </div>
+        <!-- Callout arrow pointing at the button -->
+        <svg class="ob-callout-arrow" viewBox="0 0 80 40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <path d="M 10 5 C 20 25, 50 35, 60 36"/>
+          <polyline points="55,31 60,36 65,30"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- Footer nav -->
+    <div class="ob-footer">
+      <button class="ob-back-btn" id="obBackBtn" disabled>Back</button>
+      <button class="ob-next-btn" id="obNextBtn">
+        Continue
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- Subtle trust signal -->
+  <div class="ob-trust">Safeplay never sends your audio to the cloud.</div>
+
+</div>
+
+</body>
+</html>

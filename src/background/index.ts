@@ -783,6 +783,11 @@ chrome.action.onClicked.addListener((_tab) => {
 chrome.runtime.onInstalled.addListener(async (details) => {
   log('Extension installed/updated:', details.reason);
   await initBadge();
+
+  if (details.reason === 'install') {
+    // Show onboarding on first install
+    chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+  }
 });
 
 // Handle browser startup — also initialize badge
