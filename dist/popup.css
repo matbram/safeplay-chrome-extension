@@ -19,20 +19,8 @@
   --transition: 0.15s ease;
 }
 
-/* Dark theme (default) */
+/* Light theme (default) */
 body {
-  --bg:          #0f0f0f;
-  --bg-elevated: #181818;
-  --bg-card:     #1f1f1f;
-  --border:      #2a2a2a;
-  --border-hi:   #3a3a3a;
-  --text:        #f1f1f1;
-  --text-dim:    #a8a8a8;
-  --text-muted:  #6e6e6e;
-}
-
-/* Light theme */
-body.light {
   --bg:          #ffffff;
   --bg-elevated: #fafaf8;
   --bg-card:     #ffffff;
@@ -41,6 +29,18 @@ body.light {
   --text:        #0f0f0f;
   --text-dim:    #5a5a5a;
   --text-muted:  #8a8680;
+}
+
+/* Dark theme */
+body.dark {
+  --bg:          #0f0f0f;
+  --bg-elevated: #181818;
+  --bg-card:     #1f1f1f;
+  --border:      #2a2a2a;
+  --border-hi:   #3a3a3a;
+  --text:        #f1f1f1;
+  --text-dim:    #a8a8a8;
+  --text-muted:  #6e6e6e;
 }
 
 /* ── Reset ───────────────────────────────────────────────── */
@@ -186,12 +186,10 @@ button {
 }
 
 .section-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 600;
-  color: var(--text-muted);
+  color: var(--text-dim);
   margin-bottom: 8px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
 }
 
 .section-label-row {
@@ -246,16 +244,22 @@ button {
 /* ── Mode selector ───────────────────────────────────────── */
 .mode-row {
   display: flex;
-  gap: 6px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: 3px;
+  gap: 8px;
 }
 
 .mode-option {
   flex: 1;
   display: flex;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  transition: var(--transition);
+}
+.mode-option:hover { border-color: var(--border-hi); }
+.mode-option.active {
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .mode-btn {
@@ -268,16 +272,11 @@ button {
   background: transparent;
   color: var(--text-dim);
   border: none;
-  border-radius: calc(var(--radius-sm) - 2px) 0 0 calc(var(--radius-sm) - 2px);
   font-size: 12.5px;
   font-weight: 600;
   transition: var(--transition);
 }
-.mode-btn:hover { color: var(--text); }
-.mode-btn.active {
-  background: var(--accent);
-  color: var(--accent-cc);
-}
+.mode-option.active .mode-btn { color: var(--accent-cc); }
 
 .mode-preview-btn {
   width: 28px;
@@ -287,14 +286,15 @@ button {
   background: transparent;
   color: var(--text-muted);
   border: none;
-  border-radius: 0 calc(var(--radius-sm) - 2px) calc(var(--radius-sm) - 2px) 0;
+  border-left: 1px solid var(--border);
   transition: var(--transition);
   flex-shrink: 0;
 }
 .mode-preview-btn:hover { color: var(--text); }
-.mode-btn.active + .mode-preview-btn {
-  background: rgba(229,35,43,0.15);
+.mode-option.active .mode-preview-btn {
+  background: rgba(255,255,255,0.15);
   color: var(--accent-cc);
+  border-left-color: rgba(255,255,255,0.2);
 }
 
 /* ── Usage bar ───────────────────────────────────────────── */

@@ -16,32 +16,30 @@ class OnboardingController {
   private strictness: StrictnessLevel = 'family';
 
   private steps!:          NodeListOf<HTMLElement>;
-  private progressFill!:   HTMLElement;
-  private progressSteps!:  HTMLElement;
+  private progress!:       HTMLElement;
   private backBtn!:        HTMLButtonElement;
   private nextBtn!:        HTMLButtonElement;
   private levelBtns!:      NodeListOf<HTMLButtonElement>;
 
   initialize(): void {
-    this.steps         = document.querySelectorAll<HTMLElement>('.ob-step');
-    this.progressFill  = document.getElementById('obProgressFill')  as HTMLElement;
-    this.progressSteps = document.getElementById('obProgressSteps') as HTMLElement;
-    this.backBtn       = document.getElementById('obBackBtn')        as HTMLButtonElement;
-    this.nextBtn       = document.getElementById('obNextBtn')        as HTMLButtonElement;
-    this.levelBtns     = document.querySelectorAll<HTMLButtonElement>('.ob-level');
+    this.steps      = document.querySelectorAll<HTMLElement>('.ob-step');
+    this.progress   = document.getElementById('obProgress')  as HTMLElement;
+    this.backBtn    = document.getElementById('obBackBtn')   as HTMLButtonElement;
+    this.nextBtn    = document.getElementById('obNextBtn')   as HTMLButtonElement;
+    this.levelBtns  = document.querySelectorAll<HTMLButtonElement>('.ob-level');
 
-    this.buildProgressDots();
+    this.buildProgressBars();
     this.renderStep();
     this.setupListeners();
     this.loadTheme();
   }
 
-  private buildProgressDots(): void {
+  private buildProgressBars(): void {
     for (let i = 0; i < TOTAL_STEPS; i++) {
-      const dot = document.createElement('div');
-      dot.className = 'ob-progress-dot';
-      dot.dataset.dot = String(i);
-      this.progressSteps.appendChild(dot);
+      const bar = document.createElement('div');
+      bar.className = 'ob-progress-bar';
+      bar.dataset.bar = String(i);
+      this.progress.appendChild(bar);
     }
   }
 
@@ -52,14 +50,10 @@ class OnboardingController {
       el.style.display = s === this.step ? '' : 'none';
     });
 
-    // Progress bar
-    const pct = ((this.step + 1) / TOTAL_STEPS) * 100;
-    this.progressFill.style.width = `${pct}%`;
-
-    // Dots
-    document.querySelectorAll<HTMLElement>('.ob-progress-dot').forEach(dot => {
-      const i = parseInt(dot.dataset.dot ?? '0', 10);
-      dot.classList.toggle('done', i <= this.step);
+    // Progress bars: each bar colored if i <= step
+    this.progress.querySelectorAll<HTMLElement>('.ob-progress-bar').forEach(bar => {
+      const i = parseInt(bar.dataset.bar ?? '0', 10);
+      bar.classList.toggle('done', i <= this.step);
     });
 
     // Back button
@@ -139,7 +133,7 @@ class OnboardingController {
 
   private loadTheme(): void {
     const saved = localStorage.getItem('safeplay_theme');
-    if (saved === 'light') document.body.classList.add('light');
+    if (saved === 'dark') document.body.classList.add('dark');
   }
 }
 

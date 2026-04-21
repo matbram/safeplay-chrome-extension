@@ -27,6 +27,7 @@ class OptionsController {
 
   // Billing
   private sidebarCredits!:    HTMLElement;
+  private sidebarCreditsOf!:  HTMLElement;
   private sidebarCreditsFill!: HTMLElement;
   private billingCreditsLeft!: HTMLElement;
   private billingCreditsOf!:   HTMLElement;
@@ -34,7 +35,16 @@ class OptionsController {
   private billingUsed!:        HTMLElement;
   private billingPct!:         HTMLElement;
   private usageCardMeta!:      HTMLElement;
-  // credit-pack buttons handled via delegation in future; declared for completeness
+  private statVideos!:         HTMLElement;
+  private statAvg!:            HTMLElement;
+  private statWords!:          HTMLElement;
+  private creditPacks!:        NodeListOf<HTMLButtonElement>;
+  private buyCreditsBtn!:      HTMLButtonElement;
+  private buyCreditsLabel!:    HTMLElement;
+  private selectedPack: { credits: number; price: number } = { credits: 1500, price: 9 };
+
+  // Sidebar
+  private sidebarBackBtn!:    HTMLButtonElement;
 
   // Account
   private accountSignedIn!:  HTMLElement;
@@ -61,6 +71,7 @@ class OptionsController {
 
   async initialize(): Promise<void> {
     this.cacheElements();
+    this.loadTheme();
     this.setupNav();
     this.setupListeners();
 
@@ -72,6 +83,11 @@ class OptionsController {
 
     this.loadCredits();
     this.readSectionFromHash();
+  }
+
+  private loadTheme(): void {
+    const saved = localStorage.getItem('safeplay_theme');
+    if (saved === 'dark') document.body.classList.add('dark');
   }
 
   private cacheElements(): void {
@@ -90,6 +106,7 @@ class OptionsController {
     this.whitelistCount   = document.getElementById('whitelistCount')   as HTMLElement;
 
     this.sidebarCredits     = document.getElementById('sidebarCredits')     as HTMLElement;
+    this.sidebarCreditsOf   = document.getElementById('sidebarCreditsOf')   as HTMLElement;
     this.sidebarCreditsFill = document.getElementById('sidebarCreditsFill') as HTMLElement;
     this.billingCreditsLeft = document.getElementById('billingCreditsLeft') as HTMLElement;
     this.billingCreditsOf   = document.getElementById('billingCreditsOf')   as HTMLElement;
@@ -97,7 +114,13 @@ class OptionsController {
     this.billingUsed        = document.getElementById('billingUsed')        as HTMLElement;
     this.billingPct         = document.getElementById('billingPct')         as HTMLElement;
     this.usageCardMeta      = document.getElementById('usageCardMeta')      as HTMLElement;
-    // credit packs are static buy-links; no JS binding needed beyond the href
+    this.statVideos         = document.getElementById('statVideos')         as HTMLElement;
+    this.statAvg            = document.getElementById('statAvg')            as HTMLElement;
+    this.statWords          = document.getElementById('statWords')          as HTMLElement;
+    this.creditPacks        = document.querySelectorAll<HTMLButtonElement>('.credit-pack');
+    this.buyCreditsBtn      = document.getElementById('buyCreditsBtn')      as HTMLButtonElement;
+    this.buyCreditsLabel    = document.getElementById('buyCreditsLabel')    as HTMLElement;
+    this.sidebarBackBtn     = document.getElementById('sidebarBackBtn')     as HTMLButtonElement;
 
     this.accountSignedIn  = document.getElementById('accountSignedIn')  as HTMLElement;
     this.accountSignedOut = document.getElementById('accountSignedOut') as HTMLElement;
@@ -186,6 +209,27 @@ class OptionsController {
     // Account
     this.signOutBtn?.addEventListener('click',       () => this.signOut());
     this.signInBtnOptions?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' }));
+
+    // Sidebar back
+    this.sidebarBackBtn?.addEventListener('click', () => window.close());
+
+    // Credit packs
+    this.creditPacks.forEach(pack => {
+      pack.addEventListener('click', () => this.selectCreditPack(pack));
+    });
+    this.buyCreditsBtn?.addEventListener('click', () => {
+      chrome.tabs.create({
+        url: `https://trysafeplay.com/billing?pack=${this.selectedPack.credits}`,
+      });
+    });
+  }
+
+  private selectCreditPack(pack: HTMLButtonElement): void {
+    this.creditPacks.forEach(p => p.classList.toggle('selected', p === pack));
+    const credits = parseInt(pack.dataset.pack ?? '0', 10);
+    const price   = parseInt(pack.dataset.price ?? '0', 10);
+    this.selectedPack = { credits, price };
+    this.buyCreditsLabel.textContent = `Buy ${credits.toLocaleString()} credits · $${price}`;
   }
 
   private countLines(value: string): number {
@@ -282,13 +326,19 @@ class OptionsController {
     resetDate?: string,
   ): void {
     const pct = Math.max(0, Math.min(1, used / total));
-    const resetStr = resetDate
-      ? new Date(resetDate).toLocaleDateString('en-US', { month: 'long', day: 'numeric' })
-      : '';
     const planName = this.formatPlanName(plan);
 
+    let resetStr = '';
+    let daysLeft = 0;
+    if (resetDate) {
+      const reset = new Date(resetDate);
+      resetStr = reset.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+      daysLeft = Math.max(0, Math.ceil((reset.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+    }
+
     // Sidebar widget
-    this.sidebarCredits.textContent = available.toLocaleString();
+    this.sidebarCredits.textContent   = available.toLocaleString();
+    this.sidebarCreditsOf.textContent = `of ${total.toLocaleString()}`;
     this.sidebarCreditsFill.style.width = `${(1 - pct) * 100}%`;
 
     // Billing section
@@ -297,7 +347,28 @@ class OptionsController {
     this.billingFill.style.width        = `${pct * 100}%`;
     this.billingUsed.textContent        = `${used.toLocaleString()} used`;
     this.billingPct.textContent         = `${Math.round(pct * 100)}%`;
-    this.usageCardMeta.textContent      = `${planName} plan · resets ${resetStr}`;
+    this.usageCardMeta.textContent      = resetStr
+      ? `${planName} plan · resets ${resetStr}${daysLeft > 0 ? ` (${daysLeft} days)` : ''}`
+      : `${planName} plan`;
+
+    // Stat row — derive what we can from cache + credits
+    this.renderUsageStats(used);
+  }
+
+  private async renderUsageStats(used: number): Promise<void> {
+    try {
+      const storage = await chrome.storage.local.get('cachedTranscripts');
+      const videosFiltered = Object.keys(storage.cachedTranscripts ?? {}).length;
+      this.statVideos.textContent = videosFiltered.toLocaleString();
+      this.statAvg.textContent    = videosFiltered > 0
+        ? (used / videosFiltered).toFixed(1)
+        : '—';
+      this.statWords.textContent  = '—';
+    } catch {
+      this.statVideos.textContent = '—';
+      this.statAvg.textContent    = '—';
+      this.statWords.textContent  = '—';
+    }
   }
 
   private formatPlanName(plan: string): string {

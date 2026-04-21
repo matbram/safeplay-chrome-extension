@@ -55,6 +55,8 @@ class PopupController {
   private strictnessExample!: HTMLElement;
   private modeMute!:          HTMLButtonElement;
   private modeBleep!:         HTMLButtonElement;
+  private modeMuteOption!:    HTMLElement;
+  private modeBleepOption!:   HTMLElement;
   private mutePrevBtn!:       HTMLButtonElement;
   private bleepPrevBtn!:      HTMLButtonElement;
   private previewNotice!:     HTMLElement;
@@ -99,6 +101,8 @@ class PopupController {
     this.strictnessExample = document.getElementById('strictnessExample') as HTMLElement;
     this.modeMute          = document.getElementById('modeMute')          as HTMLButtonElement;
     this.modeBleep         = document.getElementById('modeBleep')         as HTMLButtonElement;
+    this.modeMuteOption    = document.getElementById('modeMuteOption')    as HTMLElement;
+    this.modeBleepOption   = document.getElementById('modeBleepOption')   as HTMLElement;
     this.mutePrevBtn       = document.getElementById('mutePrevBtn')       as HTMLButtonElement;
     this.bleepPrevBtn      = document.getElementById('bleepPrevBtn')      as HTMLButtonElement;
     this.previewNotice     = document.getElementById('previewNotice')     as HTMLElement;
@@ -120,7 +124,7 @@ class PopupController {
 
   private loadTheme(): void {
     const saved = localStorage.getItem('safeplay_theme');
-    if (saved === 'light') document.body.classList.add('light');
+    if (saved === 'dark') document.body.classList.add('dark');
   }
 
   private setupListeners(): void {
@@ -206,8 +210,8 @@ class PopupController {
     this.strictnessExample.textContent = STRICTNESS_EXAMPLES[level];
 
     // Mode
-    this.modeMute.classList.toggle('active',  this.prefs.filterMode === 'mute');
-    this.modeBleep.classList.toggle('active', this.prefs.filterMode === 'bleep');
+    this.modeMuteOption.classList.toggle('active',  this.prefs.filterMode === 'mute');
+    this.modeBleepOption.classList.toggle('active', this.prefs.filterMode === 'bleep');
   }
 
   // ── Context detection ──────────────────────────────────────
@@ -299,7 +303,7 @@ class PopupController {
       idle: {
         dot: 'var(--text-muted)', label: 'This video',
         title: "This video isn't filtered yet.",
-        sub: 'Click <b>Filter with Safeplay</b> next to Subscribe to start.',
+        sub: 'Click <b>Filter with Safeplay</b> on the video to start.',
       },
       connecting: {
         dot: '#7c3aed', pulse: true, label: 'This video',
@@ -309,7 +313,7 @@ class PopupController {
       processing: {
         dot: '#7c3aed', pulse: true, label: 'This video',
         title: 'Finding bad words…',
-        sub: this.transcriptionState?.statusText || 'You can keep watching.',
+        sub: this.transcriptionState?.statusText || 'This takes about half a minute. You can keep watching.',
       },
       'almost-done': {
         dot: '#7c3aed', pulse: true, label: 'This video',

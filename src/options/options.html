@@ -15,6 +15,11 @@
   <!-- ── Sidebar ─────────────────────────────────── -->
   <aside class="sidebar">
     <div class="sidebar-logo">
+      <button class="sidebar-back" id="sidebarBackBtn" title="Back">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
       <svg width="26" height="26" viewBox="0 0 24 24" fill="none" class="sidebar-mark">
         <path d="M12 2.5 4 5.2V12c0 5.2 3.5 8.4 8 9.5 4.5-1.1 8-4.3 8-9.5V5.2L12 2.5Z"
               fill="currentColor" opacity="0.15"/>
@@ -56,7 +61,10 @@
         <span class="credits-widget-label">Credits left</span>
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
       </div>
-      <div class="credits-widget-count" id="sidebarCredits">—</div>
+      <div class="credits-widget-count">
+        <span id="sidebarCredits">—</span>
+        <span class="credits-widget-of" id="sidebarCreditsOf"></span>
+      </div>
       <div class="credits-widget-track">
         <div class="credits-widget-fill" id="sidebarCreditsFill"></div>
       </div>
@@ -101,7 +109,7 @@
           <div class="toggle-row">
             <div class="toggle-row-text">
               <div class="toggle-row-label">Remember videos you've filtered before</div>
-              <div class="toggle-row-desc">If you've already filtered a video, Safeplay turns on automatically next time — no credits used.</div>
+              <div class="toggle-row-desc">If you've already filtered a video, Safeplay turns on automatically the next time you watch it — no credits used.</div>
             </div>
             <label class="toggle-switch">
               <input type="checkbox" id="autoEnableFiltered" checked>
@@ -112,7 +120,7 @@
           <div class="toggle-row">
             <div class="toggle-row-text">
               <div class="toggle-row-label">Show tick marks on the video timeline</div>
-              <div class="toggle-row-desc">Red ticks on the YouTube progress bar show exactly where words will be muted, so nothing surprises you.</div>
+              <div class="toggle-row-desc">Red ticks on the YouTube progress bar show exactly where words will be muted, so nothing takes you by surprise.</div>
             </div>
             <label class="toggle-switch">
               <input type="checkbox" id="showTimelineMarkers" checked>
@@ -127,10 +135,12 @@
     <section class="content-section" data-section="words">
       <div class="section-header">
         <h1>Your word lists</h1>
-        <p>Teach Safeplay about names, nicknames, or slang it wouldn't know on its own. One word or phrase per line.</p>
+        <p>Teach Safeplay about names, nicknames, or slang it wouldn't know on its own.</p>
       </div>
 
       <div class="card">
+        <div class="card-title">Your word lists</div>
+        <div class="card-sub" style="padding:4px 22px 0">Safeplay already knows thousands of bad words. Use these lists for the ones it doesn't — or for words it hides that you'd rather keep. One word or phrase per line.</div>
         <div class="card-body">
           <div class="word-lists-grid">
             <div class="word-list-col">
@@ -178,15 +188,31 @@
             <span id="billingCreditsLeft">—</span>
             <span class="big-credit-of" id="billingCreditsOf"></span>
           </div>
-          <div class="usage-track-lg">
-            <div class="usage-fill-lg" id="billingFill"></div>
+          <div>
+            <div class="usage-track-lg">
+              <div class="usage-fill-lg" id="billingFill"></div>
+            </div>
+            <div class="usage-labels">
+              <span id="billingUsed"></span>
+              <span id="billingPct"></span>
+            </div>
           </div>
-          <div class="usage-labels">
-            <span id="billingUsed"></span>
-            <span id="billingPct"></span>
+          <div class="usage-stats">
+            <div class="usage-stat">
+              <div class="usage-stat-label">Videos filtered</div>
+              <div class="usage-stat-value" id="statVideos">—</div>
+            </div>
+            <div class="usage-stat">
+              <div class="usage-stat-label">Avg per video</div>
+              <div class="usage-stat-value" id="statAvg">—</div>
+            </div>
+            <div class="usage-stat">
+              <div class="usage-stat-label">Words muted</div>
+              <div class="usage-stat-value" id="statWords">—</div>
+            </div>
           </div>
           <div class="credit-explainer">
-            <b>What's a credit?</b> One credit filters roughly one minute of video. You're only charged the first time you filter a video — rewatching and scrubbing are free.
+            <b>What's a credit?</b> One credit filters roughly one minute of video. You're only charged the first time you filter a video — rewatching, rewinding, and scrubbing are free. Videos you just watch without filtering cost nothing.
           </div>
         </div>
       </div>
@@ -195,35 +221,38 @@
         <div class="card-header-row">
           <div>
             <div class="card-title">Top up credits</div>
-            <div class="card-sub">One-time packs stack on top of your monthly allowance and kick in only after it's used up.</div>
+            <div class="card-sub">Need more credits before your plan resets? Buy a one-time pack — credits stack on top of your monthly allowance and kick in only after it's used up.</div>
           </div>
         </div>
         <div class="card-body">
           <div class="credit-packs" id="creditPacks">
-            <button class="credit-pack" data-pack="500" data-price="4">
+            <button class="credit-pack" data-pack="500" data-price="4" data-per="0.80">
               <div class="pack-credits">500 <span>credits</span></div>
               <div class="pack-price">$4 <span>$0.80/credit</span></div>
             </button>
-            <button class="credit-pack popular" data-pack="1500" data-price="9">
+            <button class="credit-pack selected" data-pack="1500" data-price="9" data-per="0.60" data-save="25">
               <span class="pack-tag">Most popular</span>
               <div class="pack-credits">1,500 <span>credits</span></div>
-              <div class="pack-price">$9 <span>$0.60/credit · save 25%</span></div>
+              <div class="pack-price">$9 <span>$0.60/credit</span></div>
+              <div class="pack-save">25% off pay-as-you-go</div>
             </button>
-            <button class="credit-pack" data-pack="5000" data-price="24">
+            <button class="credit-pack" data-pack="5000" data-price="24" data-per="0.48" data-save="40">
               <span class="pack-tag value">Save 40%</span>
               <div class="pack-credits">5,000 <span>credits</span></div>
-              <div class="pack-price">$24 <span>$0.48/credit · best value</span></div>
+              <div class="pack-price">$24 <span>$0.48/credit</span></div>
+              <div class="pack-save">40% off pay-as-you-go</div>
             </button>
           </div>
           <div class="topup-footer">
             <div class="topup-perks">
-              <span>✓ Never expire</span>
-              <span>✓ Shared with family</span>
-              <span>✓ Used after monthly credits</span>
+              <span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Credits never expire</span>
+              <span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Shared across your family</span>
+              <span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Used only after your monthly credits</span>
             </div>
-            <a href="https://trysafeplay.com/billing" target="_blank" class="btn-primary" id="buyCreditsBtn">
-              Buy credits <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
-            </a>
+            <button class="btn-primary" id="buyCreditsBtn">
+              <span id="buyCreditsLabel">Buy 1,500 credits · $9</span>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
           </div>
         </div>
       </div>
@@ -233,7 +262,7 @@
     <section class="content-section" data-section="account">
       <div class="section-header">
         <h1>Account</h1>
-        <p>Who's signed in and account management.</p>
+        <p>Who's signed in and who they share credits with.</p>
       </div>
 
       <!-- Signed in -->
@@ -309,14 +338,11 @@
       </div>
 
       <div class="card" style="margin-top:16px">
-        <div class="card-title">Saved captions</div>
+        <div class="card-title">Saved captions (<span id="cacheVideoCount">0</span> videos)</div>
         <div class="card-body">
           <div class="cache-row">
             <div>
-              <div class="toggle-row-label">
-                <span id="cacheVideoCount">—</span> videos cached
-              </div>
-              <div class="toggle-row-desc">Safeplay keeps captions for videos you've filtered so they start instantly next time — no credits, no wait. Clearing is safe: captions re-download as you watch, at no extra cost.</div>
+              <div class="toggle-row-desc">Safeplay keeps captions for videos you've already filtered, so they start instantly the next time — no credits, no wait. Clearing this is safe: captions re-download as you watch and won't cost extra credits.</div>
             </div>
             <button class="btn-outline" id="clearCacheBtn">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
