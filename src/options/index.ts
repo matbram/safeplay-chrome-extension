@@ -1,197 +1,450 @@
-// SafePlay Options Page Script
-import { UserPreferences, DEFAULT_PREFERENCES } from '../types';
+import { UserPreferences, DEFAULT_PREFERENCES, AuthState } from '../types';
 import './options.css';
 
-class OptionsController {
-  private preferences: UserPreferences = DEFAULT_PREFERENCES;
+type Section = 'settings' | 'words' | 'billing' | 'account' | 'advanced';
 
-  // DOM Elements
-  private customBlacklist!: HTMLTextAreaElement;
-  private customWhitelist!: HTMLTextAreaElement;
-  private paddingBefore!: HTMLInputElement;
-  private paddingAfter!: HTMLInputElement;
-  private mergeThreshold!: HTMLInputElement;
-  private autoEnableFiltered!: HTMLInputElement;
-  private autoFilterAllVideos!: HTMLInputElement;
+const SAVE_SECTIONS: Section[] = ['settings', 'words', 'advanced'];
+
+class OptionsController {
+  private prefs: UserPreferences = DEFAULT_PREFERENCES;
+  private authState: AuthState | null = null;
+  // Nav + sections
+  private navItems!:      NodeListOf<HTMLButtonElement>;
+  private contentSections!: NodeListOf<HTMLElement>;
+
+  // Settings
+  private autoFilterAllVideos!:    HTMLInputElement;
   private confirmBeforeAutoFilter!: HTMLInputElement;
   private confirmBeforeAutoFilterRow!: HTMLElement;
-  private showTimelineMarkers!: HTMLInputElement;
-  private cacheCount!: HTMLElement;
-  private clearCacheBtn!: HTMLButtonElement;
-  private saveBtn!: HTMLButtonElement;
+  private autoEnableFiltered!:     HTMLInputElement;
+  private showTimelineMarkers!:    HTMLInputElement;
+
+  // Words
+  private customBlacklist!:  HTMLTextAreaElement;
+  private customWhitelist!:  HTMLTextAreaElement;
+  private blacklistCount!:   HTMLElement;
+  private whitelistCount!:   HTMLElement;
+
+  // Billing
+  private sidebarCredits!:    HTMLElement;
+  private sidebarCreditsOf!:  HTMLElement;
+  private sidebarCreditsFill!: HTMLElement;
+  private billingCreditsLeft!: HTMLElement;
+  private billingCreditsOf!:   HTMLElement;
+  private billingFill!:        HTMLElement;
+  private billingUsed!:        HTMLElement;
+  private billingPct!:         HTMLElement;
+  private usageCardMeta!:      HTMLElement;
+  private statVideos!:         HTMLElement;
+  private statAvg!:            HTMLElement;
+  private statWords!:          HTMLElement;
+  private creditPacks!:        NodeListOf<HTMLButtonElement>;
+  private buyCreditsBtn!:      HTMLButtonElement;
+  private buyCreditsLabel!:    HTMLElement;
+  private selectedPack: { credits: number; price: number } = { credits: 1500, price: 9 };
+
+  // Sidebar
+  private sidebarBackBtn!:    HTMLButtonElement;
+
+  // Account
+  private accountSignedIn!:  HTMLElement;
+  private accountSignedOut!: HTMLElement;
+  private accountAvatarLg!:  HTMLElement;
+  private accountNameLg!:    HTMLElement;
+  private accountEmailLg!:   HTMLElement;
+  private signOutBtn!:       HTMLButtonElement;
+  private signInBtnOptions!: HTMLButtonElement;
+
+  // Advanced
+  private paddingBefore!:    HTMLInputElement;
+  private paddingAfter!:     HTMLInputElement;
+  private cacheVideoCount!:  HTMLElement;
+  private clearCacheBtn!:    HTMLButtonElement;
+
+  // Save bar
+  private saveBar!:    HTMLElement;
   private saveStatus!: HTMLElement;
+  private saveBtn!:    HTMLButtonElement;
+
+  // Credits widget
+  private creditsWidget!: HTMLButtonElement;
 
   async initialize(): Promise<void> {
-    // Get DOM elements
-    this.customBlacklist = document.getElementById('customBlacklist') as HTMLTextAreaElement;
-    this.customWhitelist = document.getElementById('customWhitelist') as HTMLTextAreaElement;
-    this.paddingBefore = document.getElementById('paddingBefore') as HTMLInputElement;
-    this.paddingAfter = document.getElementById('paddingAfter') as HTMLInputElement;
-    this.mergeThreshold = document.getElementById('mergeThreshold') as HTMLInputElement;
-    this.autoEnableFiltered = document.getElementById('autoEnableFiltered') as HTMLInputElement;
-    this.autoFilterAllVideos = document.getElementById('autoFilterAllVideos') as HTMLInputElement;
-    this.confirmBeforeAutoFilter = document.getElementById('confirmBeforeAutoFilter') as HTMLInputElement;
-    this.confirmBeforeAutoFilterRow = document.getElementById('confirmBeforeAutoFilterRow') as HTMLElement;
-    this.showTimelineMarkers = document.getElementById('showTimelineMarkers') as HTMLInputElement;
-    this.cacheCount = document.getElementById('cacheCount') as HTMLElement;
-    this.clearCacheBtn = document.getElementById('clearCacheBtn') as HTMLButtonElement;
-    this.saveBtn = document.getElementById('saveBtn') as HTMLButtonElement;
-    this.saveStatus = document.getElementById('saveStatus') as HTMLElement;
+    this.cacheElements();
+    this.loadTheme();
+    this.setupNav();
+    this.setupListeners();
 
-    // Load preferences
-    await this.loadPreferences();
+    await Promise.all([
+      this.loadPreferences(),
+      this.loadAuthState(),
+      this.loadCacheCount(),
+    ]);
 
-    // Load cache count
-    await this.loadCacheCount();
-
-    // Set up event listeners
-    this.setupEventListeners();
+    this.loadCredits();
+    this.readSectionFromHash();
   }
 
-  private async loadPreferences(): Promise<void> {
-    try {
-      const response = await chrome.runtime.sendMessage({ type: 'GET_PREFERENCES' });
-      if (response.success && response.data) {
-        this.preferences = response.data;
-        this.updateUI();
-      }
-    } catch (error) {
-      console.error('Failed to load preferences:', error);
+  private loadTheme(): void {
+    const saved = localStorage.getItem('safeplay_theme');
+    if (saved === 'dark') document.body.classList.add('dark');
+  }
+
+  private cacheElements(): void {
+    this.navItems          = document.querySelectorAll<HTMLButtonElement>('.nav-item');
+    this.contentSections   = document.querySelectorAll<HTMLElement>('.content-section');
+
+    this.autoFilterAllVideos       = document.getElementById('autoFilterAllVideos')       as HTMLInputElement;
+    this.confirmBeforeAutoFilter   = document.getElementById('confirmBeforeAutoFilter')   as HTMLInputElement;
+    this.confirmBeforeAutoFilterRow= document.getElementById('confirmBeforeAutoFilterRow') as HTMLElement;
+    this.autoEnableFiltered        = document.getElementById('autoEnableFiltered')        as HTMLInputElement;
+    this.showTimelineMarkers       = document.getElementById('showTimelineMarkers')       as HTMLInputElement;
+
+    this.customBlacklist  = document.getElementById('customBlacklist')  as HTMLTextAreaElement;
+    this.customWhitelist  = document.getElementById('customWhitelist')  as HTMLTextAreaElement;
+    this.blacklistCount   = document.getElementById('blacklistCount')   as HTMLElement;
+    this.whitelistCount   = document.getElementById('whitelistCount')   as HTMLElement;
+
+    this.sidebarCredits     = document.getElementById('sidebarCredits')     as HTMLElement;
+    this.sidebarCreditsOf   = document.getElementById('sidebarCreditsOf')   as HTMLElement;
+    this.sidebarCreditsFill = document.getElementById('sidebarCreditsFill') as HTMLElement;
+    this.billingCreditsLeft = document.getElementById('billingCreditsLeft') as HTMLElement;
+    this.billingCreditsOf   = document.getElementById('billingCreditsOf')   as HTMLElement;
+    this.billingFill        = document.getElementById('billingFill')        as HTMLElement;
+    this.billingUsed        = document.getElementById('billingUsed')        as HTMLElement;
+    this.billingPct         = document.getElementById('billingPct')         as HTMLElement;
+    this.usageCardMeta      = document.getElementById('usageCardMeta')      as HTMLElement;
+    this.statVideos         = document.getElementById('statVideos')         as HTMLElement;
+    this.statAvg            = document.getElementById('statAvg')            as HTMLElement;
+    this.statWords          = document.getElementById('statWords')          as HTMLElement;
+    this.creditPacks        = document.querySelectorAll<HTMLButtonElement>('.credit-pack');
+    this.buyCreditsBtn      = document.getElementById('buyCreditsBtn')      as HTMLButtonElement;
+    this.buyCreditsLabel    = document.getElementById('buyCreditsLabel')    as HTMLElement;
+    this.sidebarBackBtn     = document.getElementById('sidebarBackBtn')     as HTMLButtonElement;
+
+    this.accountSignedIn  = document.getElementById('accountSignedIn')  as HTMLElement;
+    this.accountSignedOut = document.getElementById('accountSignedOut') as HTMLElement;
+    this.accountAvatarLg  = document.getElementById('accountAvatarLg')  as HTMLElement;
+    this.accountNameLg    = document.getElementById('accountNameLg')    as HTMLElement;
+    this.accountEmailLg   = document.getElementById('accountEmailLg')   as HTMLElement;
+    this.signOutBtn       = document.getElementById('signOutBtn')       as HTMLButtonElement;
+    this.signInBtnOptions = document.getElementById('signInBtnOptions') as HTMLButtonElement;
+
+    this.paddingBefore   = document.getElementById('paddingBefore')   as HTMLInputElement;
+    this.paddingAfter    = document.getElementById('paddingAfter')    as HTMLInputElement;
+    this.cacheVideoCount = document.getElementById('cacheVideoCount') as HTMLElement;
+    this.clearCacheBtn   = document.getElementById('clearCacheBtn')   as HTMLButtonElement;
+
+    this.saveBar    = document.getElementById('saveBar')    as HTMLElement;
+    this.saveStatus = document.getElementById('saveStatus') as HTMLElement;
+    this.saveBtn    = document.getElementById('saveBtn')    as HTMLButtonElement;
+
+    this.creditsWidget = document.getElementById('creditsWidget') as HTMLButtonElement;
+  }
+
+  private setupNav(): void {
+    this.navItems.forEach(btn => {
+      btn.addEventListener('click', () => {
+        this.switchSection(btn.dataset.section as Section);
+      });
+    });
+    this.creditsWidget.addEventListener('click', () => {
+      this.switchSection('billing');
+    });
+  }
+
+  private switchSection(section: Section): void {
+    window.location.hash = section;
+
+    this.navItems.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.section === section);
+    });
+
+    this.contentSections.forEach(el => {
+      el.classList.toggle('active', el.dataset.section === section);
+    });
+
+    const showSave = SAVE_SECTIONS.includes(section);
+    this.saveBar.style.display = showSave ? '' : 'none';
+  }
+
+  private readSectionFromHash(): void {
+    const hash = window.location.hash.replace('#', '') as Section;
+    const valid: Section[] = ['settings', 'words', 'billing', 'account', 'advanced'];
+    if (valid.includes(hash)) {
+      this.switchSection(hash);
+    } else {
+      this.switchSection('settings');
     }
   }
 
-  private updateUI(): void {
-    // Update custom word lists
-    this.customBlacklist.value = this.preferences.customBlacklist.join('\n');
-    this.customWhitelist.value = this.preferences.customWhitelist.join('\n');
+  private setupListeners(): void {
+    // Settings toggles — autosave on change
+    this.autoFilterAllVideos.addEventListener('change', () => {
+      this.updateConfirmSubtoggleState();
+      this.autosave();
+    });
+    this.confirmBeforeAutoFilter.addEventListener('change', () => this.autosave());
+    this.autoEnableFiltered.addEventListener('change',    () => this.autosave());
+    this.showTimelineMarkers.addEventListener('change',   () => this.autosave());
 
-    // Update timing settings
-    this.paddingBefore.value = (this.preferences.paddingBeforeMs ?? this.preferences.paddingMs).toString();
-    this.paddingAfter.value = (this.preferences.paddingAfterMs ?? this.preferences.paddingMs).toString();
-    this.mergeThreshold.value = this.preferences.mergeThresholdMs.toString();
+    // Word lists
+    this.customBlacklist.addEventListener('input', () => {
+      this.blacklistCount.textContent = this.countLines(this.customBlacklist.value).toString();
+    });
+    this.customWhitelist.addEventListener('input', () => {
+      this.whitelistCount.textContent = this.countLines(this.customWhitelist.value).toString();
+    });
 
-    // Update behavior settings
-    this.autoEnableFiltered.checked = this.preferences.autoEnableForFilteredVideos !== false;
-    this.autoFilterAllVideos.checked = this.preferences.autoFilterAllVideos === true;
-    this.confirmBeforeAutoFilter.checked = this.preferences.confirmBeforeAutoFilter === true;
-    this.showTimelineMarkers.checked = this.preferences.showTimelineMarkers !== false;
-    this.updateConfirmBeforeAutoFilterEnabledState();
+    // Advanced
+    this.paddingBefore.addEventListener('change', () => this.autosave());
+    this.paddingAfter.addEventListener('change',  () => this.autosave());
+
+    // Save btn
+    this.saveBtn.addEventListener('click', () => this.save());
+
+    // Cache
+    this.clearCacheBtn.addEventListener('click', () => this.clearCache());
+
+    // Account
+    this.signOutBtn?.addEventListener('click',       () => this.signOut());
+    this.signInBtnOptions?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' }));
+
+    // Sidebar back
+    this.sidebarBackBtn?.addEventListener('click', () => window.close());
+
+    // Credit packs
+    this.creditPacks.forEach(pack => {
+      pack.addEventListener('click', () => this.selectCreditPack(pack));
+    });
+    this.buyCreditsBtn?.addEventListener('click', () => {
+      chrome.tabs.create({
+        url: `https://trysafeplay.com/billing?pack=${this.selectedPack.credits}`,
+      });
+    });
   }
 
-  // Greys out the sub-toggle when its parent (auto-filter-all) is off, so
-  // users can see the setting exists but understand it has no effect until
-  // they turn on the parent.
-  private updateConfirmBeforeAutoFilterEnabledState(): void {
+  private selectCreditPack(pack: HTMLButtonElement): void {
+    this.creditPacks.forEach(p => p.classList.toggle('selected', p === pack));
+    const credits = parseInt(pack.dataset.pack ?? '0', 10);
+    const price   = parseInt(pack.dataset.price ?? '0', 10);
+    this.selectedPack = { credits, price };
+    this.buyCreditsLabel.textContent = `Buy ${credits.toLocaleString()} credits · $${price}`;
+  }
+
+  private countLines(value: string): number {
+    return value.split('\n').filter(l => l.trim().length > 0).length;
+  }
+
+  private updateConfirmSubtoggleState(): void {
     const parentOn = this.autoFilterAllVideos.checked;
     this.confirmBeforeAutoFilter.disabled = !parentOn;
-    this.confirmBeforeAutoFilterRow.classList.toggle('is-disabled', !parentOn);
+    this.confirmBeforeAutoFilterRow.classList.toggle('enabled', parentOn);
   }
+
+  // ── Preferences ────────────────────────────────────────────
+
+  private async loadPreferences(): Promise<void> {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'GET_PREFERENCES' });
+      if (res?.success && res.data) {
+        this.prefs = res.data;
+      }
+    } catch { /* BG not ready */ }
+    this.renderPrefs();
+  }
+
+  private renderPrefs(): void {
+    this.autoFilterAllVideos.checked     = this.prefs.autoFilterAllVideos === true;
+    this.confirmBeforeAutoFilter.checked = this.prefs.confirmBeforeAutoFilter === true;
+    this.autoEnableFiltered.checked      = this.prefs.autoEnableForFilteredVideos !== false;
+    this.showTimelineMarkers.checked     = this.prefs.showTimelineMarkers !== false;
+
+    this.customBlacklist.value = this.prefs.customBlacklist.join('\n');
+    this.customWhitelist.value = this.prefs.customWhitelist.join('\n');
+    this.blacklistCount.textContent = this.prefs.customBlacklist.length.toString();
+    this.whitelistCount.textContent = this.prefs.customWhitelist.length.toString();
+
+    this.paddingBefore.value = (this.prefs.paddingBeforeMs ?? this.prefs.paddingMs).toString();
+    this.paddingAfter.value  = (this.prefs.paddingAfterMs  ?? this.prefs.paddingMs).toString();
+
+    this.updateConfirmSubtoggleState();
+  }
+
+  private collectPrefs(): Partial<UserPreferences> {
+    return {
+      autoFilterAllVideos:        this.autoFilterAllVideos.checked,
+      confirmBeforeAutoFilter:    this.confirmBeforeAutoFilter.checked,
+      autoEnableForFilteredVideos: this.autoEnableFiltered.checked,
+      showTimelineMarkers:        this.showTimelineMarkers.checked,
+      customBlacklist: this.customBlacklist.value.split('\n').map(l => l.trim()).filter(Boolean),
+      customWhitelist: this.customWhitelist.value.split('\n').map(l => l.trim()).filter(Boolean),
+      paddingBeforeMs: parseInt(this.paddingBefore.value, 10) || 100,
+      paddingAfterMs:  parseInt(this.paddingAfter.value,  10) || 30,
+    };
+  }
+
+  private async autosave(): Promise<void> {
+    await this.save(/* silent= */ true);
+  }
+
+  private async save(silent = false): Promise<void> {
+    try {
+      const updates = this.collectPrefs();
+      const res = await chrome.runtime.sendMessage({ type: 'SET_PREFERENCES', payload: updates });
+      if (res?.success && res.data) this.prefs = res.data;
+    } catch { /* offline */ }
+
+    if (!silent) {
+      this.saveStatus.textContent = '✓ Saved.';
+      this.saveStatus.classList.add('saved');
+      setTimeout(() => {
+        this.saveStatus.textContent = 'Changes save automatically.';
+        this.saveStatus.classList.remove('saved');
+      }, 1800);
+    }
+  }
+
+  // ── Credits ────────────────────────────────────────────────
+
+  async loadCredits(): Promise<void> {
+    if (!this.authState?.isAuthenticated) return;
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'GET_CREDITS' });
+      if (res?.success && res.data) {
+        const { available, used_this_period, plan_allocation, plan, reset_date } = res.data;
+        this.renderCredits(available, used_this_period, plan_allocation, plan, reset_date);
+      }
+    } catch { /* offline */ }
+  }
+
+  private renderCredits(
+    available: number,
+    used: number,
+    total: number,
+    plan: string,
+    resetDate?: string,
+  ): void {
+    const pct = Math.max(0, Math.min(1, used / total));
+    const planName = this.formatPlanName(plan);
+
+    let resetStr = '';
+    let daysLeft = 0;
+    if (resetDate) {
+      const reset = new Date(resetDate);
+      resetStr = reset.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+      daysLeft = Math.max(0, Math.ceil((reset.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+    }
+
+    // Sidebar widget
+    this.sidebarCredits.textContent   = available.toLocaleString();
+    this.sidebarCreditsOf.textContent = `of ${total.toLocaleString()}`;
+    this.sidebarCreditsFill.style.width = `${(1 - pct) * 100}%`;
+
+    // Billing section
+    this.billingCreditsLeft.textContent = available.toLocaleString();
+    this.billingCreditsOf.textContent   = `of ${total.toLocaleString()} credits left`;
+    this.billingFill.style.width        = `${pct * 100}%`;
+    this.billingUsed.textContent        = `${used.toLocaleString()} used`;
+    this.billingPct.textContent         = `${Math.round(pct * 100)}%`;
+    this.usageCardMeta.textContent      = resetStr
+      ? `${planName} plan · resets ${resetStr}${daysLeft > 0 ? ` (${daysLeft} days)` : ''}`
+      : `${planName} plan`;
+
+    // Stat row — derive what we can from cache + credits
+    this.renderUsageStats(used);
+  }
+
+  private async renderUsageStats(used: number): Promise<void> {
+    try {
+      const storage = await chrome.storage.local.get('cachedTranscripts');
+      const videosFiltered = Object.keys(storage.cachedTranscripts ?? {}).length;
+      this.statVideos.textContent = videosFiltered.toLocaleString();
+      this.statAvg.textContent    = videosFiltered > 0
+        ? (used / videosFiltered).toFixed(1)
+        : '—';
+      this.statWords.textContent  = '—';
+    } catch {
+      this.statVideos.textContent = '—';
+      this.statAvg.textContent    = '—';
+      this.statWords.textContent  = '—';
+    }
+  }
+
+  private formatPlanName(plan: string): string {
+    switch (plan) {
+      case 'base':         return 'Base';
+      case 'professional': return 'Pro';
+      case 'unlimited':    return 'Unlimited';
+      default:             return 'Free';
+    }
+  }
+
+  // ── Auth ────────────────────────────────────────────────────
+
+  private async loadAuthState(): Promise<void> {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'GET_USER_PROFILE' });
+      if (res?.success && res.data) {
+        this.authState = res.data as AuthState;
+      } else {
+        this.authState = { isAuthenticated: false, user: null, subscription: null, credits: null, token: null };
+      }
+    } catch {
+      this.authState = { isAuthenticated: false, user: null, subscription: null, credits: null, token: null };
+    }
+    this.renderAccount();
+  }
+
+  private renderAccount(): void {
+    if (!this.authState) return;
+    const signedIn = this.authState.isAuthenticated && !!this.authState.user;
+    this.accountSignedIn.style.display  = signedIn ? '' : 'none';
+    this.accountSignedOut.style.display = signedIn ? 'none' : '';
+
+    if (signedIn && this.authState.user) {
+      const { full_name, email } = this.authState.user;
+      const initials = (full_name ?? email ?? '?')
+        .split(' ')
+        .map(w => w[0])
+        .slice(0, 2)
+        .join('')
+        .toUpperCase();
+      this.accountAvatarLg.textContent = initials;
+      this.accountNameLg.textContent   = full_name ?? email ?? '';
+      this.accountEmailLg.textContent  = email ?? '';
+    }
+  }
+
+  private async signOut(): Promise<void> {
+    try {
+      await chrome.runtime.sendMessage({ type: 'LOGOUT' });
+      await this.loadAuthState();
+    } catch { /* ignore */ }
+  }
+
+  // ── Cache ────────────────────────────────────────────────────
 
   private async loadCacheCount(): Promise<void> {
     try {
       const storage = await chrome.storage.local.get('cachedTranscripts');
-      const cached = storage.cachedTranscripts || {};
-      const count = Object.keys(cached).length;
-      this.cacheCount.textContent = count.toString();
-    } catch (error) {
-      console.error('Failed to load cache count:', error);
-      this.cacheCount.textContent = '0';
-    }
-  }
-
-  private setupEventListeners(): void {
-    // Save button
-    this.saveBtn.addEventListener('click', () => {
-      this.saveSettings();
-    });
-
-    // Clear cache button
-    this.clearCacheBtn.addEventListener('click', () => {
-      this.clearCache();
-    });
-
-    // Keep the sub-toggle's enabled state in sync with its parent.
-    this.autoFilterAllVideos.addEventListener('change', () => {
-      this.updateConfirmBeforeAutoFilterEnabledState();
-    });
-
-    // Listen for preference updates from other tabs
-    chrome.runtime.onMessage.addListener((message) => {
-      if (message.type === 'PREFERENCES_UPDATED' && message.payload) {
-        this.preferences = message.payload;
-        this.updateUI();
-      }
-    });
-  }
-
-  private parseWordList(text: string): string[] {
-    return text
-      .split('\n')
-      .map(word => word.trim().toLowerCase())
-      .filter(word => word.length > 0);
-  }
-
-  private async saveSettings(): Promise<void> {
-    try {
-      const updates: Partial<UserPreferences> = {
-        customBlacklist: this.parseWordList(this.customBlacklist.value),
-        customWhitelist: this.parseWordList(this.customWhitelist.value),
-        paddingBeforeMs: parseInt(this.paddingBefore.value, 10) || 100,
-        paddingAfterMs: parseInt(this.paddingAfter.value, 10) || 30,
-        mergeThresholdMs: parseInt(this.mergeThreshold.value, 10) || 100,
-        autoEnableForFilteredVideos: this.autoEnableFiltered.checked,
-        autoFilterAllVideos: this.autoFilterAllVideos.checked,
-        confirmBeforeAutoFilter: this.confirmBeforeAutoFilter.checked,
-        showTimelineMarkers: this.showTimelineMarkers.checked,
-      };
-
-      const response = await chrome.runtime.sendMessage({
-        type: 'SET_PREFERENCES',
-        payload: updates,
-      });
-
-      if (response.success) {
-        this.preferences = response.data;
-        this.showSaveStatus('Settings saved successfully!', 'success');
-      } else {
-        this.showSaveStatus('Failed to save settings', 'error');
-      }
-    } catch (error) {
-      console.error('Failed to save settings:', error);
-      this.showSaveStatus('Failed to save settings', 'error');
+      const count = Object.keys(storage.cachedTranscripts ?? {}).length;
+      this.cacheVideoCount.textContent = count.toString();
+    } catch {
+      this.cacheVideoCount.textContent = '0';
     }
   }
 
   private async clearCache(): Promise<void> {
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' });
-
-      if (response.success) {
-        this.cacheCount.textContent = '0';
-        this.showSaveStatus('Cache cleared!', 'success');
-      } else {
-        this.showSaveStatus('Failed to clear cache', 'error');
-      }
-    } catch (error) {
-      console.error('Failed to clear cache:', error);
-      this.showSaveStatus('Failed to clear cache', 'error');
-    }
-  }
-
-  private showSaveStatus(message: string, type: 'success' | 'error'): void {
-    this.saveStatus.textContent = message;
-    this.saveStatus.className = `save-status ${type}`;
-
-    // Clear after 3 seconds
-    setTimeout(() => {
-      this.saveStatus.textContent = '';
-      this.saveStatus.className = 'save-status';
-    }, 3000);
+      await chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' });
+      this.cacheVideoCount.textContent = '0';
+      this.clearCacheBtn.textContent = 'Cleared';
+      setTimeout(() => { this.clearCacheBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Clear cache`; }, 1500);
+    } catch { /* ignore */ }
   }
 }
 
-// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
-  const options = new OptionsController();
-  options.initialize();
+  new OptionsController().initialize();
 });

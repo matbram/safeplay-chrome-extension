@@ -126,15 +126,7 @@ export class TimelineMarkers {
       for (const root of roots) {
         for (const selector of shortsSelectors) {
           const element = root.querySelector<HTMLElement>(selector);
-          if (element) {
-            // Skip elements that aren't actually visible — e.g. the
-            // hidden legacy player inside ytp-hide-controls that still
-            // exposes its DOM.
-            const rect = element.getBoundingClientRect();
-            if (rect.width < 10 || rect.height < 1) {
-              this.log('Skipping hidden/zero-size candidate:', selector, `(${rect.width}x${rect.height})`);
-              continue;
-            }
+          if (element && this.isUsableProgressBar(element)) {
             this.log('Found Shorts progress bar:', selector, 'root:', root === document ? 'document' : 'active reel');
             return element;
           }
@@ -148,9 +140,10 @@ export class TimelineMarkers {
     // First, try to find where ytp-timed-markers-container lives
     // and inject as a sibling to it
     const timedMarkersContainer = document.querySelector<HTMLElement>('.ytp-timed-markers-container');
-    if (timedMarkersContainer?.parentElement) {
-      this.log('Found ytp-timed-markers-container, using its parent:', timedMarkersContainer.parentElement.className);
-      return timedMarkersContainer.parentElement;
+    const timedMarkersParent = timedMarkersContainer?.parentElement;
+    if (timedMarkersParent && this.isUsableProgressBar(timedMarkersParent)) {
+      this.log('Found ytp-timed-markers-container, using its parent:', timedMarkersParent.className);
+      return timedMarkersParent;
     }
 
     // Fallback selectors
@@ -163,13 +156,33 @@ export class TimelineMarkers {
 
     for (const selector of selectors) {
       const element = document.querySelector<HTMLElement>(selector);
-      if (element) {
+      if (element && this.isUsableProgressBar(element)) {
         this.log('Found progress bar element:', selector);
         return element;
       }
     }
 
     return null;
+  }
+
+  /**
+   * Guard against binding to a progress bar that's been detached from the
+   * live document (an SPA-nav "ghost") or one that's hidden (zero-size).
+   * Without this, on a YouTube SPA nav we can grab the old video's
+   * still-in-memory progress bar, append our overlay to it, and silently
+   * render markers into a DOM subtree that isn't on screen.
+   */
+  private isUsableProgressBar(element: HTMLElement): boolean {
+    if (!element.isConnected) {
+      this.log('Skipping detached progress bar candidate');
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 10 || rect.height < 1) {
+      this.log('Skipping hidden/zero-size progress bar candidate:', `(${rect.width}x${rect.height})`);
+      return false;
+    }
+    return true;
   }
 
   /**

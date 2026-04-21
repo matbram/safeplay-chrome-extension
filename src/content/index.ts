@@ -227,6 +227,20 @@ class SafePlayContentScript {
 
     log('Filter button clicked for:', youtubeId);
 
+    // If the master switch is off, flipping on the button should also flip
+    // the popup's On/Off toggle. Update local state synchronously and fire
+    // SET_PREFERENCES so the popup + options page catch up via
+    // PREFERENCES_UPDATED (we've already updated our local copy, so the
+    // handler's master-toggle-sync branch is a no-op on this tab).
+    if (this.preferences.enabled === false) {
+      log('Master toggle was off — flipping on before filtering');
+      this.preferences = { ...this.preferences, enabled: true };
+      chrome.runtime.sendMessage({
+        type: 'SET_PREFERENCES',
+        payload: { enabled: true },
+      }).catch(() => {});
+    }
+
     // Step 0: Check authentication via background script (uses getAuthToken with auto-refresh)
     try {
       const authResponse = await safeSendMessage<{ success: boolean; data?: { authenticated: boolean } }>({
@@ -1043,6 +1057,18 @@ class SafePlayContentScript {
   private async toggleFilterFromButton(): Promise<void> {
     if (!this.videoController) return;
 
+    // Master is off → click means "turn master on". The PREFERENCES_UPDATED
+    // handler's resume branch will restore the filter for this video if we
+    // have cached intervals, so we don't need to duplicate resume logic here.
+    if (this.preferences.enabled === false) {
+      log('Button click with master off — flipping master on');
+      chrome.runtime.sendMessage({
+        type: 'SET_PREFERENCES',
+        payload: { enabled: true },
+      }).catch(() => {});
+      return;
+    }
+
     const playerButton = document.querySelector('.safeplay-player-controls');
 
     if (this.isFilterActive) {
@@ -1120,11 +1146,41 @@ class SafePlayContentScript {
     switch (message.type) {
       case 'PREFERENCES_UPDATED': {
         const newPrefs = message.payload as UserPreferences;
+        const prevEnabled = this.preferences.enabled !== false;
         const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
         const prevAutoAll = this.preferences.autoFilterAllVideos === true;
         this.preferences = newPrefs;
         this.videoController?.updatePreferences(newPrefs);
         this.captionFilter.updatePreferences(newPrefs);
+
+        // Master toggle sync: mirror prefs.enabled onto the injected button,
+        // captions, timeline markers, and isFilterActive so the popup's
+        // On/Off switch and the watch-page button track each other.
+        const nowEnabled = newPrefs.enabled !== false;
+        if (prevEnabled && !nowEnabled && this.isFilterActive) {
+          // Master just went off while filtering was active.
+          this.captionFilter.stop();
+          this.timelineMarkers?.hide();
+          this.isFilterActive = false;
+          this.updateButtonState({
+            state: 'paused',
+            text: 'Paused',
+            intervalCount: this.lastIntervalCount,
+          });
+          log('Filter paused by master toggle (popup Off)');
+        } else if (!prevEnabled && nowEnabled && this.currentVideoId && this.lastIntervalCount > 0) {
+          // Master just came back on with cached filter data — resume in place.
+          this.videoController?.resume();
+          this.captionFilter.start();
+          this.timelineMarkers?.show();
+          this.isFilterActive = true;
+          this.updateButtonState({
+            state: 'filtering',
+            text: `Censored (${this.lastIntervalCount})`,
+            intervalCount: this.lastIntervalCount,
+          });
+          log('Filter resumed by master toggle (popup On)');
+        }
 
         const nowShowMarkers = newPrefs.showTimelineMarkers !== false;
         if (prevShowMarkers !== nowShowMarkers) {
@@ -1219,9 +1275,13 @@ class SafePlayContentScript {
     const currentNavId = this.navigationId;
     log(`Navigation detected, navigationId: ${currentNavId}`);
 
-    // Stop current filter if any
+    // Stop current filter if any. destroy() (not stop()) tears down the
+    // Web Audio graph so the next video builds a fresh MediaElementSourceNode
+    // bound to the new <video> element. stop() alone leaves the audio pipe
+    // wired to the previous video, which is why audio wasn't being muted on
+    // second/third videos in the same SPA session.
     if (this.videoController) {
-      this.videoController.stop();
+      this.videoController.destroy();
     }
 
     // Stop caption filter
@@ -1262,11 +1322,49 @@ class SafePlayContentScript {
     if (this.isWatchPage() || this.isShortsPage()) {
       this.currentVideoId = this.getVideoIdFromUrl();
 
-      // Check for auto-enable after a short delay (allow button to inject first)
+      // Check for auto-enable once YouTube's new <video> element is actually
+      // in the DOM. Used to be a blind setTimeout(500) that was too slow on
+      // fast devices and potentially too short on slow ones; waiting for the
+      // real signal means auto-filter fires as soon as the video is ready.
       if (this.currentVideoId) {
-        setTimeout(() => this.checkAutoEnable(), 500);
+        this.waitForVideoReady(() => this.checkAutoEnable());
       }
     }
+  }
+
+  /**
+   * Fire the callback once a <video> element is present in the DOM after an
+   * SPA navigation. Resolves immediately if one is already there; otherwise
+   * sets up a MutationObserver on <body> and tears it down as soon as the
+   * video appears. A 5-second safety timeout fires the callback anyway so we
+   * never hang forever if something unexpected happens to YouTube's DOM.
+   */
+  private waitForVideoReady(callback: () => void): void {
+    if (this.getVideoElement()) {
+      callback();
+      return;
+    }
+
+    let fired = false;
+    const fire = () => {
+      if (fired) return;
+      fired = true;
+      observer.disconnect();
+      window.clearTimeout(timeoutId);
+      callback();
+    };
+
+    const observer = new MutationObserver(() => {
+      if (this.getVideoElement()) {
+        fire();
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    const timeoutId = window.setTimeout(() => {
+      log('waitForVideoReady: 5s safety timeout fired without seeing <video>');
+      fire();
+    }, 5000);
   }
 
   // Check if we should auto-enable filter for this video.

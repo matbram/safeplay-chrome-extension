@@ -12,6 +12,7 @@ module.exports = (env, argv) => {
       content: './src/content/index.ts',
       popup: './src/popup/index.ts',
       options: './src/options/index.ts',
+      onboarding: './src/onboarding/index.ts',
     },
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -56,6 +57,11 @@ module.exports = (env, argv) => {
         template: './src/options/options.html',
         filename: 'options.html',
         chunks: ['options'],
+      }),
+      new HtmlWebpackPlugin({
+        template: './src/onboarding/onboarding.html',
+        filename: 'onboarding.html',
+        chunks: ['onboarding'],
       }),
     ],
     devtool: isDev ? 'inline-source-map' : 'source-map',

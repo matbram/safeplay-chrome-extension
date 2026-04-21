@@ -48,10 +48,28 @@ export class VideoController {
 
   constructor(options: VideoControllerOptions = {}) {
     this.options = options;
-    this.audioFilter = new AudioFilter({
+    this.audioFilter = this.createAudioFilter();
+  }
+
+  private createAudioFilter(): AudioFilter {
+    return new AudioFilter({
       onMuteStart: (interval) => this.onMuteStart(interval),
       onMuteEnd: () => this.onMuteEnd(),
     });
+  }
+
+  // Tear down everything that's bound to the current video (audio graph, DOM
+  // overlay, transcript) and spin up a fresh AudioFilter so the next
+  // initialize() builds a new audio graph for the new video.
+  destroy(): void {
+    this.audioFilter.destroy();
+    this.audioFilter = this.createAudioFilter();
+    this.hideStatusOverlay();
+    this.video = null;
+    this.transcript = null;
+    this.muteIntervals = [];
+    this.youtubeId = null;
+    this.updateStatus('idle');
   }
 
   // Initialize controller for a video
@@ -101,6 +119,16 @@ export class VideoController {
 
     try {
       this.updateStatus('loading');
+
+      // Short-circuit: if the caller already handed us a transcript via
+      // onTranscriptReceived(), don't round-trip to the background for
+      // GET_FILTER — just process what we have. This eliminates the
+      // double-fetch (and a double history-record write for cached
+      // videos) called out in docs/CODEBASE_AUDIT.md §4.
+      if (this.transcript) {
+        await this.processTranscript();
+        return;
+      }
 
       // Check if extension context is still valid
       if (!isExtensionContextValid()) {
@@ -210,7 +238,10 @@ export class VideoController {
       return;
     }
 
-    // Re-parse with new preferences
+    // Re-parse with new preferences. Note: on a disabled→enabled transition
+    // we intentionally do NOT auto-start the audio filter here — the content
+    // script coordinates the resume (audio + captions + markers + button)
+    // via its PREFERENCES_UPDATED handler so all surfaces stay in sync.
     if (this.transcript) {
       this.muteIntervals = parseTranscript(this.transcript, preferences);
       this.audioFilter.updateIntervals(this.muteIntervals);

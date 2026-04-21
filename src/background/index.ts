@@ -141,9 +141,21 @@ async function initBadge(): Promise<void> {
 const CREDIT_REFRESH_ALARM = 'safeplay_credit_refresh';
 const CREDIT_REFRESH_INTERVAL_MIN = 2; // Every 2 minutes
 
-chrome.alarms.create(CREDIT_REFRESH_ALARM, {
-  periodInMinutes: CREDIT_REFRESH_INTERVAL_MIN,
-});
+// Create the alarm only if it doesn't already exist. Previously this ran at
+// module top level on every service-worker wake, which resets the alarm
+// timer; if wake-ups happened more often than every 2 minutes (normal while
+// a user is active), the alarm never actually fired. Called from
+// onInstalled/onStartup below so Chrome keeps the worker alive long enough
+// for the create() to persist (docs/CODEBASE_AUDIT.md §4).
+async function ensureCreditRefreshAlarm(): Promise<void> {
+  const existing = await chrome.alarms.get(CREDIT_REFRESH_ALARM);
+  if (!existing) {
+    await chrome.alarms.create(CREDIT_REFRESH_ALARM, {
+      periodInMinutes: CREDIT_REFRESH_INTERVAL_MIN,
+    });
+    log('Credit refresh alarm created');
+  }
+}
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== CREDIT_REFRESH_ALARM) return;
@@ -410,12 +422,10 @@ async function handleGetFilter(
   if (cached) {
     log('Found in local cache, returning cached transcript');
 
-    // Record history for cached video (fire and forget - don't await)
-    recordCachedHistory({
-      youtubeId,
-    }).catch(() => {
-      // Silently ignore - already logged in the function
-    });
+    // Intentionally no recordCachedHistory() here — the canonical
+    // user-triggered path is handleStartFilter, which already records it.
+    // Previously both paths wrote, producing two history rows per filter
+    // on cached videos (docs/CODEBASE_AUDIT.md §4).
 
     return {
       success: true,
@@ -595,7 +605,7 @@ async function handleSetPreferences(
 ): Promise<MessageResponse<UserPreferences>> {
   const updated = await setPreferences(payload);
 
-  // Broadcast to all YouTube tabs
+  // Broadcast to all YouTube tabs (content scripts)
   const tabs = await chrome.tabs.query({ url: '*://www.youtube.com/*' });
   for (const tab of tabs) {
     if (tab.id) {
@@ -605,6 +615,13 @@ async function handleSetPreferences(
       }).catch(() => {});
     }
   }
+
+  // Also broadcast to extension contexts (popup, options page) so an
+  // update from one surface lands on every other surface immediately.
+  chrome.runtime.sendMessage({
+    type: 'PREFERENCES_UPDATED',
+    payload: updated,
+  }).catch(() => {});
 
   return { success: true, data: updated };
 }
@@ -783,12 +800,19 @@ chrome.action.onClicked.addListener((_tab) => {
 chrome.runtime.onInstalled.addListener(async (details) => {
   log('Extension installed/updated:', details.reason);
   await initBadge();
+  await ensureCreditRefreshAlarm();
+
+  if (details.reason === 'install') {
+    // Show onboarding on first install
+    chrome.tabs.create({ url: chrome.runtime.getURL('onboarding.html') });
+  }
 });
 
 // Handle browser startup — also initialize badge
 chrome.runtime.onStartup.addListener(async () => {
   log('Browser started');
   await initBadge();
+  await ensureCreditRefreshAlarm();
 });
 
 // Handle auth callback from website (deep-link auth flow)

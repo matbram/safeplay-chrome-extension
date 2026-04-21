@@ -58,6 +58,14 @@ export class AudioFilter {
     intervals: MuteInterval[],
     mode: FilterMode = 'mute'
   ): void {
+    // Self-heal: if we're being asked to bind to a different video than the
+    // one our audio graph is currently wired to, tear the old graph down so
+    // initializeAudioContext() below can build a fresh one. Defense in depth
+    // for any code path that forgets to destroy() on SPA navigation.
+    if (this.audioContext && this.video && this.video !== video) {
+      this.teardownAudioGraph();
+    }
+
     this.video = video;
     this.muteIntervals = intervals;
     this.filterMode = mode;
@@ -99,7 +107,38 @@ export class AudioFilter {
       console.log('[SafePlay] Audio context initialized with smooth fading');
     } catch (error) {
       console.error('[SafePlay] Failed to initialize audio context:', error);
-      // Fallback: will use video.muted instead
+      // Clean up partial state so a future initialize() can retry instead
+      // of silently no-op'ing on the audioContext-already-set guard above.
+      // The fadeToVolume() path already falls back to video.muted when
+      // gainNode/audioContext are null, so mute still works.
+      if (this.audioContext) {
+        try { this.audioContext.close(); } catch { /* ignore */ }
+        this.audioContext = null;
+      }
+      this.sourceNode = null;
+      this.gainNode = null;
+    }
+  }
+
+  // Tear down the Web Audio graph without running full destroy() (which also
+  // stops the monitoring loop and removes video event listeners). Used by
+  // initialize() when the video element changes out from under us.
+  private teardownAudioGraph(): void {
+    if (this.sourceNode) {
+      try { this.sourceNode.disconnect(); } catch { /* ignore */ }
+      this.sourceNode = null;
+    }
+    if (this.gainNode) {
+      try { this.gainNode.disconnect(); } catch { /* ignore */ }
+      this.gainNode = null;
+    }
+    if (this.bleepGain) {
+      try { this.bleepGain.disconnect(); } catch { /* ignore */ }
+      this.bleepGain = null;
+    }
+    if (this.audioContext) {
+      try { this.audioContext.close(); } catch { /* ignore */ }
+      this.audioContext = null;
     }
   }
 
