@@ -203,7 +203,6 @@ export class VideoController {
 
   // Update preferences
   updatePreferences(preferences: UserPreferences): void {
-    const wasDisabled = this.preferences?.enabled === false;
     this.preferences = preferences;
 
     if (!preferences.enabled) {
@@ -211,20 +210,14 @@ export class VideoController {
       return;
     }
 
-    // Re-parse with new preferences
+    // Re-parse with new preferences. Note: on a disabled→enabled transition
+    // we intentionally do NOT auto-start the audio filter here — the content
+    // script coordinates the resume (audio + captions + markers + button)
+    // via its PREFERENCES_UPDATED handler so all surfaces stay in sync.
     if (this.transcript) {
       this.muteIntervals = parseTranscript(this.transcript, preferences);
       this.audioFilter.updateIntervals(this.muteIntervals);
       this.audioFilter.updateMode(preferences.filterMode);
-
-      // Transitioning from disabled back to enabled with intervals ready —
-      // resume filtering so the user doesn't have to re-click the button.
-      if (wasDisabled && this.muteIntervals.length > 0 && this.video) {
-        this.audioFilter.initialize(this.video, this.muteIntervals, preferences.filterMode);
-        this.audioFilter.start();
-        this.updateStatus('active');
-        this.showStatusOverlay();
-      }
     }
   }
 
