@@ -120,6 +120,16 @@ export class VideoController {
     try {
       this.updateStatus('loading');
 
+      // Short-circuit: if the caller already handed us a transcript via
+      // onTranscriptReceived(), don't round-trip to the background for
+      // GET_FILTER — just process what we have. This eliminates the
+      // double-fetch (and a double history-record write for cached
+      // videos) called out in docs/CODEBASE_AUDIT.md §4.
+      if (this.transcript) {
+        await this.processTranscript();
+        return;
+      }
+
       // Check if extension context is still valid
       if (!isExtensionContextValid()) {
         this.updateStatus('error', 0, 'Extension reloaded. Please refresh the page.');
