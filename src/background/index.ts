@@ -600,17 +600,43 @@ async function handleCheckJob(
   }
 }
 
+// Singleflight so simultaneous GET_CREDITS calls (popup + options open at
+// once) share one network request instead of firing duplicates.
+let inflightCreditFetch: ReturnType<typeof getCreditBalance> | null = null;
+function fetchCreditBalanceSingleflight(): ReturnType<typeof getCreditBalance> {
+  if (inflightCreditFetch) return inflightCreditFetch;
+  inflightCreditFetch = getCreditBalance().finally(() => {
+    inflightCreditFetch = null;
+  });
+  return inflightCreditFetch;
+}
+
+// One-shot retry after transient refresh failure so the badge self-corrects
+// in ~10s instead of waiting for the next periodic alarm (~2min).
+let creditRefreshRetryTimer: number | null = null;
+function scheduleCreditRefreshRetry(): void {
+  if (creditRefreshRetryTimer !== null) return;
+  creditRefreshRetryTimer = self.setTimeout(() => {
+    creditRefreshRetryTimer = null;
+    refreshCredits();
+  }, 10_000);
+}
+
 // Fetch fresh credit balance from API and update storage + badge directly
 async function refreshCredits(): Promise<void> {
   try {
-    const response = await getCreditBalance();
+    const response = await fetchCreditBalanceSingleflight();
     if (response.success && response.credits) {
       await setCreditInfo(response.credits);
       updateBadge(response.credits);
       log('Credits refreshed from API:', response.credits.available);
+      return;
     }
+    log('Credits refresh returned unsuccessful response; scheduling retry');
+    scheduleCreditRefreshRetry();
   } catch (error) {
     log('Failed to refresh credits:', error);
+    scheduleCreditRefreshRetry();
   }
 }
 
@@ -625,9 +651,9 @@ async function handleGetCredits(): Promise<MessageResponse<CreditInfo>> {
     return { success: true, data: cachedInfo };
   }
 
-  // Fetch from API
+  // Fetch from API (shared across concurrent callers)
   try {
-    const response = await getCreditBalance();
+    const response = await fetchCreditBalanceSingleflight();
     log('Credit balance response:', JSON.stringify(response));
 
     if (!response.success) {
@@ -873,9 +899,30 @@ chrome.action.onClicked.addListener((_tab) => {
   log('Extension icon clicked');
 });
 
+// Current schema version. Bump every time a storage shape changes,
+// add a matching migration step in runMigrations().
+const CURRENT_SCHEMA_VERSION = 1;
+const SCHEMA_VERSION_KEY = 'safeplay_schema_version';
+
+async function runMigrations(): Promise<void> {
+  const result = await chrome.storage.local.get(SCHEMA_VERSION_KEY);
+  const stored = result[SCHEMA_VERSION_KEY];
+  const fromVersion = typeof stored === 'number' ? stored : 0;
+
+  if (fromVersion >= CURRENT_SCHEMA_VERSION) return;
+
+  log(`Running storage migrations from v${fromVersion} to v${CURRENT_SCHEMA_VERSION}`);
+  // Future migrations go here, one block per version bump:
+  // if (fromVersion < 2) { ... migrate v1 -> v2 ... }
+
+  await chrome.storage.local.set({ [SCHEMA_VERSION_KEY]: CURRENT_SCHEMA_VERSION });
+  log(`Storage migrations complete; now at v${CURRENT_SCHEMA_VERSION}`);
+}
+
 // Handle installation/update — initialize badge within event handler so worker stays alive
 chrome.runtime.onInstalled.addListener(async (details) => {
   log('Extension installed/updated:', details.reason);
+  await runMigrations();
   await initBadge();
   await ensureCreditRefreshAlarm();
 
@@ -917,6 +964,40 @@ chrome.runtime.onMessageExternal.addListener(
           hasUserId: !!message.userId,
           userId: message.userId,
         });
+
+        // Origin was validated above, but we still validate the payload
+        // shape. A bug on the website side (or an older version talking
+        // to a newer extension) could send a malformed message that
+        // poisons storage with undefined token / wrong expiry type /
+        // missing user id, causing cryptic downstream failures later.
+        if (typeof message.token !== 'string' || message.token.length === 0) {
+          logError('AUTH_TOKEN rejected: token is missing or not a string');
+          sendResponse({ success: false, error: 'Invalid auth payload: token' });
+          return;
+        }
+        if (
+          message.refreshToken !== undefined &&
+          (typeof message.refreshToken !== 'string' || message.refreshToken.length === 0)
+        ) {
+          logError('AUTH_TOKEN rejected: refreshToken is present but not a non-empty string');
+          sendResponse({ success: false, error: 'Invalid auth payload: refreshToken' });
+          return;
+        }
+        if (
+          message.expiresAt !== undefined &&
+          message.expiresAt !== null &&
+          typeof message.expiresAt !== 'number' &&
+          typeof message.expiresAt !== 'string'
+        ) {
+          logError('AUTH_TOKEN rejected: expiresAt is present but not number/string');
+          sendResponse({ success: false, error: 'Invalid auth payload: expiresAt' });
+          return;
+        }
+        if (message.userId !== undefined && typeof message.userId !== 'string') {
+          logError('AUTH_TOKEN rejected: userId is present but not a string');
+          sendResponse({ success: false, error: 'Invalid auth payload: userId' });
+          return;
+        }
 
         import('../utils/storage').then(async ({
           setAuthToken,
