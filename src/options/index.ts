@@ -1,4 +1,12 @@
-import { UserPreferences, DEFAULT_PREFERENCES, AuthState } from '../types';
+import {
+  UserPreferences,
+  DEFAULT_PREFERENCES,
+  AuthState,
+  UserProfile,
+  UserSubscription,
+  UserCredits,
+  CreditInfo,
+} from '../types';
 import './options.css';
 
 type Section = 'settings' | 'words' | 'billing' | 'account' | 'advanced';
@@ -78,6 +86,11 @@ class OptionsController {
     // during startup (e.g. CREDIT_UPDATE after a just-completed filter) aren't dropped.
     this.setupMessageListener();
 
+    // Paint cached account + credits first so the page never opens with
+    // blank sections. Revalidation below replaces stale values once the
+    // background round-trip completes.
+    await this.renderFromCache();
+
     await Promise.all([
       this.loadPreferences(),
       this.loadAuthState(),
@@ -86,6 +99,46 @@ class OptionsController {
 
     this.loadCredits();
     this.readSectionFromHash();
+  }
+
+  // Read last-known auth + credits from chrome.storage.local and render
+  // immediately — same pattern as the popup. Stale data beats a blank
+  // flash for 1-2 seconds while loadAuthState / loadCredits revalidate.
+  private async renderFromCache(): Promise<void> {
+    try {
+      const result = await chrome.storage.local.get([
+        'safeplay_auth_token',
+        'safeplay_user_profile',
+        'safeplay_user_subscription',
+        'safeplay_user_credits',
+        'safeplay_credit_info',
+      ]);
+
+      const token        = (result['safeplay_auth_token']        as string           | undefined) ?? null;
+      const profile      = (result['safeplay_user_profile']      as UserProfile      | undefined) ?? null;
+      const subscription = (result['safeplay_user_subscription'] as UserSubscription | undefined) ?? null;
+      const userCredits  = (result['safeplay_user_credits']      as UserCredits      | undefined) ?? null;
+      const creditInfo   = (result['safeplay_credit_info']       as CreditInfo       | undefined) ?? null;
+
+      this.authState = {
+        isAuthenticated: !!token,
+        user: profile,
+        subscription,
+        credits: userCredits,
+        token,
+      };
+      this.renderAccount();
+
+      if (this.authState.isAuthenticated && creditInfo) {
+        this.renderCredits(
+          creditInfo.available,
+          creditInfo.used_this_period,
+          creditInfo.plan_allocation,
+          creditInfo.plan ?? 'free',
+          creditInfo.reset_date,
+        );
+      }
+    } catch { /* no cache yet — sections stay at their HTML default */ }
   }
 
   private setupMessageListener(): void {
@@ -308,20 +361,42 @@ class OptionsController {
   }
 
   private async save(silent = false): Promise<void> {
+    let saved = false;
+    let errorMsg: string | null = null;
     try {
       const updates = this.collectPrefs();
       const res = await chrome.runtime.sendMessage({ type: 'SET_PREFERENCES', payload: updates });
-      if (res?.success && res.data) this.prefs = res.data;
-    } catch { /* offline */ }
-
-    if (!silent) {
-      this.saveStatus.textContent = '✓ Saved.';
-      this.saveStatus.classList.add('saved');
-      setTimeout(() => {
-        this.saveStatus.textContent = 'Changes save automatically.';
-        this.saveStatus.classList.remove('saved');
-      }, 1800);
+      if (res?.success && res.data) {
+        this.prefs = res.data;
+        saved = true;
+      } else {
+        errorMsg = (res?.error as string) || "Couldn't save — try again.";
+      }
+    } catch {
+      errorMsg = "Couldn't save — you may be offline.";
     }
+
+    if (saved) {
+      if (!silent) {
+        this.saveStatus.textContent = '✓ Saved.';
+        this.saveStatus.classList.add('saved');
+        this.saveStatus.classList.remove('error');
+        setTimeout(() => {
+          this.saveStatus.textContent = 'Changes save automatically.';
+          this.saveStatus.classList.remove('saved');
+        }, 1800);
+      }
+      return;
+    }
+
+    // Surface the failure instead of silently pretending success.
+    this.saveStatus.textContent = errorMsg || 'Save failed.';
+    this.saveStatus.classList.add('error');
+    this.saveStatus.classList.remove('saved');
+    setTimeout(() => {
+      this.saveStatus.textContent = 'Changes save automatically.';
+      this.saveStatus.classList.remove('error');
+    }, silent ? 3000 : 2500);
   }
 
   // ── Credits ────────────────────────────────────────────────

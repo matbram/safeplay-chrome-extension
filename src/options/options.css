@@ -653,3 +653,4 @@ a { color: inherit; text-decoration: none; }
   gap: 6px;
 }
 .save-status.saved { color: var(--success); }
+.save-status.error { color: var(--danger); }
