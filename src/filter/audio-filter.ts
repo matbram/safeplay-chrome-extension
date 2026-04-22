@@ -13,6 +13,11 @@ export class AudioFilter {
   private isMuted = false;
   private isFading = false;
   private isBleeping = false; // Track if bleep should be playing
+  // Track which specific interval is currently being muted so we can fire
+  // onMuteEnd+onMuteStart transitions when the user seeks directly from
+  // inside one mute interval to inside another — otherwise the UI tied
+  // to "which word is muted right now" gets stuck on the previous word.
+  private currentMuteInterval: MuteInterval | null = null;
 
   // Web Audio API for smooth volume control
   private audioContext: AudioContext | null = null;
@@ -121,9 +126,14 @@ export class AudioFilter {
   }
 
   // Tear down the Web Audio graph without running full destroy() (which also
-  // stops the monitoring loop and removes video event listeners). Used by
-  // initialize() when the video element changes out from under us.
+  // stops the monitoring loop). Used by initialize() when the video element
+  // changes out from under us. We DO remove video event listeners here —
+  // otherwise the old <video> element (still referenced elsewhere, especially
+  // in YouTube's preloaded Shorts player pool) keeps firing pause/play/ended/
+  // seeking events into our handlers, which then reference stale filter state
+  // and keep a live reference to this filter instance alive.
   private teardownAudioGraph(): void {
+    this.removeVideoEventListeners();
     if (this.sourceNode) {
       try { this.sourceNode.disconnect(); } catch { /* ignore */ }
       this.sourceNode = null;
@@ -309,9 +319,18 @@ export class AudioFilter {
     const approachingInterval = this.findApproachingInterval(currentTime);
 
     if (activeInterval) {
-      // We're inside a mute interval - ensure volume is 0
       if (!this.isMuted) {
+        // Not yet muted — enter this interval.
         this.startMute(activeInterval);
+      } else if (this.currentMuteInterval !== activeInterval) {
+        // Already muted, but the user just seeked straight into a
+        // DIFFERENT mute interval without passing through "unmuted"
+        // first. Fire the UI callbacks so anything tracking
+        // "which word is muted right now" updates; audio stays
+        // muted the whole time so there's no pop.
+        if (this.onMuteEnd) this.onMuteEnd();
+        this.currentMuteInterval = activeInterval;
+        if (this.onMuteStart) this.onMuteStart(activeInterval);
       }
     } else if (approachingInterval) {
       // We're approaching an interval - start fading out
@@ -362,6 +381,7 @@ export class AudioFilter {
     this.fadeToVolume(0, () => {
       this.isFading = false;
       this.isMuted = true;
+      this.currentMuteInterval = interval;
       if (this.onMuteStart) {
         this.onMuteStart(interval);
       }
@@ -376,6 +396,7 @@ export class AudioFilter {
   // Immediately mute (when we enter an interval without approaching it first, e.g., seeking)
   private startMute(interval: MuteInterval): void {
     this.isMuted = true;
+    this.currentMuteInterval = interval;
     this.fadeToVolume(0);
 
     if (this.filterMode === 'bleep') {
@@ -390,6 +411,7 @@ export class AudioFilter {
   // End mute - fade back in
   private endMute(): void {
     this.isMuted = false;
+    this.currentMuteInterval = null;
     this.fadeToVolume(1);
 
     if (this.filterMode === 'bleep') {
@@ -410,6 +432,16 @@ export class AudioFilter {
     }
 
     this.currentGainTarget = target;
+
+    // The browser suspends the AudioContext when the tab is backgrounded.
+    // Previously only startBleep() called resume() — so in mute mode, a
+    // backgrounded tab returning to the foreground would leave the
+    // context suspended and any gain scheduling from fadeToVolume below
+    // would queue against a dormant context instead of applying. Covers
+    // both modes now.
+    if (this.audioContext?.state === 'suspended') {
+      this.audioContext.resume().catch(() => { /* ignore */ });
+    }
 
     if (this.gainNode && this.audioContext) {
       const now = this.audioContext.currentTime;
