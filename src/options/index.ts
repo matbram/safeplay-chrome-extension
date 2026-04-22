@@ -280,7 +280,19 @@ class OptionsController {
 
     // Account
     this.signOutBtn?.addEventListener('click',       () => this.signOut());
-    this.signInBtnOptions?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' }));
+    this.signInBtnOptions?.addEventListener('click', async () => {
+      // Same pattern as the popup — route through background for extension-id
+      // injection, fall back to opening the auth URL directly if the
+      // background can't be reached so the click never silently no-ops.
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+        if (res?.success) return;
+      } catch { /* fall through */ }
+      const extensionId = chrome.runtime?.id ?? '';
+      chrome.tabs.create({
+        url: `https://trysafeplay.com/extension/auth?extensionId=${extensionId}`,
+      });
+    });
 
     // Sidebar back
     this.sidebarBackBtn?.addEventListener('click', () => window.close());

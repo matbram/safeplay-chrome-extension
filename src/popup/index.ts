@@ -191,9 +191,19 @@ class PopupController {
       chrome.tabs.create({ url: 'https://trysafeplay.com/billing' });
     });
 
-    // Sign in
-    this.signInBtn?.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+    // Sign in — route through the background so the auth page can include
+    // the extension id, but if the background isn't reachable (asleep,
+    // context invalidating) fall back to opening the auth URL directly
+    // so the click never silently no-ops.
+    this.signInBtn?.addEventListener('click', async () => {
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+        if (res?.success) return;
+      } catch { /* fall through */ }
+      const extensionId = chrome.runtime?.id ?? '';
+      chrome.tabs.create({
+        url: `https://trysafeplay.com/extension/auth?extensionId=${extensionId}`,
+      });
     });
 
     // Settings
