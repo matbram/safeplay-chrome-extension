@@ -58,12 +58,22 @@ export class VideoController {
     });
   }
 
-  // Tear down everything that's bound to the current video (audio graph, DOM
-  // overlay, transcript) and spin up a fresh AudioFilter so the next
-  // initialize() builds a new audio graph for the new video.
+  // Reset everything bound to the current video so the next applyFilter()
+  // starts clean. We intentionally do NOT close the AudioContext or rebuild
+  // the AudioFilter here: per the Web Audio spec, createMediaElementSource()
+  // is a one-time, permanent binding per <video> element — closing the
+  // context does not release that binding. YouTube's SPA reuses the same
+  // <video> element across watch pages, so eagerly tearing the graph down
+  // would leave the next filter unable to rebind and throw
+  // "HTMLMediaElement already connected previously to a different
+  // MediaElementSourceNode" at createMediaElementSource, after which audio
+  // routes through the closed (but still video-owning) source and plays
+  // unfiltered. Stopping instead keeps the graph alive; the lazy
+  // "video changed" check inside AudioFilter.initialize() already handles
+  // the genuinely-new-element case by tearing down and rebinding at that
+  // point, when we actually know what the new <video> is.
   destroy(): void {
-    this.audioFilter.destroy();
-    this.audioFilter = this.createAudioFilter();
+    this.audioFilter.stop();
     this.hideStatusOverlay();
     this.video = null;
     this.transcript = null;

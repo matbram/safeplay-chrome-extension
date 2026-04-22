@@ -2,7 +2,11 @@ import {
   UserPreferences,
   DEFAULT_PREFERENCES,
   AuthState,
+  CreditInfo,
   TranscriptionStateBroadcast,
+  UserProfile,
+  UserSubscription,
+  UserCredits,
 } from '../types';
 import './popup.css';
 
@@ -73,17 +77,64 @@ class PopupController {
     this.cacheElements();
     this.loadTheme();
     this.setupListeners();
+    // Register the broadcast listener before any awaits so updates that
+    // arrive during startup (CREDIT_UPDATE after a just-completed filter,
+    // AUTH_STATE_CHANGED from a concurrent website login) aren't dropped.
+    this.setupMessageListener();
 
-    // Load prefs + context in parallel
+    // Paint cached account + credits first so the popup never opens
+    // with blank sections. Revalidation below will silently replace
+    // stale values once fresh data arrives.
+    await this.renderFromCache();
+
     await Promise.all([
       this.loadPreferences(),
       this.detectContext(),
+      this.loadAuthState(),
     ]);
 
-    await this.loadAuthState();
-    this.setupMessageListener();
     this.startPolling();
     window.addEventListener('unload', () => this.stopPolling());
+  }
+
+  // Read the last-known user/credit snapshot directly from
+  // chrome.storage.local (no background IPC, no network) and render
+  // immediately. TTLs in storage.ts are intentionally bypassed — stale
+  // content beats a blank section for 1–2 seconds while the revalidate
+  // round-trip completes.
+  private async renderFromCache(): Promise<void> {
+    try {
+      const result = await chrome.storage.local.get([
+        'safeplay_auth_token',
+        'safeplay_user_profile',
+        'safeplay_user_subscription',
+        'safeplay_user_credits',
+        'safeplay_credit_info',
+      ]);
+
+      const token        = (result['safeplay_auth_token']        as string           | undefined) ?? null;
+      const profile      = (result['safeplay_user_profile']      as UserProfile      | undefined) ?? null;
+      const subscription = (result['safeplay_user_subscription'] as UserSubscription | undefined) ?? null;
+      const userCredits  = (result['safeplay_user_credits']      as UserCredits      | undefined) ?? null;
+      const creditInfo   = (result['safeplay_credit_info']       as CreditInfo       | undefined) ?? null;
+
+      this.authState = {
+        isAuthenticated: !!token,
+        user: profile,
+        subscription,
+        credits: userCredits,
+        token,
+      };
+      this.renderAccount();
+
+      if (this.authState.isAuthenticated && creditInfo) {
+        const planName  = this.formatPlanName(creditInfo.plan ?? '');
+        const resetDate = creditInfo.reset_date
+          ? new Date(creditInfo.reset_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : '';
+        this.renderUsage(creditInfo.available, creditInfo.plan_allocation, planName, resetDate);
+      }
+    } catch { /* no cache yet — sections stay at their HTML default (hidden) */ }
   }
 
   private cacheElements(): void {
@@ -140,9 +191,19 @@ class PopupController {
       chrome.tabs.create({ url: 'https://trysafeplay.com/billing' });
     });
 
-    // Sign in
-    this.signInBtn?.addEventListener('click', () => {
-      chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+    // Sign in — route through the background so the auth page can include
+    // the extension id, but if the background isn't reachable (asleep,
+    // context invalidating) fall back to opening the auth URL directly
+    // so the click never silently no-ops.
+    this.signInBtn?.addEventListener('click', async () => {
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+        if (res?.success) return;
+      } catch { /* fall through */ }
+      const extensionId = chrome.runtime?.id ?? '';
+      chrome.tabs.create({
+        url: `https://trysafeplay.com/extension/auth?extensionId=${extensionId}`,
+      });
     });
 
     // Settings
@@ -167,9 +228,15 @@ class PopupController {
       if (res?.success && res.data) {
         this.prefs = res.data;
       } else {
-        Object.assign(this.prefs, updates);
+        // Background rejected the save. Don't pretend it succeeded by
+        // applying the update locally — leave this.prefs at its prior
+        // value so renderPrefs restores the UI to the real, saved state.
+        console.warn('[SafePlay popup] SET_PREFERENCES rejected:', res?.error);
       }
     } catch {
+      // IPC/network hiccup — background may still be warming up or the
+      // tab is being torn down. Keep the optimistic update; a later
+      // broadcast (or the next popup open) will reconcile.
       Object.assign(this.prefs, updates);
     }
     this.renderPrefs();

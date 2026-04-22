@@ -85,6 +85,24 @@ export class TranscriptParser {
 
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
+
+      // Guard against malformed transcript entries from the backend:
+      // an inverted segment (end < start) would produce a mute interval
+      // whose "inside" test is never true, silently missing that word.
+      // A zero-length segment produces an instantaneous interval that
+      // slips between check-timer ticks. Drop both kinds.
+      if (
+        typeof segment.start_time !== 'number' ||
+        typeof segment.end_time !== 'number' ||
+        segment.end_time <= segment.start_time
+      ) {
+        console.warn(
+          `[SafePlay] Skipping malformed transcript segment (start=${segment.start_time}, end=${segment.end_time}):`,
+          segment.text,
+        );
+        continue;
+      }
+
       const normalizedText = segment.text.toLowerCase().trim();
 
       // Check for exact word match first

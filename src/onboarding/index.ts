@@ -102,20 +102,30 @@ class OnboardingController {
   }
 
   private async finish(): Promise<void> {
-    // Save strictness as severityLevels
+    // Single atomic background call: merges strictness into prefs AND marks
+    // onboarding complete in the same storage.local.set. Closing the tab
+    // mid-way used to leave partial state (prefs saved but onboarding
+    // flag missed, or vice versa).
+    let saved = false;
     try {
-      await chrome.runtime.sendMessage({
-        type: 'SET_PREFERENCES',
+      const res = await chrome.runtime.sendMessage({
+        type: 'FINISH_ONBOARDING',
         payload: { severityLevels: STRICTNESS_SEVERITY[this.strictness] },
       });
-    } catch { /* ignore */ }
+      saved = !!res?.success;
+    } catch {
+      saved = false;
+    }
 
-    // Mark onboarding complete
-    try {
-      await chrome.storage.local.set({ onboardingComplete: true });
-    } catch { /* ignore */ }
+    if (!saved) {
+      // Don't silently soldier on — the user explicitly asked to finish.
+      // Flash a small error on the Next button so they can retry.
+      this.nextBtn.textContent = 'Couldn\'t save — try again';
+      setTimeout(() => this.renderStep(), 2500);
+      return;
+    }
 
-    // Open YouTube or a previously open YouTube tab
+    // Open YouTube or switch to a previously open YouTube tab
     try {
       const tabs = await chrome.tabs.query({ url: 'https://www.youtube.com/*' });
       if (tabs.length > 0 && tabs[0].id) {

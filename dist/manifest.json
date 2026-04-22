@@ -62,10 +62,6 @@
     {
       "resources": ["icons/*"],
       "matches": ["https://www.youtube.com/*", "https://youtube.com/*"]
-    },
-    {
-      "resources": ["onboarding.html"],
-      "matches": ["<all_urls>"]
     }
   ]
 }

@@ -13,6 +13,12 @@ module.exports = (env, argv) => {
       popup: './src/popup/index.ts',
       options: './src/options/index.ts',
       onboarding: './src/onboarding/index.ts',
+      // Tiny synchronous init that applies dark-mode class before the
+      // body paints — included as the first child of body in each
+      // HTML template via a hand-written <script src="theme-init.js">
+      // tag (HtmlWebpackPlugin's `chunks` option keeps it out of the
+      // auto-inject path so the tag isn't duplicated).
+      'theme-init': './src/theme-init.ts',
     },
     output: {
       path: path.resolve(__dirname, 'dist'),

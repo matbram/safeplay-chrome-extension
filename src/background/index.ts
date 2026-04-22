@@ -21,10 +21,8 @@ import {
   getCreditInfo,
   setCreditInfo,
   clearAuthData,
-  setUserProfile,
-  setUserSubscription,
-  setUserCredits,
   getFullAuthState,
+  STORAGE_KEYS,
 } from '../utils/storage';
 import {
   requestFilter,
@@ -42,12 +40,70 @@ function log(...args: unknown[]): void {
 }
 
 function logError(...args: unknown[]): void {
+  // Promote any Error arg's .stack to a second console.error line so the
+  // stack trace survives text-only log extraction (support copy-paste, CI
+  // capture). Chrome's devtools panel renders Error objects with an
+  // expandable stack inline, but plain console readers only see the
+  // .toString() (name + message).
   console.error('[SafePlay BG ERROR]', ...args);
+  for (const arg of args) {
+    if (arg instanceof Error && arg.stack) {
+      console.error(arg.stack);
+    }
+  }
 }
 
 // Track credit costs for in-flight processing jobs so we can update
 // the badge optimistically when they complete (before the API catches up).
-const pendingJobCosts = new Map<string, number>();
+// Persisted so the mapping survives service worker suspension between
+// starting a job and receiving its completion status.
+const PENDING_JOB_COSTS_KEY = 'safeplay_pending_job_costs';
+const PENDING_JOB_COST_TTL_MS = 24 * 60 * 60 * 1000;
+
+type PendingJobCostEntry = { cost: number; createdAt: number };
+type PendingJobCostsMap = Record<string, PendingJobCostEntry>;
+
+async function readPendingJobCosts(): Promise<PendingJobCostsMap> {
+  const result = await chrome.storage.local.get(PENDING_JOB_COSTS_KEY);
+  const raw = result[PENDING_JOB_COSTS_KEY];
+  if (!raw || typeof raw !== 'object') return {};
+  const now = Date.now();
+  const pruned: PendingJobCostsMap = {};
+  for (const [jobId, entry] of Object.entries(raw as PendingJobCostsMap)) {
+    if (
+      entry &&
+      typeof entry.cost === 'number' &&
+      typeof entry.createdAt === 'number' &&
+      now - entry.createdAt < PENDING_JOB_COST_TTL_MS
+    ) {
+      pruned[jobId] = entry;
+    }
+  }
+  return pruned;
+}
+
+async function setPendingJobCost(jobId: string, cost: number): Promise<void> {
+  const costs = await readPendingJobCosts();
+  costs[jobId] = { cost, createdAt: Date.now() };
+  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
+}
+
+async function takePendingJobCost(jobId: string): Promise<number | undefined> {
+  const costs = await readPendingJobCosts();
+  const entry = costs[jobId];
+  if (entry) {
+    delete costs[jobId];
+  }
+  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
+  return entry?.cost;
+}
+
+async function deletePendingJobCost(jobId: string): Promise<void> {
+  const costs = await readPendingJobCosts();
+  if (!(jobId in costs)) return;
+  delete costs[jobId];
+  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
+}
 
 // Optimistically deduct credits and update badge immediately.
 // Reads directly from storage (bypassing cache TTL) and calls updateBadge()
@@ -56,6 +112,24 @@ async function deductCreditsOptimistic(creditCost: number): Promise<void> {
   const result = await chrome.storage.local.get('safeplay_credit_info');
   const currentInfo = result['safeplay_credit_info'] as CreditInfo | undefined;
   if (!currentInfo) return;
+
+  // Validate the stored shape before doing arithmetic. A corrupt or
+  // schema-drifted entry could have string / undefined / NaN in these
+  // fields; subtracting NaN produces NaN, which Math.max preserves,
+  // which then ends up written back to storage and rendered as "NaN"
+  // on the badge. Treat validation failure as "skip optimistic update
+  // and let the next server refresh reconcile."
+  if (
+    typeof currentInfo.available !== 'number' ||
+    !Number.isFinite(currentInfo.available) ||
+    typeof currentInfo.used_this_period !== 'number' ||
+    !Number.isFinite(currentInfo.used_this_period) ||
+    typeof currentInfo.plan_allocation !== 'number' ||
+    !Number.isFinite(currentInfo.plan_allocation)
+  ) {
+    logError('Stored credit_info has non-numeric fields; skipping optimistic deduction:', currentInfo);
+    return;
+  }
 
   const updatedInfo: CreditInfo = {
     ...currentInfo,
@@ -205,6 +279,11 @@ async function handleMessage(
 
       case 'SET_PREFERENCES':
         return await handleSetPreferences(
+          message.payload as Partial<UserPreferences>
+        );
+
+      case 'FINISH_ONBOARDING':
+        return await handleFinishOnboarding(
           message.payload as Partial<UserPreferences>
         );
 
@@ -387,7 +466,7 @@ async function handleStartFilter(
       log('API returned processing status, job_id:', response.job_id);
       // Store credit cost so handleCheckJob can deduct optimistically on completion
       if (creditCost && creditCost > 0) {
-        pendingJobCosts.set(response.job_id, creditCost);
+        await setPendingJobCost(response.job_id, creditCost);
       }
       return {
         success: true,
@@ -527,9 +606,8 @@ async function handleCheckJob(
 
       // Deduct stored credit cost immediately so badge updates without waiting
       // for the balance API (which may still return stale data right after completion)
-      const creditCost = pendingJobCosts.get(jobId);
+      const creditCost = await takePendingJobCost(jobId);
       if (creditCost && creditCost > 0) {
-        pendingJobCosts.delete(jobId);
         await deductCreditsOptimistic(creditCost);
       }
 
@@ -539,7 +617,7 @@ async function handleCheckJob(
 
     // Clean up pending cost if job failed
     if (status.status === 'failed') {
-      pendingJobCosts.delete(jobId);
+      await deletePendingJobCost(jobId);
     }
 
     return { success: true, data: status };
@@ -550,17 +628,43 @@ async function handleCheckJob(
   }
 }
 
+// Singleflight so simultaneous GET_CREDITS calls (popup + options open at
+// once) share one network request instead of firing duplicates.
+let inflightCreditFetch: ReturnType<typeof getCreditBalance> | null = null;
+function fetchCreditBalanceSingleflight(): ReturnType<typeof getCreditBalance> {
+  if (inflightCreditFetch) return inflightCreditFetch;
+  inflightCreditFetch = getCreditBalance().finally(() => {
+    inflightCreditFetch = null;
+  });
+  return inflightCreditFetch;
+}
+
+// One-shot retry after transient refresh failure so the badge self-corrects
+// in ~10s instead of waiting for the next periodic alarm (~2min).
+let creditRefreshRetryTimer: number | null = null;
+function scheduleCreditRefreshRetry(): void {
+  if (creditRefreshRetryTimer !== null) return;
+  creditRefreshRetryTimer = self.setTimeout(() => {
+    creditRefreshRetryTimer = null;
+    refreshCredits();
+  }, 10_000);
+}
+
 // Fetch fresh credit balance from API and update storage + badge directly
 async function refreshCredits(): Promise<void> {
   try {
-    const response = await getCreditBalance();
+    const response = await fetchCreditBalanceSingleflight();
     if (response.success && response.credits) {
       await setCreditInfo(response.credits);
       updateBadge(response.credits);
       log('Credits refreshed from API:', response.credits.available);
+      return;
     }
+    log('Credits refresh returned unsuccessful response; scheduling retry');
+    scheduleCreditRefreshRetry();
   } catch (error) {
     log('Failed to refresh credits:', error);
+    scheduleCreditRefreshRetry();
   }
 }
 
@@ -575,9 +679,9 @@ async function handleGetCredits(): Promise<MessageResponse<CreditInfo>> {
     return { success: true, data: cachedInfo };
   }
 
-  // Fetch from API
+  // Fetch from API (shared across concurrent callers)
   try {
-    const response = await getCreditBalance();
+    const response = await fetchCreditBalanceSingleflight();
     log('Credit balance response:', JSON.stringify(response));
 
     if (!response.success) {
@@ -604,7 +708,11 @@ async function handleSetPreferences(
   payload: Partial<UserPreferences>
 ): Promise<MessageResponse<UserPreferences>> {
   const updated = await setPreferences(payload);
+  await broadcastPreferences(updated);
+  return { success: true, data: updated };
+}
 
+async function broadcastPreferences(updated: UserPreferences): Promise<void> {
   // Broadcast to all YouTube tabs (content scripts)
   const tabs = await chrome.tabs.query({ url: '*://www.youtube.com/*' });
   for (const tab of tabs) {
@@ -622,7 +730,22 @@ async function handleSetPreferences(
     type: 'PREFERENCES_UPDATED',
     payload: updated,
   }).catch(() => {});
+}
 
+// Merges the strictness preferences AND marks onboarding complete in a
+// single atomic storage.local.set call, so the user never ends up in a
+// "prefs saved but onboarding not marked complete" or vice-versa state
+// if the onboarding tab is closed partway through.
+async function handleFinishOnboarding(
+  payload: Partial<UserPreferences>
+): Promise<MessageResponse<UserPreferences>> {
+  const current = await getPreferences();
+  const updated = { ...current, ...payload };
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.PREFERENCES]: updated,
+    onboardingComplete: true,
+  });
+  await broadcastPreferences(updated);
   return { success: true, data: updated };
 }
 
@@ -681,15 +804,20 @@ async function handleGetUserProfile(): Promise<MessageResponse<AuthState>> {
     const response = await getUserProfile();
     log('User profile response:', JSON.stringify(response).substring(0, 300));
 
-    // Store the profile data
+    // Store the profile data atomically. A single chrome.storage.local.set
+    // with multiple keys lands as one all-or-nothing write, so concurrent
+    // readers (popup, options) never observe a partially-updated snapshot
+    // where, e.g., the new user is already visible but the new subscription
+    // hasn't landed yet.
+    const profileUpdate: Record<string, unknown> = {};
     if (response.user) {
-      await setUserProfile(response.user);
+      profileUpdate[STORAGE_KEYS.USER_PROFILE] = response.user;
     }
     if (response.subscription) {
-      await setUserSubscription(response.subscription);
+      profileUpdate[STORAGE_KEYS.USER_SUBSCRIPTION] = response.subscription;
     }
     if (response.credits) {
-      await setUserCredits(response.credits);
+      profileUpdate[STORAGE_KEYS.USER_CREDITS] = response.credits;
 
       // Also update the credit info for compatibility with existing credit display
       const planName = response.subscription?.plans?.name?.toLowerCase() || 'free';
@@ -697,13 +825,16 @@ async function handleGetUserProfile(): Promise<MessageResponse<AuthState>> {
       const available = response.credits.available_credits;
       const usedThisPeriod = response.credits.used_this_period;
 
-      await setCreditInfo({
+      profileUpdate[STORAGE_KEYS.CREDIT_INFO] = {
         available,
         used_this_period: usedThisPeriod,
         plan_allocation: planAllocation,
         percent_consumed: planAllocation > 0 ? (usedThisPeriod / planAllocation) * 100 : 0,
         plan: planName as 'free' | 'base' | 'professional' | 'unlimited',
-      });
+      };
+    }
+    if (Object.keys(profileUpdate).length > 0) {
+      await chrome.storage.local.set(profileUpdate);
     }
 
     return {
@@ -796,9 +927,30 @@ chrome.action.onClicked.addListener((_tab) => {
   log('Extension icon clicked');
 });
 
+// Current schema version. Bump every time a storage shape changes,
+// add a matching migration step in runMigrations().
+const CURRENT_SCHEMA_VERSION = 1;
+const SCHEMA_VERSION_KEY = 'safeplay_schema_version';
+
+async function runMigrations(): Promise<void> {
+  const result = await chrome.storage.local.get(SCHEMA_VERSION_KEY);
+  const stored = result[SCHEMA_VERSION_KEY];
+  const fromVersion = typeof stored === 'number' ? stored : 0;
+
+  if (fromVersion >= CURRENT_SCHEMA_VERSION) return;
+
+  log(`Running storage migrations from v${fromVersion} to v${CURRENT_SCHEMA_VERSION}`);
+  // Future migrations go here, one block per version bump:
+  // if (fromVersion < 2) { ... migrate v1 -> v2 ... }
+
+  await chrome.storage.local.set({ [SCHEMA_VERSION_KEY]: CURRENT_SCHEMA_VERSION });
+  log(`Storage migrations complete; now at v${CURRENT_SCHEMA_VERSION}`);
+}
+
 // Handle installation/update — initialize badge within event handler so worker stays alive
 chrome.runtime.onInstalled.addListener(async (details) => {
   log('Extension installed/updated:', details.reason);
+  await runMigrations();
   await initBadge();
   await ensureCreditRefreshAlarm();
 
@@ -840,6 +992,40 @@ chrome.runtime.onMessageExternal.addListener(
           hasUserId: !!message.userId,
           userId: message.userId,
         });
+
+        // Origin was validated above, but we still validate the payload
+        // shape. A bug on the website side (or an older version talking
+        // to a newer extension) could send a malformed message that
+        // poisons storage with undefined token / wrong expiry type /
+        // missing user id, causing cryptic downstream failures later.
+        if (typeof message.token !== 'string' || message.token.length === 0) {
+          logError('AUTH_TOKEN rejected: token is missing or not a string');
+          sendResponse({ success: false, error: 'Invalid auth payload: token' });
+          return;
+        }
+        if (
+          message.refreshToken !== undefined &&
+          (typeof message.refreshToken !== 'string' || message.refreshToken.length === 0)
+        ) {
+          logError('AUTH_TOKEN rejected: refreshToken is present but not a non-empty string');
+          sendResponse({ success: false, error: 'Invalid auth payload: refreshToken' });
+          return;
+        }
+        if (
+          message.expiresAt !== undefined &&
+          message.expiresAt !== null &&
+          typeof message.expiresAt !== 'number' &&
+          typeof message.expiresAt !== 'string'
+        ) {
+          logError('AUTH_TOKEN rejected: expiresAt is present but not number/string');
+          sendResponse({ success: false, error: 'Invalid auth payload: expiresAt' });
+          return;
+        }
+        if (message.userId !== undefined && typeof message.userId !== 'string') {
+          logError('AUTH_TOKEN rejected: userId is present but not a string');
+          sendResponse({ success: false, error: 'Invalid auth payload: userId' });
+          return;
+        }
 
         import('../utils/storage').then(async ({
           setAuthToken,

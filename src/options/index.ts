@@ -1,4 +1,12 @@
-import { UserPreferences, DEFAULT_PREFERENCES, AuthState } from '../types';
+import {
+  UserPreferences,
+  DEFAULT_PREFERENCES,
+  AuthState,
+  UserProfile,
+  UserSubscription,
+  UserCredits,
+  CreditInfo,
+} from '../types';
 import './options.css';
 
 type Section = 'settings' | 'words' | 'billing' | 'account' | 'advanced';
@@ -74,6 +82,14 @@ class OptionsController {
     this.loadTheme();
     this.setupNav();
     this.setupListeners();
+    // Register the listener before any awaits so broadcasts that arrive
+    // during startup (e.g. CREDIT_UPDATE after a just-completed filter) aren't dropped.
+    this.setupMessageListener();
+
+    // Paint cached account + credits first so the page never opens with
+    // blank sections. Revalidation below replaces stale values once the
+    // background round-trip completes.
+    await this.renderFromCache();
 
     await Promise.all([
       this.loadPreferences(),
@@ -83,6 +99,62 @@ class OptionsController {
 
     this.loadCredits();
     this.readSectionFromHash();
+  }
+
+  // Read last-known auth + credits from chrome.storage.local and render
+  // immediately — same pattern as the popup. Stale data beats a blank
+  // flash for 1-2 seconds while loadAuthState / loadCredits revalidate.
+  private async renderFromCache(): Promise<void> {
+    try {
+      const result = await chrome.storage.local.get([
+        'safeplay_auth_token',
+        'safeplay_user_profile',
+        'safeplay_user_subscription',
+        'safeplay_user_credits',
+        'safeplay_credit_info',
+      ]);
+
+      const token        = (result['safeplay_auth_token']        as string           | undefined) ?? null;
+      const profile      = (result['safeplay_user_profile']      as UserProfile      | undefined) ?? null;
+      const subscription = (result['safeplay_user_subscription'] as UserSubscription | undefined) ?? null;
+      const userCredits  = (result['safeplay_user_credits']      as UserCredits      | undefined) ?? null;
+      const creditInfo   = (result['safeplay_credit_info']       as CreditInfo       | undefined) ?? null;
+
+      this.authState = {
+        isAuthenticated: !!token,
+        user: profile,
+        subscription,
+        credits: userCredits,
+        token,
+      };
+      this.renderAccount();
+
+      if (this.authState.isAuthenticated && creditInfo) {
+        this.renderCredits(
+          creditInfo.available,
+          creditInfo.used_this_period,
+          creditInfo.plan_allocation,
+          creditInfo.plan ?? 'free',
+          creditInfo.reset_date,
+        );
+      }
+    } catch { /* no cache yet — sections stay at their HTML default */ }
+  }
+
+  private setupMessageListener(): void {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === 'PREFERENCES_UPDATED' && msg.payload && typeof msg.payload === 'object') {
+        this.prefs = msg.payload as UserPreferences;
+        this.renderPrefs();
+      }
+      if (msg?.type === 'AUTH_STATE_CHANGED') {
+        this.loadAuthState();
+        this.loadCredits();
+      }
+      if (msg?.type === 'CREDIT_UPDATE') {
+        this.loadCredits();
+      }
+    });
   }
 
   private loadTheme(): void {
@@ -208,7 +280,19 @@ class OptionsController {
 
     // Account
     this.signOutBtn?.addEventListener('click',       () => this.signOut());
-    this.signInBtnOptions?.addEventListener('click', () => chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' }));
+    this.signInBtnOptions?.addEventListener('click', async () => {
+      // Same pattern as the popup — route through background for extension-id
+      // injection, fall back to opening the auth URL directly if the
+      // background can't be reached so the click never silently no-ops.
+      try {
+        const res = await chrome.runtime.sendMessage({ type: 'OPEN_LOGIN' });
+        if (res?.success) return;
+      } catch { /* fall through */ }
+      const extensionId = chrome.runtime?.id ?? '';
+      chrome.tabs.create({
+        url: `https://trysafeplay.com/extension/auth?extensionId=${extensionId}`,
+      });
+    });
 
     // Sidebar back
     this.sidebarBackBtn?.addEventListener('click', () => window.close());
@@ -289,20 +373,42 @@ class OptionsController {
   }
 
   private async save(silent = false): Promise<void> {
+    let saved = false;
+    let errorMsg: string | null = null;
     try {
       const updates = this.collectPrefs();
       const res = await chrome.runtime.sendMessage({ type: 'SET_PREFERENCES', payload: updates });
-      if (res?.success && res.data) this.prefs = res.data;
-    } catch { /* offline */ }
-
-    if (!silent) {
-      this.saveStatus.textContent = '✓ Saved.';
-      this.saveStatus.classList.add('saved');
-      setTimeout(() => {
-        this.saveStatus.textContent = 'Changes save automatically.';
-        this.saveStatus.classList.remove('saved');
-      }, 1800);
+      if (res?.success && res.data) {
+        this.prefs = res.data;
+        saved = true;
+      } else {
+        errorMsg = (res?.error as string) || "Couldn't save — try again.";
+      }
+    } catch {
+      errorMsg = "Couldn't save — you may be offline.";
     }
+
+    if (saved) {
+      if (!silent) {
+        this.saveStatus.textContent = '✓ Saved.';
+        this.saveStatus.classList.add('saved');
+        this.saveStatus.classList.remove('error');
+        setTimeout(() => {
+          this.saveStatus.textContent = 'Changes save automatically.';
+          this.saveStatus.classList.remove('saved');
+        }, 1800);
+      }
+      return;
+    }
+
+    // Surface the failure instead of silently pretending success.
+    this.saveStatus.textContent = errorMsg || 'Save failed.';
+    this.saveStatus.classList.add('error');
+    this.saveStatus.classList.remove('saved');
+    setTimeout(() => {
+      this.saveStatus.textContent = 'Changes save automatically.';
+      this.saveStatus.classList.remove('error');
+    }, silent ? 3000 : 2500);
   }
 
   // ── Credits ────────────────────────────────────────────────
@@ -435,13 +541,50 @@ class OptionsController {
     }
   }
 
+  // Build the default Clear Cache button contents (SVG icon + label) as
+  // real DOM nodes rather than assigning innerHTML. The string is static
+  // today and safe, but DOM construction removes the only innerHTML = '…'
+  // assignment left in this file so future editors don't mistake it for
+  // a template pattern that's safe to reuse with dynamic content.
+  private renderClearCacheButton(label: string): void {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '12');
+    svg.setAttribute('height', '12');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+
+    const polyline = document.createElementNS(svgNS, 'polyline');
+    polyline.setAttribute('points', '3 6 5 6 21 6');
+    svg.appendChild(polyline);
+
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2');
+    svg.appendChild(path);
+
+    this.clearCacheBtn.replaceChildren(svg, document.createTextNode(` ${label}`));
+  }
+
   private async clearCache(): Promise<void> {
+    // Disable the button for the duration of the request so rapid clicks
+    // don't fire duplicate CLEAR_CACHE messages to the background.
+    if (this.clearCacheBtn.disabled) return;
+    this.clearCacheBtn.disabled = true;
     try {
       await chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' });
       this.cacheVideoCount.textContent = '0';
       this.clearCacheBtn.textContent = 'Cleared';
-      setTimeout(() => { this.clearCacheBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Clear cache`; }, 1500);
-    } catch { /* ignore */ }
+      setTimeout(() => {
+        this.renderClearCacheButton('Clear cache');
+        this.clearCacheBtn.disabled = false;
+      }, 1500);
+    } catch {
+      // Re-enable immediately on error so the user can retry.
+      this.clearCacheBtn.disabled = false;
+    }
   }
 }
 

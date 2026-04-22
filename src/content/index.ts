@@ -1134,7 +1134,10 @@ class SafePlayContentScript {
 
     try {
       chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-        this.handleMessage(message).then(sendResponse);
+        this.handleMessage(message).then(sendResponse, (error) => {
+          log('Message handler rejected:', error);
+          sendResponse({ success: false, error: error?.message || 'Handler error' });
+        });
         return true; // Keep channel open for async response
       });
     } catch (error) {
@@ -1145,6 +1148,10 @@ class SafePlayContentScript {
   private async handleMessage(message: { type: string; payload?: unknown }): Promise<unknown> {
     switch (message.type) {
       case 'PREFERENCES_UPDATED': {
+        if (!message.payload || typeof message.payload !== 'object') {
+          log('PREFERENCES_UPDATED: invalid payload shape, ignoring');
+          return { success: false, error: 'Invalid payload' };
+        }
         const newPrefs = message.payload as UserPreferences;
         const prevEnabled = this.preferences.enabled !== false;
         const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
@@ -1216,6 +1223,14 @@ class SafePlayContentScript {
       }
 
       case 'AUTH_STATE_CHANGED': {
+        if (
+          !message.payload ||
+          typeof message.payload !== 'object' ||
+          typeof (message.payload as { isAuthenticated?: unknown }).isAuthenticated !== 'boolean'
+        ) {
+          log('AUTH_STATE_CHANGED: invalid payload shape, ignoring');
+          return { success: false, error: 'Invalid payload' };
+        }
         const payload = message.payload as { isAuthenticated: boolean };
         log('Auth state changed:', payload);
 
@@ -1275,11 +1290,10 @@ class SafePlayContentScript {
     const currentNavId = this.navigationId;
     log(`Navigation detected, navigationId: ${currentNavId}`);
 
-    // Stop current filter if any. destroy() (not stop()) tears down the
-    // Web Audio graph so the next video builds a fresh MediaElementSourceNode
-    // bound to the new <video> element. stop() alone leaves the audio pipe
-    // wired to the previous video, which is why audio wasn't being muted on
-    // second/third videos in the same SPA session.
+    // Reset the controller's per-video state. See VideoController.destroy()
+    // for why this intentionally does NOT close the AudioContext — YouTube's
+    // SPA reuses the same <video> element across watch pages, and the Web
+    // Audio source binding is permanent per element.
     if (this.videoController) {
       this.videoController.destroy();
     }
