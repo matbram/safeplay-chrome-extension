@@ -2,7 +2,11 @@ import {
   UserPreferences,
   DEFAULT_PREFERENCES,
   AuthState,
+  CreditInfo,
   TranscriptionStateBroadcast,
+  UserProfile,
+  UserSubscription,
+  UserCredits,
 } from '../types';
 import './popup.css';
 
@@ -74,16 +78,60 @@ class PopupController {
     this.loadTheme();
     this.setupListeners();
 
-    // Load prefs + context in parallel
+    // Paint cached account + credits first so the popup never opens
+    // with blank sections. Revalidation below will silently replace
+    // stale values once fresh data arrives.
+    await this.renderFromCache();
+
     await Promise.all([
       this.loadPreferences(),
       this.detectContext(),
+      this.loadAuthState(),
     ]);
 
-    await this.loadAuthState();
     this.setupMessageListener();
     this.startPolling();
     window.addEventListener('unload', () => this.stopPolling());
+  }
+
+  // Read the last-known user/credit snapshot directly from
+  // chrome.storage.local (no background IPC, no network) and render
+  // immediately. TTLs in storage.ts are intentionally bypassed — stale
+  // content beats a blank section for 1–2 seconds while the revalidate
+  // round-trip completes.
+  private async renderFromCache(): Promise<void> {
+    try {
+      const result = await chrome.storage.local.get([
+        'safeplay_auth_token',
+        'safeplay_user_profile',
+        'safeplay_user_subscription',
+        'safeplay_user_credits',
+        'safeplay_credit_info',
+      ]);
+
+      const token        = (result['safeplay_auth_token']        as string           | undefined) ?? null;
+      const profile      = (result['safeplay_user_profile']      as UserProfile      | undefined) ?? null;
+      const subscription = (result['safeplay_user_subscription'] as UserSubscription | undefined) ?? null;
+      const userCredits  = (result['safeplay_user_credits']      as UserCredits      | undefined) ?? null;
+      const creditInfo   = (result['safeplay_credit_info']       as CreditInfo       | undefined) ?? null;
+
+      this.authState = {
+        isAuthenticated: !!token,
+        user: profile,
+        subscription,
+        credits: userCredits,
+        token,
+      };
+      this.renderAccount();
+
+      if (this.authState.isAuthenticated && creditInfo) {
+        const planName  = this.formatPlanName(creditInfo.plan ?? '');
+        const resetDate = creditInfo.reset_date
+          ? new Date(creditInfo.reset_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : '';
+        this.renderUsage(creditInfo.available, creditInfo.plan_allocation, planName, resetDate);
+      }
+    } catch { /* no cache yet — sections stay at their HTML default (hidden) */ }
   }
 
   private cacheElements(): void {
