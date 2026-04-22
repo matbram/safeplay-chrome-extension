@@ -135,18 +135,33 @@ export class TranscriptionSSEClient {
       return;
     }
 
+    // Wrap each handler call so a throw inside application code (updating
+    // DOM, touching stale filter state, etc.) doesn't propagate up through
+    // the read loop. The read loop's catch treats ANY throw as a transport
+    // error and disconnects the stream, which would leave the filter flying
+    // blind on real-time progress even though the network connection is
+    // perfectly healthy.
+    const invoke = <T>(handler: ((data: T) => void) | undefined, data: T, name: string): void => {
+      if (!handler) return;
+      try {
+        handler(data);
+      } catch (err) {
+        this.log(`SSE: handler for "${name}" threw (continuing):`, err);
+      }
+    };
+
     switch (eventName) {
       case 'connected':
-        this.opts.onConnected?.(parsed as SSEConnectedData);
+        invoke(this.opts.onConnected, parsed as SSEConnectedData, eventName);
         break;
       case 'progress':
-        this.opts.onProgress?.(parsed as SSEProgressData);
+        invoke(this.opts.onProgress, parsed as SSEProgressData, eventName);
         break;
       case 'complete':
-        this.opts.onComplete?.(parsed as SSECompleteData);
+        invoke(this.opts.onComplete, parsed as SSECompleteData, eventName);
         break;
       case 'error':
-        this.opts.onServerError?.(parsed as SSEErrorData);
+        invoke(this.opts.onServerError, parsed as SSEErrorData, eventName);
         break;
       default:
         this.log('SSE: unknown event:', eventName);

@@ -23,6 +23,7 @@ function formatDuration(seconds: number): string {
 
 export class CreditConfirmation {
   private dialog: HTMLDivElement | null = null;
+  private currentVideoId: string | null = null;
   private debug: boolean;
 
   constructor(private options: CreditConfirmationOptions) {
@@ -32,8 +33,19 @@ export class CreditConfirmation {
   show(previewData: PreviewData): void {
     log(this.debug, 'Showing credit confirmation dialog:', previewData);
 
-    // Remove any existing dialog
+    // Early-return if a dialog for the same video is already on screen.
+    // Without this, a rapid second show() tears down the first dialog's
+    // DOM and rebuilds an identical-looking one; clicks mid-transition
+    // could land on the old (now-detached) buttons and do nothing.
+    if (this.dialog && this.currentVideoId === previewData.video.youtube_id) {
+      log(this.debug, 'Dialog already shown for this video; ignoring duplicate show()');
+      return;
+    }
+
+    // Different video (or no dialog yet) — tear down any stale one.
     this.hide();
+
+    this.currentVideoId = previewData.video.youtube_id;
 
     // Create dialog elements
     this.dialog = document.createElement('div');
@@ -61,6 +73,7 @@ export class CreditConfirmation {
       this.dialog.remove();
       this.dialog = null;
     }
+    this.currentVideoId = null;
   }
 
   private createDialogHTML(data: PreviewData): string {
