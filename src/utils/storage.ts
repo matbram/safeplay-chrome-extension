@@ -9,7 +9,7 @@ import {
   UserCredits,
 } from '../types';
 
-const STORAGE_KEYS = {
+export const STORAGE_KEYS = {
   PREFERENCES: 'safeplay_preferences',
   AUTH_TOKEN: 'safeplay_auth_token',
   REFRESH_TOKEN: 'safeplay_refresh_token',
@@ -221,13 +221,6 @@ export function refreshAuthTokenDetailed(): Promise<RefreshResult> {
   return inflightRefresh;
 }
 
-// Backward-compatible wrapper — unchanged signature so existing callers
-// (api/client.ts and this file's own getAuthToken) keep working.
-export async function refreshAuthToken(): Promise<string | null> {
-  const result = await refreshAuthTokenDetailed();
-  return result.kind === 'ok' ? result.token : null;
-}
-
 // Get auth token - automatically refreshes if expired
 export async function getAuthToken(): Promise<string | null> {
   const result = await chrome.storage.local.get([
@@ -272,14 +265,29 @@ export async function getAuthToken(): Promise<string | null> {
       });
 
       if (refreshToken) {
-        const newToken = await refreshAuthToken();
-        if (newToken) {
-          return newToken;
+        const refreshResult = await refreshAuthTokenDetailed();
+        if (refreshResult.kind === 'ok') {
+          return refreshResult.token;
         }
+        if (refreshResult.kind === 'revoked') {
+          // Server explicitly said this refresh token is no longer valid —
+          // proper logout. refreshAuthTokenDetailed has already cleared
+          // the tokens from storage; just return null.
+          console.log('[SafePlay Storage] Refresh revoked — user logged out');
+          return null;
+        }
+        // kind === 'transient' — network/5xx/endpoint-not-deployed.
+        // Don't wipe the access token just because we couldn't reach
+        // the server: a later call (or page reload with better network)
+        // may succeed. Return the existing (expired) token so the API
+        // client's own 401-retry path can have one more attempt, rather
+        // than flashing the user to a signed-out UI on a network blip.
+        console.log('[SafePlay Storage] Refresh transient — keeping stored tokens, returning expired access token');
+        return token;
       }
 
-      // Refresh failed and token is expired - clear access token but keep refresh for manual retry
-      console.log('[SafePlay Storage] Token expired and refresh failed');
+      // No refresh token at all — nothing to try.
+      console.log('[SafePlay Storage] Token expired and no refresh token available');
       await chrome.storage.local.remove([STORAGE_KEYS.AUTH_TOKEN]);
       return null;
     }
@@ -293,12 +301,18 @@ export async function getAuthToken(): Promise<string | null> {
       });
 
       if (refreshToken) {
-        const newToken = await refreshAuthToken();
-        if (newToken) {
-          return newToken;
+        const refreshResult = await refreshAuthTokenDetailed();
+        if (refreshResult.kind === 'ok') {
+          return refreshResult.token;
         }
-        // Refresh failed but token is still valid - use it anyway
-        console.log('[SafePlay Storage] Proactive refresh failed but token still valid, using existing token');
+        if (refreshResult.kind === 'revoked') {
+          // Already wiped by refreshAuthTokenDetailed.
+          console.log('[SafePlay Storage] Proactive refresh revoked — user logged out');
+          return null;
+        }
+        // Transient failure during proactive refresh — current token is
+        // still valid, use it.
+        console.log('[SafePlay Storage] Proactive refresh failed (transient) but token still valid, using existing token');
       }
     }
   }
@@ -464,12 +478,17 @@ export async function getCachedTranscript(
 
     // Handle both old format (direct transcript) and new format (with timestamp)
     if (entry.transcript) {
-      // New format with timestamp
-      entry.timestamp = Date.now();
-      await chrome.storage.local.set({ [STORAGE_KEYS.CACHED_TRANSCRIPTS]: cache });
+      // New format. We intentionally DO NOT update entry.timestamp on read
+      // and rewrite the cache — that's a giant write (transcripts are tens
+      // of KB each) every time a video is replayed, and two concurrent
+      // reads can clobber each other's timestamp bumps. Eviction falls
+      // back to oldest-by-insert-order, which setCachedTranscript already
+      // tracks on write.
       return entry.transcript;
     } else if (entry.segments) {
-      // Old format - transcript stored directly, migrate to new format
+      // Old format - transcript stored directly, migrate to new format.
+      // This write happens once per legacy entry per browser, not on every
+      // read, so the cost is bounded.
       const transcript = entry as Transcript;
       cache[youtubeId] = { transcript, timestamp: Date.now() };
       await chrome.storage.local.set({ [STORAGE_KEYS.CACHED_TRANSCRIPTS]: cache });
