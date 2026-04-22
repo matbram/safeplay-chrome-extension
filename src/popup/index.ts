@@ -77,6 +77,10 @@ class PopupController {
     this.cacheElements();
     this.loadTheme();
     this.setupListeners();
+    // Register the broadcast listener before any awaits so updates that
+    // arrive during startup (CREDIT_UPDATE after a just-completed filter,
+    // AUTH_STATE_CHANGED from a concurrent website login) aren't dropped.
+    this.setupMessageListener();
 
     // Paint cached account + credits first so the popup never opens
     // with blank sections. Revalidation below will silently replace
@@ -89,7 +93,6 @@ class PopupController {
       this.loadAuthState(),
     ]);
 
-    this.setupMessageListener();
     this.startPolling();
     window.addEventListener('unload', () => this.stopPolling());
   }
@@ -215,9 +218,15 @@ class PopupController {
       if (res?.success && res.data) {
         this.prefs = res.data;
       } else {
-        Object.assign(this.prefs, updates);
+        // Background rejected the save. Don't pretend it succeeded by
+        // applying the update locally — leave this.prefs at its prior
+        // value so renderPrefs restores the UI to the real, saved state.
+        console.warn('[SafePlay popup] SET_PREFERENCES rejected:', res?.error);
       }
     } catch {
+      // IPC/network hiccup — background may still be warming up or the
+      // tab is being torn down. Keep the optimistic update; a later
+      // broadcast (or the next popup open) will reconcile.
       Object.assign(this.prefs, updates);
     }
     this.renderPrefs();
