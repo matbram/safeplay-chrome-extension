@@ -418,6 +418,37 @@ export async function getCreditInfo(): Promise<CreditInfo | null> {
   }
 }
 
+// Generic storage write with one-shot quota recovery.
+// chrome.storage.local.set throws when the extension's storage budget is
+// exhausted. Previously only the transcript cache had a recovery path for
+// that — every other caller silently failed. This helper centralizes the
+// recovery: evict the largest expendable store (transcripts) and retry
+// once. Returns true if the write eventually landed, false if even the
+// retry failed (at which point there's nothing more we can do).
+export async function safeStorageSet(
+  items: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    await chrome.storage.local.set(items);
+    return true;
+  } catch (error: unknown) {
+    const isQuota = error instanceof Error && error.message.includes('quota');
+    if (!isQuota) {
+      console.error('[SafePlay Storage] safeStorageSet error (non-quota):', error);
+      return false;
+    }
+    console.warn('[SafePlay Storage] Quota exceeded, evicting transcript cache and retrying...');
+    try {
+      await chrome.storage.local.remove(STORAGE_KEYS.CACHED_TRANSCRIPTS);
+      await chrome.storage.local.set(items);
+      return true;
+    } catch (retryError) {
+      console.error('[SafePlay Storage] Retry after eviction failed:', retryError);
+      return false;
+    }
+  }
+}
+
 export async function setCreditInfo(creditInfo: CreditInfo): Promise<void> {
   try {
     // Also mirror the fields that overlap with USER_CREDITS so the two
@@ -446,7 +477,7 @@ export async function setCreditInfo(creditInfo: CreditInfo): Promise<void> {
     if (mirrored) {
       update[STORAGE_KEYS.USER_CREDITS] = mirrored;
     }
-    await chrome.storage.local.set(update);
+    await safeStorageSet(update);
   } catch (error) {
     console.error('[SafePlay Storage] Error setting credit info:', error);
   }
