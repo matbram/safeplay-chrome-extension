@@ -40,7 +40,17 @@ function log(...args: unknown[]): void {
 }
 
 function logError(...args: unknown[]): void {
+  // Promote any Error arg's .stack to a second console.error line so the
+  // stack trace survives text-only log extraction (support copy-paste, CI
+  // capture). Chrome's devtools panel renders Error objects with an
+  // expandable stack inline, but plain console readers only see the
+  // .toString() (name + message).
   console.error('[SafePlay BG ERROR]', ...args);
+  for (const arg of args) {
+    if (arg instanceof Error && arg.stack) {
+      console.error(arg.stack);
+    }
+  }
 }
 
 // Track credit costs for in-flight processing jobs so we can update
@@ -102,6 +112,24 @@ async function deductCreditsOptimistic(creditCost: number): Promise<void> {
   const result = await chrome.storage.local.get('safeplay_credit_info');
   const currentInfo = result['safeplay_credit_info'] as CreditInfo | undefined;
   if (!currentInfo) return;
+
+  // Validate the stored shape before doing arithmetic. A corrupt or
+  // schema-drifted entry could have string / undefined / NaN in these
+  // fields; subtracting NaN produces NaN, which Math.max preserves,
+  // which then ends up written back to storage and rendered as "NaN"
+  // on the badge. Treat validation failure as "skip optimistic update
+  // and let the next server refresh reconcile."
+  if (
+    typeof currentInfo.available !== 'number' ||
+    !Number.isFinite(currentInfo.available) ||
+    typeof currentInfo.used_this_period !== 'number' ||
+    !Number.isFinite(currentInfo.used_this_period) ||
+    typeof currentInfo.plan_allocation !== 'number' ||
+    !Number.isFinite(currentInfo.plan_allocation)
+  ) {
+    logError('Stored credit_info has non-numeric fields; skipping optimistic deduction:', currentInfo);
+    return;
+  }
 
   const updatedInfo: CreditInfo = {
     ...currentInfo,
