@@ -21,10 +21,8 @@ import {
   getCreditInfo,
   setCreditInfo,
   clearAuthData,
-  setUserProfile,
-  setUserSubscription,
-  setUserCredits,
   getFullAuthState,
+  STORAGE_KEYS,
 } from '../utils/storage';
 import {
   requestFilter,
@@ -253,6 +251,11 @@ async function handleMessage(
 
       case 'SET_PREFERENCES':
         return await handleSetPreferences(
+          message.payload as Partial<UserPreferences>
+        );
+
+      case 'FINISH_ONBOARDING':
+        return await handleFinishOnboarding(
           message.payload as Partial<UserPreferences>
         );
 
@@ -651,7 +654,11 @@ async function handleSetPreferences(
   payload: Partial<UserPreferences>
 ): Promise<MessageResponse<UserPreferences>> {
   const updated = await setPreferences(payload);
+  await broadcastPreferences(updated);
+  return { success: true, data: updated };
+}
 
+async function broadcastPreferences(updated: UserPreferences): Promise<void> {
   // Broadcast to all YouTube tabs (content scripts)
   const tabs = await chrome.tabs.query({ url: '*://www.youtube.com/*' });
   for (const tab of tabs) {
@@ -669,7 +676,22 @@ async function handleSetPreferences(
     type: 'PREFERENCES_UPDATED',
     payload: updated,
   }).catch(() => {});
+}
 
+// Merges the strictness preferences AND marks onboarding complete in a
+// single atomic storage.local.set call, so the user never ends up in a
+// "prefs saved but onboarding not marked complete" or vice-versa state
+// if the onboarding tab is closed partway through.
+async function handleFinishOnboarding(
+  payload: Partial<UserPreferences>
+): Promise<MessageResponse<UserPreferences>> {
+  const current = await getPreferences();
+  const updated = { ...current, ...payload };
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.PREFERENCES]: updated,
+    onboardingComplete: true,
+  });
+  await broadcastPreferences(updated);
   return { success: true, data: updated };
 }
 
@@ -728,15 +750,20 @@ async function handleGetUserProfile(): Promise<MessageResponse<AuthState>> {
     const response = await getUserProfile();
     log('User profile response:', JSON.stringify(response).substring(0, 300));
 
-    // Store the profile data
+    // Store the profile data atomically. A single chrome.storage.local.set
+    // with multiple keys lands as one all-or-nothing write, so concurrent
+    // readers (popup, options) never observe a partially-updated snapshot
+    // where, e.g., the new user is already visible but the new subscription
+    // hasn't landed yet.
+    const profileUpdate: Record<string, unknown> = {};
     if (response.user) {
-      await setUserProfile(response.user);
+      profileUpdate[STORAGE_KEYS.USER_PROFILE] = response.user;
     }
     if (response.subscription) {
-      await setUserSubscription(response.subscription);
+      profileUpdate[STORAGE_KEYS.USER_SUBSCRIPTION] = response.subscription;
     }
     if (response.credits) {
-      await setUserCredits(response.credits);
+      profileUpdate[STORAGE_KEYS.USER_CREDITS] = response.credits;
 
       // Also update the credit info for compatibility with existing credit display
       const planName = response.subscription?.plans?.name?.toLowerCase() || 'free';
@@ -744,13 +771,16 @@ async function handleGetUserProfile(): Promise<MessageResponse<AuthState>> {
       const available = response.credits.available_credits;
       const usedThisPeriod = response.credits.used_this_period;
 
-      await setCreditInfo({
+      profileUpdate[STORAGE_KEYS.CREDIT_INFO] = {
         available,
         used_this_period: usedThisPeriod,
         plan_allocation: planAllocation,
         percent_consumed: planAllocation > 0 ? (usedThisPeriod / planAllocation) * 100 : 0,
         plan: planName as 'free' | 'base' | 'professional' | 'unlimited',
-      });
+      };
+    }
+    if (Object.keys(profileUpdate).length > 0) {
+      await chrome.storage.local.set(profileUpdate);
     }
 
     return {
