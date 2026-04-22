@@ -111,6 +111,12 @@ class SafePlayContentScript {
     // Fallback anchor when the server didn't send created_at (old rows).
     localStartMs: number;
   } | null = null;
+  // Set of job_ids we've already fired /api/filter/retry for in this
+  // content-script session. Outlives retryState (which gets cleared on
+  // give-up / navigation) so the contract "one retry per job_id per
+  // session" holds even if the user clicks Filter again and the server's
+  // dedupe hands back the same still-in-flight job.
+  private retriedJobIds: Set<string> = new Set();
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -900,9 +906,13 @@ class SafePlayContentScript {
   // polling entry points.
   private ensureRetryState(jobId: string): void {
     if (this.retryState?.jobId === jobId) return;
+    // If we already burned our one retry for this job_id earlier in the
+    // session (user gave up, came back, and hit the server's dedupe), we
+    // must NOT fire a second retry. The Set survives stopTranscriptionResources.
+    const alreadyRetried = this.retriedJobIds.has(jobId);
     this.retryState = {
       jobId,
-      retried: false,
+      retried: alreadyRetried,
       giveUpTriggered: false,
       retryInFlight: false,
       etaSeconds: null,
@@ -998,6 +1008,12 @@ class SafePlayContentScript {
   private async fireJobRetry(jobId: string, videoId: string): Promise<void> {
     const state = this.retryState;
     if (!state || state.jobId !== jobId) return;
+    // Record the attempt EAGERLY — before awaiting — so that even if
+    // retryState gets nulled mid-flight (surfaceJobError, navigation), a
+    // later re-entry on the same job_id won't fire a second retry. The
+    // contract is "one /api/filter/retry call per job_id per session"
+    // regardless of the outcome of this call.
+    this.retriedJobIds.add(jobId);
     try {
       const response = await safeSendMessage<{
         success: boolean;
@@ -1005,8 +1021,10 @@ class SafePlayContentScript {
         data?: { jobId: string; status: string };
       }>({ type: 'RETRY_JOB', payload: { jobId } });
 
-      if (!state || this.retryState !== state || state.jobId !== jobId) {
-        // Navigation / new job raced the retry — abandon silently.
+      if (this.retryState !== state || state.jobId !== jobId) {
+        // Navigation / new job raced the retry — abandon silently. The
+        // jobId is already in retriedJobIds so the one-retry contract
+        // still holds if the user re-enters.
         return;
       }
 
@@ -1015,7 +1033,7 @@ class SafePlayContentScript {
       if (!response || !response.success) {
         const errMsg = response?.error || 'Retry request failed';
         log(`Retry failed for ${jobId}: ${errMsg}`);
-        // Per contract: no second retry attempt. Fold into check-back-later.
+        // Per contract: no second retry attempt.
         state.retried = true;
         this.surfaceCheckBackLater(videoId);
         return;
@@ -1038,6 +1056,14 @@ class SafePlayContentScript {
   // user can click it again later without a scary red "Retry" label.
   private surfaceCheckBackLater(videoId: string): void {
     if (this.retryState) this.retryState.giveUpTriggered = true;
+    // Cancel any pending auto-retry from an earlier error path — it would
+    // re-fire onFilterButtonClick in ~5s and restart the filter, which is
+    // exactly the opposite of the "check back later" message we're about
+    // to show the user.
+    if (this.autoRetryTimer) {
+      clearTimeout(this.autoRetryTimer);
+      this.autoRetryTimer = null;
+    }
     this.stopTranscriptionResources();
 
     this.updateButtonState({

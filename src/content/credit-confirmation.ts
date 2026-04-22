@@ -558,7 +558,13 @@ export function showFilterErrorNotification(): void {
 // credits and job are safe, and the transcript will be ready the next time
 // they click Filter on this video.
 export function showCheckBackLaterNotification(): void {
+  // Idempotent: if the user clicks Filter again on a still-stuck video,
+  // the server's dedupe returns the same job_id and our retry evaluator
+  // fires check-back-later again on the first status response. Don't
+  // stack a duplicate dialog on top of the existing one.
+  if (document.querySelector('[data-safeplay-check-back-later]')) return;
   const overlay = document.createElement('div');
+  overlay.setAttribute('data-safeplay-check-back-later', '');
   overlay.style.cssText = `
     position: fixed;
     top: 0;
