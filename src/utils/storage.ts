@@ -420,10 +420,33 @@ export async function getCreditInfo(): Promise<CreditInfo | null> {
 
 export async function setCreditInfo(creditInfo: CreditInfo): Promise<void> {
   try {
-    await chrome.storage.local.set({
+    // Also mirror the fields that overlap with USER_CREDITS so the two
+    // representations never drift. Every credit write goes through here,
+    // so a single atomic set keeps available_credits/used_this_period
+    // in lockstep across both slots. We only touch the overlapping
+    // fields; user_id / rollover_credits / updated_at are preserved from
+    // whatever the profile endpoint last stored.
+    const existing = await chrome.storage.local.get(STORAGE_KEYS.USER_CREDITS);
+    const existingUserCredits = existing[STORAGE_KEYS.USER_CREDITS] as
+      | { user_id?: string; rollover_credits?: number; updated_at?: string }
+      | undefined;
+
+    const mirrored = existingUserCredits
+      ? {
+          ...existingUserCredits,
+          available_credits: creditInfo.available,
+          used_this_period: creditInfo.used_this_period,
+        }
+      : undefined;
+
+    const update: Record<string, unknown> = {
       [STORAGE_KEYS.CREDIT_INFO]: creditInfo,
       [STORAGE_KEYS.CREDIT_CACHE_TIME]: Date.now(),
-    });
+    };
+    if (mirrored) {
+      update[STORAGE_KEYS.USER_CREDITS] = mirrored;
+    }
+    await chrome.storage.local.set(update);
   } catch (error) {
     console.error('[SafePlay Storage] Error setting credit info:', error);
   }
