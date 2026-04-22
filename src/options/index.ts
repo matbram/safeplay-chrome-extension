@@ -541,13 +541,50 @@ class OptionsController {
     }
   }
 
+  // Build the default Clear Cache button contents (SVG icon + label) as
+  // real DOM nodes rather than assigning innerHTML. The string is static
+  // today and safe, but DOM construction removes the only innerHTML = '…'
+  // assignment left in this file so future editors don't mistake it for
+  // a template pattern that's safe to reuse with dynamic content.
+  private renderClearCacheButton(label: string): void {
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('width', '12');
+    svg.setAttribute('height', '12');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+
+    const polyline = document.createElementNS(svgNS, 'polyline');
+    polyline.setAttribute('points', '3 6 5 6 21 6');
+    svg.appendChild(polyline);
+
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', 'M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2');
+    svg.appendChild(path);
+
+    this.clearCacheBtn.replaceChildren(svg, document.createTextNode(` ${label}`));
+  }
+
   private async clearCache(): Promise<void> {
+    // Disable the button for the duration of the request so rapid clicks
+    // don't fire duplicate CLEAR_CACHE messages to the background.
+    if (this.clearCacheBtn.disabled) return;
+    this.clearCacheBtn.disabled = true;
     try {
       await chrome.runtime.sendMessage({ type: 'CLEAR_CACHE' });
       this.cacheVideoCount.textContent = '0';
       this.clearCacheBtn.textContent = 'Cleared';
-      setTimeout(() => { this.clearCacheBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg> Clear cache`; }, 1500);
-    } catch { /* ignore */ }
+      setTimeout(() => {
+        this.renderClearCacheButton('Clear cache');
+        this.clearCacheBtn.disabled = false;
+      }, 1500);
+    } catch {
+      // Re-enable immediately on error so the user can retry.
+      this.clearCacheBtn.disabled = false;
+    }
   }
 }
 
