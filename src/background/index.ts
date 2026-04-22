@@ -47,7 +47,55 @@ function logError(...args: unknown[]): void {
 
 // Track credit costs for in-flight processing jobs so we can update
 // the badge optimistically when they complete (before the API catches up).
-const pendingJobCosts = new Map<string, number>();
+// Persisted so the mapping survives service worker suspension between
+// starting a job and receiving its completion status.
+const PENDING_JOB_COSTS_KEY = 'safeplay_pending_job_costs';
+const PENDING_JOB_COST_TTL_MS = 24 * 60 * 60 * 1000;
+
+type PendingJobCostEntry = { cost: number; createdAt: number };
+type PendingJobCostsMap = Record<string, PendingJobCostEntry>;
+
+async function readPendingJobCosts(): Promise<PendingJobCostsMap> {
+  const result = await chrome.storage.local.get(PENDING_JOB_COSTS_KEY);
+  const raw = result[PENDING_JOB_COSTS_KEY];
+  if (!raw || typeof raw !== 'object') return {};
+  const now = Date.now();
+  const pruned: PendingJobCostsMap = {};
+  for (const [jobId, entry] of Object.entries(raw as PendingJobCostsMap)) {
+    if (
+      entry &&
+      typeof entry.cost === 'number' &&
+      typeof entry.createdAt === 'number' &&
+      now - entry.createdAt < PENDING_JOB_COST_TTL_MS
+    ) {
+      pruned[jobId] = entry;
+    }
+  }
+  return pruned;
+}
+
+async function setPendingJobCost(jobId: string, cost: number): Promise<void> {
+  const costs = await readPendingJobCosts();
+  costs[jobId] = { cost, createdAt: Date.now() };
+  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
+}
+
+async function takePendingJobCost(jobId: string): Promise<number | undefined> {
+  const costs = await readPendingJobCosts();
+  const entry = costs[jobId];
+  if (entry) {
+    delete costs[jobId];
+  }
+  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
+  return entry?.cost;
+}
+
+async function deletePendingJobCost(jobId: string): Promise<void> {
+  const costs = await readPendingJobCosts();
+  if (!(jobId in costs)) return;
+  delete costs[jobId];
+  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
+}
 
 // Optimistically deduct credits and update badge immediately.
 // Reads directly from storage (bypassing cache TTL) and calls updateBadge()
@@ -387,7 +435,7 @@ async function handleStartFilter(
       log('API returned processing status, job_id:', response.job_id);
       // Store credit cost so handleCheckJob can deduct optimistically on completion
       if (creditCost && creditCost > 0) {
-        pendingJobCosts.set(response.job_id, creditCost);
+        await setPendingJobCost(response.job_id, creditCost);
       }
       return {
         success: true,
@@ -527,9 +575,8 @@ async function handleCheckJob(
 
       // Deduct stored credit cost immediately so badge updates without waiting
       // for the balance API (which may still return stale data right after completion)
-      const creditCost = pendingJobCosts.get(jobId);
+      const creditCost = await takePendingJobCost(jobId);
       if (creditCost && creditCost > 0) {
-        pendingJobCosts.delete(jobId);
         await deductCreditsOptimistic(creditCost);
       }
 
@@ -539,7 +586,7 @@ async function handleCheckJob(
 
     // Clean up pending cost if job failed
     if (status.status === 'failed') {
-      pendingJobCosts.delete(jobId);
+      await deletePendingJobCost(jobId);
     }
 
     return { success: true, data: status };
