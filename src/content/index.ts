@@ -1275,11 +1275,10 @@ class SafePlayContentScript {
     const currentNavId = this.navigationId;
     log(`Navigation detected, navigationId: ${currentNavId}`);
 
-    // Stop current filter if any. destroy() (not stop()) tears down the
-    // Web Audio graph so the next video builds a fresh MediaElementSourceNode
-    // bound to the new <video> element. stop() alone leaves the audio pipe
-    // wired to the previous video, which is why audio wasn't being muted on
-    // second/third videos in the same SPA session.
+    // Reset the controller's per-video state. See VideoController.destroy()
+    // for why this intentionally does NOT close the AudioContext — YouTube's
+    // SPA reuses the same <video> element across watch pages, and the Web
+    // Audio source binding is permanent per element.
     if (this.videoController) {
       this.videoController.destroy();
     }
