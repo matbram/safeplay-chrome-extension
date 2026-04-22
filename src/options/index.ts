@@ -74,6 +74,9 @@ class OptionsController {
     this.loadTheme();
     this.setupNav();
     this.setupListeners();
+    // Register the listener before any awaits so broadcasts that arrive
+    // during startup (e.g. CREDIT_UPDATE after a just-completed filter) aren't dropped.
+    this.setupMessageListener();
 
     await Promise.all([
       this.loadPreferences(),
@@ -83,6 +86,22 @@ class OptionsController {
 
     this.loadCredits();
     this.readSectionFromHash();
+  }
+
+  private setupMessageListener(): void {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.type === 'PREFERENCES_UPDATED' && msg.payload && typeof msg.payload === 'object') {
+        this.prefs = msg.payload as UserPreferences;
+        this.renderPrefs();
+      }
+      if (msg?.type === 'AUTH_STATE_CHANGED') {
+        this.loadAuthState();
+        this.loadCredits();
+      }
+      if (msg?.type === 'CREDIT_UPDATE') {
+        this.loadCredits();
+      }
+    });
   }
 
   private loadTheme(): void {
