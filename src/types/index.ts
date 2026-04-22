@@ -75,7 +75,7 @@ export interface FilterStartResponse {
 
 // Job status response
 export interface JobStatusResponse {
-  status: 'pending' | 'downloading' | 'transcribing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'downloading' | 'transcribing' | 'completed' | 'failed';
   progress: number;
   message?: string;
   transcript?: Transcript;
@@ -85,6 +85,20 @@ export interface JobStatusResponse {
     youtube_id: string;
     title?: string;
   };
+  // Expected completion time for the job in seconds (server-computed from
+  // video duration). May be null if the duration couldn't be resolved.
+  eta_seconds?: number | null;
+  // ISO-8601 creation timestamp of the job row on the server. Used by the
+  // extension to compute elapsed time for the in-session retry budget.
+  created_at?: string;
+}
+
+// Response from POST /api/filter/retry
+export interface RetryJobResponse {
+  status: 'processing';
+  job_id: string;
+  youtube_id?: string;
+  message?: string;
 }
 
 // Legacy FilterResponse - kept for compatibility during migration
@@ -230,6 +244,7 @@ export type MessageType =
   | 'GET_PREVIEW'
   | 'START_FILTER'
   | 'CHECK_JOB'
+  | 'RETRY_JOB'
   | 'GET_CREDITS'
   | 'GET_PREFERENCES'
   | 'SET_PREFERENCES'

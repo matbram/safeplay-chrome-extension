@@ -1,6 +1,7 @@
 import {
   FilterStartResponse,
   JobStatusResponse,
+  RetryJobResponse,
   Transcript,
   PreviewResponse,
   CreditBalanceResponse,
@@ -226,6 +227,23 @@ export async function checkJobStatus(jobId: string): Promise<JobStatusResponse> 
   logApi('=== checkJobStatus ===', jobId);
   return request<JobStatusResponse>(`/api/filter/status/${jobId}`, {
     method: 'GET',
+    requiresAuth: true,
+  });
+}
+
+/**
+ * Restart a stuck transcription job. The server deletes the cached videos
+ * row, cancels the old orchestrator job, and starts a fresh one under the
+ * same job_id — so the extension can keep polling the same status URL.
+ *
+ * The extension is only allowed to call this ONCE per job_id within a
+ * session; the server's background sweep handles persistent failures.
+ */
+export async function retryFilterJob(jobId: string): Promise<RetryJobResponse> {
+  logApi('=== retryFilterJob ===', jobId);
+  return request<RetryJobResponse>('/api/filter/retry', {
+    method: 'POST',
+    body: { action: 'restart', job_id: jobId },
     requiresAuth: true,
   });
 }

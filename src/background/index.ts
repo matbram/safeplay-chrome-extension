@@ -27,6 +27,7 @@ import {
 import {
   requestFilter,
   checkJobStatus,
+  retryFilterJob,
   getPreview,
   startFilter,
   getCreditBalance,
@@ -270,6 +271,9 @@ async function handleMessage(
 
       case 'CHECK_JOB':
         return await handleCheckJob(message.payload as { jobId: string });
+
+      case 'RETRY_JOB':
+        return await handleRetryJob(message.payload as { jobId: string });
 
       case 'GET_CREDITS':
         return await handleGetCredits();
@@ -624,6 +628,30 @@ async function handleCheckJob(
   } catch (error) {
     logError('handleCheckJob error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to check job status';
+    return { success: false, error: errorMessage };
+  }
+}
+
+// Handle in-session retry for a stuck transcription job. The server keeps
+// job_id stable across the restart, so the caller can keep polling the same
+// status URL. Per the contract, the extension fires this at most once per
+// job_id; the background job sweep handles persistent failures.
+async function handleRetryJob(
+  payload: { jobId: string }
+): Promise<MessageResponse<{ jobId: string; status: string }>> {
+  const { jobId } = payload;
+  log('handleRetryJob called with jobId:', jobId);
+
+  try {
+    const response = await retryFilterJob(jobId);
+    log('Retry job response:', JSON.stringify(response).substring(0, 200));
+    return {
+      success: true,
+      data: { jobId: response.job_id || jobId, status: response.status },
+    };
+  } catch (error) {
+    logError('handleRetryJob error:', error);
+    const errorMessage = error instanceof Error ? error.message : 'Failed to retry job';
     return { success: false, error: errorMessage };
   }
 }

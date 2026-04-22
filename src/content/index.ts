@@ -3,7 +3,12 @@ import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
 import { CaptionFilter } from './caption-filter';
 import { TimelineMarkers } from './timeline-markers';
-import { CreditConfirmation, showAuthRequiredMessage, showFilterErrorNotification } from './credit-confirmation';
+import {
+  CreditConfirmation,
+  showAuthRequiredMessage,
+  showCheckBackLaterNotification,
+  showFilterErrorNotification,
+} from './credit-confirmation';
 import { TranscriptionSSEClient } from './sse-client';
 import { TimeEstimator, TranscriptionStateSnapshot } from './time-estimator';
 import {
@@ -21,6 +26,13 @@ const API_BASE_URL = 'https://trysafeplay.com';
 // see SafePlayContentScript.transcriptionBudgetMs().
 const TRANSCRIPTION_BUDGET_FLOOR_MS = 6 * 60 * 1000;
 const FALLBACK_POLL_INTERVAL_MS = 2000;
+// Grace period added on top of the server-provided eta_seconds before we
+// consider a job stuck. Matches the website's own stale-threshold heuristic.
+const RETRY_GRACE_SECONDS = 30;
+// Conservative fallback when the server didn't send eta_seconds (old job
+// row, duration unresolvable). After this much elapsed time we give up in
+// session and defer to the background sweep.
+const NO_ETA_GIVE_UP_SECONDS = 5 * 60;
 import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
 import './styles.css';
 
@@ -84,6 +96,21 @@ class SafePlayContentScript {
   private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
   private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
   private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
+  // Per-job in-session retry tracking. The extension is allowed one retry
+  // per job_id; after the second ETA+grace window we defer to the server's
+  // background sweep and show the check-back-later message. Survives SSE ↔
+  // polling transitions because it's keyed on job_id, not on which transport
+  // happens to be active.
+  private retryState: {
+    jobId: string;
+    retried: boolean;
+    giveUpTriggered: boolean;
+    retryInFlight: boolean;
+    etaSeconds: number | null;
+    createdAt: string | null;
+    // Fallback anchor when the server didn't send created_at (old rows).
+    localStartMs: number;
+  } | null = null;
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -538,6 +565,7 @@ class SafePlayContentScript {
   private async runTranscriptionFlow(jobId: string, videoId: string): Promise<void> {
     this.jobStartedAt = Date.now();
     this.startEstimator(videoId);
+    this.ensureRetryState(jobId);
 
     const navigationId = this.navigationId;
     const isStillCurrent = () =>
@@ -580,10 +608,14 @@ class SafePlayContentScript {
         if (!isStillCurrent()) return;
         log('SSE connected:', data.status);
         this.estimator?.setServerStatus(data.status);
+        this.ingestJobMeta(jobId, data.eta_seconds, data.created_at);
+        this.evaluateRetryOrGiveUp(jobId, videoId, data.status);
       },
       onProgress: (data) => {
         if (!isStillCurrent()) return;
         this.estimator?.setServerStatus(data.status);
+        this.ingestJobMeta(jobId, data.eta_seconds, data.created_at);
+        this.evaluateRetryOrGiveUp(jobId, videoId, data.status);
       },
       onComplete: async (data) => {
         clearSafety();
@@ -638,7 +670,15 @@ class SafePlayContentScript {
     type JobCheckResponse = {
       success: boolean;
       error?: string;
-      data?: { status: string; progress: number; transcript?: Transcript; error?: string; error_code?: string };
+      data?: {
+        status: string;
+        progress: number;
+        transcript?: Transcript;
+        error?: string;
+        error_code?: string;
+        eta_seconds?: number | null;
+        created_at?: string;
+      };
     };
     let response: JobCheckResponse | null;
     try {
@@ -672,7 +712,8 @@ class SafePlayContentScript {
       return;
     }
 
-    const { status, transcript, error, error_code } = response.data;
+    const { status, transcript, error, error_code, eta_seconds, created_at } = response.data;
+    this.ingestJobMeta(jobId, eta_seconds, created_at);
     if (status === 'completed' && transcript) {
       await this.applyCompletedTranscript(transcript, videoId);
       return;
@@ -699,6 +740,7 @@ class SafePlayContentScript {
     }
 
     if (!this.estimator) this.startEstimator(videoId);
+    this.ensureRetryState(jobId);
     const startedAt = Date.now();
     const budgetMs = this.transcriptionBudgetMs();
     const navigationId = this.navigationId;
@@ -718,7 +760,15 @@ class SafePlayContentScript {
         response = await safeSendMessage<{
           success: boolean;
           error?: string;
-          data?: { status: string; progress: number; transcript?: Transcript; error?: string; error_code?: string };
+          data?: {
+            status: string;
+            progress: number;
+            transcript?: Transcript;
+            error?: string;
+            error_code?: string;
+            eta_seconds?: number | null;
+            created_at?: string;
+          };
         }>({ type: 'CHECK_JOB', payload: { jobId } });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -747,7 +797,8 @@ class SafePlayContentScript {
         return;
       }
 
-      const { status, transcript, error, error_code } = response.data;
+      const { status, transcript, error, error_code, eta_seconds, created_at } = response.data;
+      this.ingestJobMeta(jobId, eta_seconds, created_at);
       log(`Fallback poll status: ${status}`);
 
       if (status === 'completed' && transcript) {
@@ -762,6 +813,13 @@ class SafePlayContentScript {
       }
 
       this.estimator?.setServerStatus(status);
+
+      // Evaluate the in-session retry budget. If this triggers the
+      // give-up path it tears down polling via stopTranscriptionResources,
+      // so check afterwards and bail out instead of scheduling another tick.
+      this.evaluateRetryOrGiveUp(jobId, videoId, status);
+      if (!isStillCurrent() || this.retryState?.giveUpTriggered) return;
+
       this.fallbackPollTimer = setTimeout(tick, FALLBACK_POLL_INTERVAL_MS);
     };
 
@@ -785,6 +843,11 @@ class SafePlayContentScript {
     this.statusCallInFlight = false;
     this.lastTranscriptionState = null;
     this.jobStartedAt = 0;
+    // stopTranscriptionResources is only called on terminal paths
+    // (success, error, give-up, navigation). The SSE→polling fallback
+    // tears down the SSE client directly without calling this method, so
+    // the retry state correctly survives that transition.
+    this.retryState = null;
   }
 
   // Create the estimator and wire its updates to the button UI + popup.
@@ -829,6 +892,172 @@ class SafePlayContentScript {
     });
     this.estimator = estimator;
     estimator.start();
+  }
+
+  // Set up per-job retry bookkeeping. Preserved across SSE ↔ polling
+  // transitions (same jobId keeps its `retried` flag) so we never exceed
+  // the one-retry-per-job-per-session rule. Called from both the SSE and
+  // polling entry points.
+  private ensureRetryState(jobId: string): void {
+    if (this.retryState?.jobId === jobId) return;
+    this.retryState = {
+      jobId,
+      retried: false,
+      giveUpTriggered: false,
+      retryInFlight: false,
+      etaSeconds: null,
+      createdAt: null,
+      localStartMs: Date.now(),
+    };
+  }
+
+  // Merge server-provided job metadata (eta_seconds, created_at) into the
+  // retry state. Called on every status update from SSE progress events and
+  // CHECK_JOB responses.
+  private ingestJobMeta(
+    jobId: string,
+    etaSeconds?: number | null,
+    createdAt?: string
+  ): void {
+    if (!this.retryState || this.retryState.jobId !== jobId) return;
+    if (etaSeconds !== undefined) {
+      // eta_seconds may be explicitly null (old job row / duration unknown);
+      // preserve that — the retry evaluator treats null as "skip in-session
+      // retry, use conservative fallback timeout."
+      this.retryState.etaSeconds = etaSeconds;
+    }
+    if (createdAt) {
+      this.retryState.createdAt = createdAt;
+    }
+  }
+
+  // Elapsed time since the server created the job row. Falls back to the
+  // local start timestamp if the server didn't send created_at.
+  private elapsedSeconds(): number {
+    if (!this.retryState) return 0;
+    if (this.retryState.createdAt) {
+      const created = Date.parse(this.retryState.createdAt);
+      if (!Number.isNaN(created)) {
+        return Math.max(0, (Date.now() - created) / 1000);
+      }
+    }
+    return Math.max(0, (Date.now() - this.retryState.localStartMs) / 1000);
+  }
+
+  // Core in-session retry policy, invoked on every non-terminal status
+  // update. Two windows keyed off the server's eta_seconds:
+  //   * elapsed > ETA + 30s → fire the one allowed retry
+  //   * elapsed > 2*(ETA+30)s → give up and defer to the server's background
+  //     sweep with a friendly check-back-later message
+  // When eta_seconds is null (old job row / duration unknown) we skip the
+  // retry entirely and use a conservative 5-minute fallback for give-up.
+  private evaluateRetryOrGiveUp(jobId: string, videoId: string, status: string): void {
+    const state = this.retryState;
+    if (!state || state.jobId !== jobId) return;
+    if (state.giveUpTriggered || state.retryInFlight) return;
+    // Only evaluate for non-terminal states. completed/failed are handled
+    // by the existing branches before this is called.
+    if (status === 'completed' || status === 'failed') return;
+
+    const elapsed = this.elapsedSeconds();
+
+    // No ETA from the server → skip the in-session retry entirely per the
+    // API contract; just enforce a conservative give-up deadline so we
+    // don't poll forever.
+    if (state.etaSeconds == null) {
+      if (elapsed > NO_ETA_GIVE_UP_SECONDS) {
+        log(`No eta_seconds; exceeded ${NO_ETA_GIVE_UP_SECONDS}s — giving up in session for ${jobId}`);
+        this.surfaceCheckBackLater(videoId);
+      }
+      return;
+    }
+
+    const windowSec = state.etaSeconds + RETRY_GRACE_SECONDS;
+
+    if (state.retried) {
+      // Already used our one retry — second window means give up.
+      if (elapsed > 2 * windowSec) {
+        log(`Retry exhausted and elapsed ${Math.round(elapsed)}s > ${2 * windowSec}s — giving up for ${jobId}`);
+        this.surfaceCheckBackLater(videoId);
+      }
+      return;
+    }
+
+    if (elapsed > windowSec) {
+      log(`Elapsed ${Math.round(elapsed)}s > ${windowSec}s — firing one retry for ${jobId}`);
+      state.retryInFlight = true;
+      this.fireJobRetry(jobId, videoId);
+    }
+  }
+
+  // Fire the one allowed retry via the background. On success we mark
+  // retried=true so we never fire a second one, and leave polling/SSE
+  // running — the server keeps the same job_id so the existing transport
+  // stays valid. On failure we short-circuit to the check-back-later UI
+  // since the contract says not to attempt a second retry.
+  private async fireJobRetry(jobId: string, videoId: string): Promise<void> {
+    const state = this.retryState;
+    if (!state || state.jobId !== jobId) return;
+    try {
+      const response = await safeSendMessage<{
+        success: boolean;
+        error?: string;
+        data?: { jobId: string; status: string };
+      }>({ type: 'RETRY_JOB', payload: { jobId } });
+
+      if (!state || this.retryState !== state || state.jobId !== jobId) {
+        // Navigation / new job raced the retry — abandon silently.
+        return;
+      }
+
+      state.retryInFlight = false;
+
+      if (!response || !response.success) {
+        const errMsg = response?.error || 'Retry request failed';
+        log(`Retry failed for ${jobId}: ${errMsg}`);
+        // Per contract: no second retry attempt. Fold into check-back-later.
+        state.retried = true;
+        this.surfaceCheckBackLater(videoId);
+        return;
+      }
+
+      state.retried = true;
+      log(`Retry accepted for ${jobId}; continuing to poll same job_id`);
+    } catch (err) {
+      if (this.retryState === state) {
+        state.retryInFlight = false;
+        state.retried = true;
+        log(`Retry threw for ${jobId}:`, err);
+        this.surfaceCheckBackLater(videoId);
+      }
+    }
+  }
+
+  // Give-up path: tear down transport, show the friendly deferred-to-server
+  // message, and leave the button in a non-error paused-ish state so the
+  // user can click it again later without a scary red "Retry" label.
+  private surfaceCheckBackLater(videoId: string): void {
+    if (this.retryState) this.retryState.giveUpTriggered = true;
+    this.stopTranscriptionResources();
+
+    this.updateButtonState({
+      state: 'idle',
+      text: 'SafePlay',
+      videoId,
+    });
+
+    showCheckBackLaterNotification();
+
+    if (this.videoWasPlaying) {
+      const video = this.getVideoElement();
+      if (video) {
+        video.play();
+        log('Video resumed after deferring to server background sweep');
+      }
+      this.videoWasPlaying = false;
+    }
+    this.isProcessing = false;
+    this.filteringVideoId = null;
   }
 
   // Apply a completed transcript — wraps the existing applyFilter to make
