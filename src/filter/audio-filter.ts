@@ -345,14 +345,28 @@ export class AudioFilter {
     }
   }
 
+  // Effective fade buffer in video-time seconds, scaled by playbackRate.
+  // The check timer fires on wall-clock time, not video time, so at 2x
+  // playback 5ms of wall-clock equals 10ms of video. If we used the raw
+  // FADE_BUFFER at 2x, we'd often notice we're "approaching" a mute
+  // interval only after we're already inside it, and the smooth fade-in
+  // would be replaced by an abrupt cut.
+  private effectiveFadeBuffer(): number {
+    const rate = this.video?.playbackRate && this.video.playbackRate > 0
+      ? this.video.playbackRate
+      : 1;
+    return FADE_BUFFER * rate;
+  }
+
   // Find if we're currently inside a mute interval
   private findActiveInterval(time: number): MuteInterval | null {
+    const buffer = this.effectiveFadeBuffer();
     for (const interval of this.muteIntervals) {
       if (time >= interval.start && time <= interval.end) {
         return interval;
       }
       // Since sorted, we can break early
-      if (interval.start > time + FADE_BUFFER) {
+      if (interval.start > time + buffer) {
         break;
       }
     }
@@ -361,14 +375,15 @@ export class AudioFilter {
 
   // Find if we're approaching a mute interval (within fade buffer)
   private findApproachingInterval(time: number): MuteInterval | null {
+    const buffer = this.effectiveFadeBuffer();
     for (const interval of this.muteIntervals) {
       // Check if we're within the fade buffer before the interval starts
-      const fadeStartTime = interval.start - FADE_BUFFER;
+      const fadeStartTime = interval.start - buffer;
       if (time >= fadeStartTime && time < interval.start) {
         return interval;
       }
       // Since sorted, we can break early
-      if (interval.start > time + FADE_BUFFER) {
+      if (interval.start > time + buffer) {
         break;
       }
     }
