@@ -119,19 +119,9 @@ async function request<T>(
         logApi('Clearing auth data and notifying UI');
         await clearAuthData();
 
-        // Broadcast logout to YouTube tabs (only where content scripts run).
-        if (typeof chrome !== 'undefined' && chrome.tabs) {
-          chrome.tabs.query({ url: '*://*.youtube.com/*' }).then(tabs => {
-            for (const tab of tabs) {
-              if (tab.id) {
-                chrome.tabs.sendMessage(tab.id, {
-                  type: 'AUTH_STATE_CHANGED',
-                  payload: { isAuthenticated: false },
-                }).catch(() => {});
-              }
-            }
-          });
-        }
+        // No bespoke broadcast: clearAuthData wipes the backing storage
+        // keys and every reactiveStore.subscribe('authState', ...) listener
+        // (popup, options, content) converges via chrome.storage.onChanged.
 
         throw new ApiError(
           'Session expired. Please sign in again.',

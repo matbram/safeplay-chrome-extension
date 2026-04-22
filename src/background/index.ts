@@ -9,6 +9,13 @@ import {
   PreviewData,
   FilterConfirmPayload,
   AuthState,
+  SessionState,
+  InflightState,
+  StoreProposePayload,
+  TabSnapshot,
+  JobSummary,
+  EMPTY_INFLIGHT_STATE,
+  EMPTY_SESSION_STATE,
 } from '../types';
 import {
   getPreferences,
@@ -22,8 +29,10 @@ import {
   setCreditInfo,
   clearAuthData,
   getFullAuthState,
+  singleflight,
   STORAGE_KEYS,
 } from '../utils/storage';
+import { commit as storeCommit } from '../utils/reactiveStore';
 import {
   requestFilter,
   checkJobStatus,
@@ -54,96 +63,13 @@ function logError(...args: unknown[]): void {
   }
 }
 
-// Track credit costs for in-flight processing jobs so we can update
-// the badge optimistically when they complete (before the API catches up).
-// Persisted so the mapping survives service worker suspension between
-// starting a job and receiving its completion status.
-const PENDING_JOB_COSTS_KEY = 'safeplay_pending_job_costs';
-const PENDING_JOB_COST_TTL_MS = 24 * 60 * 60 * 1000;
-
-type PendingJobCostEntry = { cost: number; createdAt: number };
-type PendingJobCostsMap = Record<string, PendingJobCostEntry>;
-
-async function readPendingJobCosts(): Promise<PendingJobCostsMap> {
-  const result = await chrome.storage.local.get(PENDING_JOB_COSTS_KEY);
-  const raw = result[PENDING_JOB_COSTS_KEY];
-  if (!raw || typeof raw !== 'object') return {};
-  const now = Date.now();
-  const pruned: PendingJobCostsMap = {};
-  for (const [jobId, entry] of Object.entries(raw as PendingJobCostsMap)) {
-    if (
-      entry &&
-      typeof entry.cost === 'number' &&
-      typeof entry.createdAt === 'number' &&
-      now - entry.createdAt < PENDING_JOB_COST_TTL_MS
-    ) {
-      pruned[jobId] = entry;
-    }
-  }
-  return pruned;
-}
-
-async function setPendingJobCost(jobId: string, cost: number): Promise<void> {
-  const costs = await readPendingJobCosts();
-  costs[jobId] = { cost, createdAt: Date.now() };
-  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
-}
-
-async function takePendingJobCost(jobId: string): Promise<number | undefined> {
-  const costs = await readPendingJobCosts();
-  const entry = costs[jobId];
-  if (entry) {
-    delete costs[jobId];
-  }
-  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
-  return entry?.cost;
-}
-
-async function deletePendingJobCost(jobId: string): Promise<void> {
-  const costs = await readPendingJobCosts();
-  if (!(jobId in costs)) return;
-  delete costs[jobId];
-  await chrome.storage.local.set({ [PENDING_JOB_COSTS_KEY]: costs });
-}
-
-// Optimistically deduct credits and update badge immediately.
-// Reads directly from storage (bypassing cache TTL) and calls updateBadge()
-// directly (not relying on the storage change listener) for reliability.
-async function deductCreditsOptimistic(creditCost: number): Promise<void> {
-  const result = await chrome.storage.local.get('safeplay_credit_info');
-  const currentInfo = result['safeplay_credit_info'] as CreditInfo | undefined;
-  if (!currentInfo) return;
-
-  // Validate the stored shape before doing arithmetic. A corrupt or
-  // schema-drifted entry could have string / undefined / NaN in these
-  // fields; subtracting NaN produces NaN, which Math.max preserves,
-  // which then ends up written back to storage and rendered as "NaN"
-  // on the badge. Treat validation failure as "skip optimistic update
-  // and let the next server refresh reconcile."
-  if (
-    typeof currentInfo.available !== 'number' ||
-    !Number.isFinite(currentInfo.available) ||
-    typeof currentInfo.used_this_period !== 'number' ||
-    !Number.isFinite(currentInfo.used_this_period) ||
-    typeof currentInfo.plan_allocation !== 'number' ||
-    !Number.isFinite(currentInfo.plan_allocation)
-  ) {
-    logError('Stored credit_info has non-numeric fields; skipping optimistic deduction:', currentInfo);
-    return;
-  }
-
-  const updatedInfo: CreditInfo = {
-    ...currentInfo,
-    available: Math.max(0, currentInfo.available - creditCost),
-    used_this_period: currentInfo.used_this_period + creditCost,
-    percent_consumed: Math.min(
-      100,
-      ((currentInfo.used_this_period + creditCost) / currentInfo.plan_allocation) * 100
-    ),
-  };
-  await setCreditInfo(updatedInfo);
-  updateBadge(updatedInfo);
-}
+// Credits are now server-authoritative. The background no longer does
+// optimistic local deduction; every credit change flows through
+// refreshCredits() → setCreditInfo() → reactiveStore subscribers. The old
+// PENDING_JOB_COSTS_KEY / setPendingJobCost / takePendingJobCost /
+// deductCreditsOptimistic helpers existed only to bridge the window before
+// the server caught up, and with strict server-authoritative behavior that
+// bridge is gone.
 
 // Badge management - shows remaining credits on extension icon
 function updateBadge(creditInfo: CreditInfo | null): void {
@@ -309,6 +235,9 @@ async function handleMessage(
       case 'CLEAR_CACHE':
         return await handleClearCache();
 
+      case 'STORE_PROPOSE':
+        return await handleStoreProposal(message.payload as StoreProposePayload, _sender);
+
       default:
         return { success: false, error: 'Unknown message type' };
     }
@@ -356,7 +285,17 @@ async function handleGetPreview(
   log('Not in local cache, fetching preview from API...');
 
   try {
-    const preview = await getPreview(youtubeId);
+    // Coalesce rapid double-clicks into a single network call, keyed on
+    // youtubeId. Without this, the resilient injector's auto-filter can
+    // race with the user pressing the button and fire two identical
+    // /preview requests.
+    await markInflight('previews', youtubeId, true);
+    let preview;
+    try {
+      preview = await singleflight(`preview:${youtubeId}`, () => getPreview(youtubeId));
+    } finally {
+      await markInflight('previews', youtubeId, false);
+    }
     log('Preview response:', JSON.stringify(preview).substring(0, 300));
 
     // Check for error response
@@ -436,7 +375,19 @@ async function handleStartFilter(
   }
 
   try {
-    const response = await startFilter(youtubeId, filterType, customWords);
+    // Singleflight keyed on youtubeId prevents a double-click from queueing
+    // two server-side filter starts (each of which could cost credits).
+    // Also updates the inflight marker so popup UI can render "starting…".
+    await markInflight('filterStarts', youtubeId, true);
+    let response;
+    try {
+      response = await singleflight(
+        `filter:${youtubeId}:${filterType}`,
+        () => startFilter(youtubeId, filterType, customWords),
+      );
+    } finally {
+      await markInflight('filterStarts', youtubeId, false);
+    }
     log('Start filter response:', JSON.stringify(response).substring(0, 300));
 
     // Check for explicit failure or error
@@ -454,11 +405,11 @@ async function handleStartFilter(
     if (response.status === 'completed' && response.transcript) {
       log('API returned completed/cached transcript, saving locally');
       await setCachedTranscript(youtubeId, response.transcript);
-      // Deduct credits immediately so badge updates without waiting for the API
-      if (creditCost && creditCost > 0) {
-        await deductCreditsOptimistic(creditCost);
-      }
-      // Then refresh from API for accuracy (corrects the optimistic value if needed)
+      // Server-authoritative: refresh the balance from the API. Subscribers
+      // of reactiveStore('creditInfo') converge automatically; the badge
+      // updates inside refreshCredits. creditCost is no longer used for a
+      // local optimistic deduction.
+      void creditCost;
       await refreshCredits();
       return {
         success: true,
@@ -468,10 +419,6 @@ async function handleStartFilter(
 
     if (response.status === 'processing' && response.job_id) {
       log('API returned processing status, job_id:', response.job_id);
-      // Store credit cost so handleCheckJob can deduct optimistically on completion
-      if (creditCost && creditCost > 0) {
-        await setPendingJobCost(response.job_id, creditCost);
-      }
       return {
         success: true,
         data: { status: 'processing', jobId: response.job_id },
@@ -608,20 +555,9 @@ async function handleCheckJob(
 
       await setCachedTranscript(cacheKey, status.transcript);
 
-      // Deduct stored credit cost immediately so badge updates without waiting
-      // for the balance API (which may still return stale data right after completion)
-      const creditCost = await takePendingJobCost(jobId);
-      if (creditCost && creditCost > 0) {
-        await deductCreditsOptimistic(creditCost);
-      }
-
-      // Then refresh from API for accuracy
+      // Server-authoritative credit balance: refresh from API and let
+      // reactiveStore subscribers converge. No local optimistic deduction.
       await refreshCredits();
-    }
-
-    // Clean up pending cost if job failed
-    if (status.status === 'failed') {
-      await deletePendingJobCost(jobId);
     }
 
     return { success: true, data: status };
@@ -740,24 +676,183 @@ async function handleSetPreferences(
   return { success: true, data: updated };
 }
 
-async function broadcastPreferences(updated: UserPreferences): Promise<void> {
-  // Broadcast to all YouTube tabs (content scripts)
-  const tabs = await chrome.tabs.query({ url: '*://www.youtube.com/*' });
-  for (const tab of tabs) {
-    if (tab.id) {
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'PREFERENCES_UPDATED',
-        payload: updated,
-      }).catch(() => {});
-    }
-  }
+// Merge a TabSnapshot patch — preserves unchanged fields, lets the proposer
+// overwrite just what they touched. intervalCount is monotonic-wins so a
+// late-arriving patch from a stale estimator can't rewind the counter.
+function mergeTabSnapshot(
+  prev: TabSnapshot | undefined,
+  patch: Partial<TabSnapshot>,
+  tabId: number,
+): TabSnapshot {
+  const base: TabSnapshot = prev ?? {
+    tabId,
+    url: '',
+    videoId: null,
+    filterActive: false,
+    buttonState: { state: 'idle', text: '' },
+    transcription: null,
+    intervalCount: 0,
+    updatedAt: 0,
+  };
+  return {
+    ...base,
+    ...patch,
+    tabId,
+    intervalCount: Math.max(base.intervalCount, patch.intervalCount ?? 0),
+    updatedAt: Date.now(),
+  };
+}
 
-  // Also broadcast to extension contexts (popup, options page) so an
-  // update from one surface lands on every other surface immediately.
-  chrome.runtime.sendMessage({
-    type: 'PREFERENCES_UPDATED',
-    payload: updated,
-  }).catch(() => {});
+// STORE_PROPOSE handler. Merges content/popup-proposed patches into the
+// canonical reactive-store keys under the commit mutex so concurrent
+// proposals from multiple tabs never clobber each other.
+async function handleStoreProposal(
+  payload: StoreProposePayload,
+  sender?: chrome.runtime.MessageSender,
+): Promise<MessageResponse> {
+  if (!payload || typeof payload !== 'object') {
+    return { success: false, error: 'invalid STORE_PROPOSE payload' };
+  }
+  const { key, patch } = payload;
+
+  try {
+    switch (key) {
+      case 'preferences': {
+        const next = await storeCommit('preferences', prev => ({
+          ...prev,
+          ...(patch as Partial<UserPreferences>),
+        }));
+        // Legacy broadcast kept for now — Phase 2 retires it once all surfaces
+        // subscribe via reactiveStore.
+        await broadcastPreferences(next);
+        return { success: true };
+      }
+      case 'sessionState': {
+        const sessionPatch = patch as {
+          byTab?: Record<number, Partial<TabSnapshot> | null>;
+          activeJobs?: Record<string, Partial<JobSummary> | null>;
+          // Content scripts send `selfTab` because they don't know their own
+          // tab ID. Background resolves it from sender.tab.id.
+          selfTab?: Partial<TabSnapshot>;
+        };
+        // Resolve selfTab to a byTab[sender.tab.id] patch so the merge loop
+        // below handles both cases uniformly. If no sender.tab is present
+        // (e.g. an extension-page proposal that used selfTab by mistake),
+        // drop the selfTab silently rather than synthesize a bad entry.
+        const effectiveByTab: Record<number, Partial<TabSnapshot> | null> = {
+          ...(sessionPatch.byTab ?? {}),
+        };
+        if (sessionPatch.selfTab && sender?.tab?.id != null) {
+          const selfId = sender.tab.id;
+          effectiveByTab[selfId] = {
+            ...(effectiveByTab[selfId] ?? {}),
+            ...sessionPatch.selfTab,
+            url: sender.tab.url ?? effectiveByTab[selfId]?.url,
+          };
+        }
+        await storeCommit('sessionState', prev => {
+          const next: SessionState = {
+            byTab: { ...prev.byTab },
+            activeJobs: { ...prev.activeJobs },
+            lastUpdated: Date.now(),
+          };
+          for (const [tabIdStr, tabPatch] of Object.entries(effectiveByTab)) {
+            const tabId = Number(tabIdStr);
+            if (tabPatch === null) {
+              delete next.byTab[tabId];
+            } else {
+              next.byTab[tabId] = mergeTabSnapshot(next.byTab[tabId], tabPatch, tabId);
+            }
+          }
+          if (sessionPatch.activeJobs) {
+            for (const [jobId, jobPatch] of Object.entries(sessionPatch.activeJobs)) {
+              if (jobPatch === null) {
+                delete next.activeJobs[jobId];
+              } else {
+                next.activeJobs[jobId] = {
+                  ...(next.activeJobs[jobId] ?? {}),
+                  ...jobPatch,
+                } as JobSummary;
+              }
+            }
+          }
+          return next;
+        });
+        return { success: true };
+      }
+      case 'inflight': {
+        const inflightPatch = patch as Partial<InflightState>;
+        await storeCommit('inflight', prev => ({
+          ...prev,
+          ...inflightPatch,
+          filterStarts: { ...prev.filterStarts, ...(inflightPatch.filterStarts ?? {}) },
+          previews: { ...prev.previews, ...(inflightPatch.previews ?? {}) },
+        }));
+        return { success: true };
+      }
+      default:
+        return { success: false, error: `unknown STORE_PROPOSE key ${String(key)}` };
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    logError('STORE_PROPOSE failed', err);
+    return { success: false, error: msg };
+  }
+}
+
+// Mark an inflight singleflight slot in chrome.storage.session so popup
+// subscribers can render a "fetching…" UI. `bucket` is which sub-map to
+// touch; `key` identifies the specific operation (typically a youtubeId).
+async function markInflight(
+  bucket: 'filterStarts' | 'previews',
+  key: string,
+  active: boolean,
+): Promise<void> {
+  try {
+    await storeCommit('inflight', prev => {
+      const nextBucket = { ...prev[bucket] };
+      if (active) {
+        nextBucket[key] = { startedAt: Date.now() };
+      } else {
+        delete nextBucket[key];
+      }
+      return { ...prev, [bucket]: nextBucket };
+    });
+  } catch (err) {
+    log(`markInflight(${bucket}, ${key}, ${active}) failed (non-fatal):`, err);
+  }
+}
+
+// Initialize reactive-store keys on first install / startup so subscribers
+// read the empty shape rather than undefined. Done once here so the popup
+// doesn't observe the absence-of-value flicker on fresh installs.
+async function ensureReactiveStoreInitialized(): Promise<void> {
+  const res = await chrome.storage.local.get(STORAGE_KEYS.SESSION_STATE);
+  if (!res[STORAGE_KEYS.SESSION_STATE]) {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.SESSION_STATE]: EMPTY_SESSION_STATE,
+    });
+  }
+  try {
+    const sres = await chrome.storage.session.get(STORAGE_KEYS.INFLIGHT);
+    if (!sres[STORAGE_KEYS.INFLIGHT]) {
+      await chrome.storage.session.set({
+        [STORAGE_KEYS.INFLIGHT]: EMPTY_INFLIGHT_STATE,
+      });
+    }
+  } catch (err) {
+    // storage.session unavailable (older Chrome). Inflight UI will render
+    // as "no markers" — a graceful degradation.
+    log('storage.session unavailable, skipping inflight init:', err);
+  }
+}
+
+// broadcastPreferences retired in Phase 6 — every surface subscribes via
+// reactiveStore → chrome.storage.onChanged. The function is kept as a
+// no-op hook so the single remaining call site in handleSetPreferences
+// reads as a clear intent rather than a dangling history.
+async function broadcastPreferences(_updated: UserPreferences): Promise<void> {
+  // Intentionally empty.
 }
 
 // Merges the strictness preferences AND marks onboarding complete in a
@@ -916,17 +1011,10 @@ async function handleLogout(): Promise<MessageResponse> {
   await clearAuthData();
   clearBadge();
 
-  // Broadcast logout to all tabs
-  const tabs = await chrome.tabs.query({});
-  for (const tab of tabs) {
-    if (tab.id) {
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'AUTH_STATE_CHANGED',
-        payload: { isAuthenticated: false },
-      }).catch(() => {});
-    }
-  }
-
+  // No runtime broadcast — clearAuthData wipes the backing keys and every
+  // subscriber of reactiveStore.subscribe('authState', ...) converges via
+  // chrome.storage.onChanged. Content script's pending-auth handling now
+  // subscribes to authState directly, so no bespoke message is required.
   return { success: true };
 }
 
@@ -957,8 +1045,9 @@ chrome.action.onClicked.addListener((_tab) => {
 
 // Current schema version. Bump every time a storage shape changes,
 // add a matching migration step in runMigrations().
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
 const SCHEMA_VERSION_KEY = 'safeplay_schema_version';
+const LEGACY_PENDING_JOB_COSTS_KEY = 'safeplay_pending_job_costs';
 
 async function runMigrations(): Promise<void> {
   const result = await chrome.storage.local.get(SCHEMA_VERSION_KEY);
@@ -968,8 +1057,16 @@ async function runMigrations(): Promise<void> {
   if (fromVersion >= CURRENT_SCHEMA_VERSION) return;
 
   log(`Running storage migrations from v${fromVersion} to v${CURRENT_SCHEMA_VERSION}`);
-  // Future migrations go here, one block per version bump:
-  // if (fromVersion < 2) { ... migrate v1 -> v2 ... }
+
+  // v1 → v2: reactive-store era. Seed safeplay_session_state with an
+  // empty shape so subscribers never read `undefined`, and drop the now
+  // unused safeplay_pending_job_costs map (credits are server-authoritative).
+  if (fromVersion < 2) {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.SESSION_STATE]: { byTab: {}, activeJobs: {}, lastUpdated: 0 },
+    });
+    await chrome.storage.local.remove(LEGACY_PENDING_JOB_COSTS_KEY);
+  }
 
   await chrome.storage.local.set({ [SCHEMA_VERSION_KEY]: CURRENT_SCHEMA_VERSION });
   log(`Storage migrations complete; now at v${CURRENT_SCHEMA_VERSION}`);
@@ -979,6 +1076,7 @@ async function runMigrations(): Promise<void> {
 chrome.runtime.onInstalled.addListener(async (details) => {
   log('Extension installed/updated:', details.reason);
   await runMigrations();
+  await ensureReactiveStoreInitialized();
   await initBadge();
   await ensureCreditRefreshAlarm();
 
@@ -991,8 +1089,65 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // Handle browser startup — also initialize badge
 chrome.runtime.onStartup.addListener(async () => {
   log('Browser started');
+  // Tab IDs don't survive a browser restart — wipe byTab so subscribers
+  // don't read stale TabSnapshots keyed on IDs Chrome has already reused.
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.SESSION_STATE]: EMPTY_SESSION_STATE,
+    });
+  } catch (err) {
+    logError('Failed to reset sessionState on startup', err);
+  }
+  await ensureReactiveStoreInitialized();
   await initBadge();
   await ensureCreditRefreshAlarm();
+});
+
+// Tab closed → drop its TabSnapshot so popup/options never render a stale
+// snapshot for a tab Chrome has already destroyed.
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  try {
+    await storeCommit('sessionState', prev => {
+      if (!(tabId in prev.byTab)) return prev;
+      const next = { ...prev.byTab };
+      delete next[tabId];
+      return { ...prev, byTab: next, lastUpdated: Date.now() };
+    });
+  } catch (err) {
+    logError('Failed to drop tab snapshot on tabs.onRemoved', err);
+  }
+});
+
+// Backstop: chrome.tabs.onRemoved doesn't fire if the worker is dead at the
+// moment the tab closes, or if a crashed tab was evicted before Chrome
+// re-spun the worker. A 60-second sweep evicts byTab entries that haven't
+// been updated in 5 minutes — well past the longest reasonable "active but
+// idle" window, so legitimate tabs stay.
+const TAB_SNAPSHOT_STALE_MS = 5 * 60 * 1000;
+const TAB_SNAPSHOT_SWEEP_ALARM = 'safeplay_sessionstate_sweep';
+
+chrome.alarms.create(TAB_SNAPSHOT_SWEEP_ALARM, { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name !== TAB_SNAPSHOT_SWEEP_ALARM) return;
+  try {
+    const now = Date.now();
+    await storeCommit('sessionState', prev => {
+      const kept: Record<number, TabSnapshot> = {};
+      let evicted = 0;
+      for (const [tabIdStr, snap] of Object.entries(prev.byTab)) {
+        if (now - (snap.updatedAt || 0) < TAB_SNAPSHOT_STALE_MS) {
+          kept[Number(tabIdStr)] = snap;
+        } else {
+          evicted++;
+        }
+      }
+      if (evicted === 0) return prev;
+      log(`sessionState sweep: evicted ${evicted} stale tab snapshot(s)`);
+      return { ...prev, byTab: kept, lastUpdated: now };
+    });
+  } catch (err) {
+    logError('sessionState sweep failed', err);
+  }
 });
 
 // Handle auth callback from website (deep-link auth flow)
@@ -1098,20 +1253,10 @@ chrome.runtime.onMessageExternal.addListener(
               await setUserCredits(message.userCredits);
             }
 
-            // Broadcast auth state change to all tabs
-            const tabs = await chrome.tabs.query({});
-            for (const tab of tabs) {
-              if (tab.id) {
-                chrome.tabs.sendMessage(tab.id, {
-                  type: 'AUTH_STATE_CHANGED',
-                  payload: {
-                    isAuthenticated: true,
-                    user: message.user,
-                  },
-                }).catch(() => {});
-              }
-            }
-
+            // Storage writes above propagate via chrome.storage.onChanged,
+            // so every reactiveStore.subscribe('authState', ...) listener
+            // — popup, options, and content (for pending-auth resumption) —
+            // converges automatically. No bespoke runtime broadcast.
             log('Auth data stored successfully');
             sendResponse({ success: true });
           } catch (error) {
@@ -1122,21 +1267,13 @@ chrome.runtime.onMessageExternal.addListener(
         return true;
       }
 
-      // Handle credit update messages from website
+      // Handle credit update messages from website. Storage write fans out
+      // to every reactiveStore.subscribe('creditInfo', ...) subscriber, so
+      // no runtime-message broadcast is needed. Options still listens for
+      // 'CREDIT_UPDATE' on runtime for one release as a legacy fallback.
       if (message.type === 'CREDIT_UPDATE') {
         import('../utils/storage').then(({ setCreditInfo }) => {
           setCreditInfo(message.credits).then(() => {
-            // Broadcast credit update
-            chrome.tabs.query({}).then(tabs => {
-              for (const tab of tabs) {
-                if (tab.id) {
-                  chrome.tabs.sendMessage(tab.id, {
-                    type: 'CREDIT_UPDATE',
-                    payload: message.credits,
-                  }).catch(() => {});
-                }
-              }
-            });
             sendResponse({ success: true });
           });
         });

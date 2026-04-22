@@ -24,10 +24,42 @@ export const STORAGE_KEYS = {
   USER_SUBSCRIPTION: 'safeplay_user_subscription',
   USER_CREDITS: 'safeplay_user_credits',
   PROFILE_CACHE_TIME: 'safeplay_profile_cache_time',
+  // Per-tab snapshot ring (tab IDs -> TabSnapshot). Background-only writer.
+  SESSION_STATE: 'safeplay_session_state',
+  // Singleflight markers for UI "fetching..." states. Lives in storage.session.
+  INFLIGHT: 'safeplay_inflight',
 } as const;
 
 // API base URL for token refresh
 const API_BASE_URL = 'https://trysafeplay.com';
+
+// ---------------------------------------------------------------------------
+// singleflight(key, fn)
+//
+// Coalesces concurrent callers keyed on an opaque string. The first call
+// runs `fn`; any subsequent call with the same key before the first settles
+// shares the same Promise. After settlement the entry is cleared so a new
+// call triggers a fresh run.
+//
+// Used to de-duplicate network-bound operations when multiple UI surfaces
+// (popup + in-player button + auto-filter) race to trigger the same
+// START_FILTER / GET_PREVIEW on page load. Without this, rapid double
+// clicks could send two filter-starts, both server-side and badge-wise.
+// ---------------------------------------------------------------------------
+
+const singleflightInflight = new Map<string, Promise<unknown>>();
+
+export function singleflight<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = singleflightInflight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const p = fn().finally(() => {
+    if (singleflightInflight.get(key) === p) {
+      singleflightInflight.delete(key);
+    }
+  });
+  singleflightInflight.set(key, p);
+  return p;
+}
 
 // Token refresh buffer - refresh 5 minutes before expiry
 const TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;

@@ -19,6 +19,7 @@ import {
   PreviewData,
   TranscriptionStateBroadcast,
 } from '../types';
+import { subscribe as storeSubscribe, proposeSelfTab } from '../utils/reactiveStore';
 
 const API_BASE_URL = 'https://trysafeplay.com';
 // Floor for the transcription budget (applies to short/medium videos).
@@ -85,6 +86,7 @@ class SafePlayContentScript {
   private isFilterActive = false; // Track if filter is currently active
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
   private navigationId = 0; // Incremented on each navigation to cancel stale async operations
+  private storeUnsubs: Array<() => void> = []; // reactiveStore subscriptions; torn down on teardown
   private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
   private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
   private lastVideoDuration: number | undefined; // Duration in seconds from preview, used to compute the transcription countdown
@@ -157,11 +159,43 @@ class SafePlayContentScript {
 
     // Listen for messages from background/popup
     this.setupMessageListener();
+    this.setupStoreSubscriptions();
 
     // Listen for URL changes (YouTube SPA)
     this.setupNavigationListener();
 
     log('SafePlay initialized');
+  }
+
+  // Subscribe to reactive-store keys whose changes should drive behavior in
+  // the content script. Currently: preferences (master toggle, strictness,
+  // marker visibility). authState and sessionState are driven elsewhere.
+  private setupStoreSubscriptions(): void {
+    try {
+      this.storeUnsubs.push(
+        storeSubscribe('preferences', (next) => {
+          this.applyPreferenceUpdate(next);
+        }),
+        storeSubscribe('authState', (next, prev) => {
+          // Pending-auth resumption: if the user was waiting on a
+          // sign-in before we kicked off a filter (e.g. clicked "Filter"
+          // on a video while signed out), fire it now that the auth
+          // state has flipped. Only fire on the false→true transition so
+          // re-renders don't re-trigger.
+          const becameAuthed = next.isAuthenticated && prev && !prev.isAuthenticated;
+          if (becameAuthed && this.pendingAuthVideoId) {
+            log('authState transitioned to authenticated; resuming pending filter');
+            const modal = document.querySelector('.safeplay-credit-dialog-overlay');
+            if (modal) modal.remove();
+            const videoId = this.pendingAuthVideoId;
+            this.pendingAuthVideoId = null;
+            this.onFilterButtonClick(videoId);
+          }
+        }),
+      );
+    } catch (err) {
+      log('Failed to register reactiveStore subscriptions:', err);
+    }
   }
 
   private async loadPreferences(): Promise<void> {
@@ -204,6 +238,28 @@ class SafePlayContentScript {
 
   private updateButtonState(stateInfo: ButtonStateInfo): void {
     this.injector.updateButtonState(stateInfo);
+    // Mirror the state into the per-tab snapshot so the popup and any other
+    // subscriber (in-player overlay, badge, future UI) renders from the
+    // exact same source. proposeSelfTab is fire-and-forget; on a closed
+    // popup this write has no observers but still keeps storage fresh for
+    // the next open. Extension context validity is implicit in proposeSelfTab
+    // (chrome.runtime.sendMessage rejects quietly if the worker is gone).
+    void this.proposeTabSnapshot({
+      buttonState: stateInfo,
+      filterActive: this.isFilterActive,
+      videoId: this.currentVideoId,
+      intervalCount: this.lastIntervalCount,
+    });
+  }
+
+  // Lightweight wrapper so the few call sites that want to push transcription
+  // state or filter-active changes don't each have to know the rest of the
+  // snapshot contract.
+  private proposeTabSnapshot(patch: Partial<import('../types').TabSnapshot>): Promise<void> {
+    if (!isExtensionContextValid()) return Promise.resolve();
+    return proposeSelfTab(patch).catch(err => {
+      log('proposeSelfTab failed (non-fatal):', err);
+    });
   }
 
   // Schedule a silent auto-retry after a delay, dismissing the error modal automatically
@@ -887,14 +943,10 @@ class SafePlayContentScript {
         statusText: state.statusText,
       });
 
-      if (isExtensionContextValid()) {
-        chrome.runtime.sendMessage({
-          type: 'TRANSCRIPTION_STATE_CHANGED',
-          payload: broadcast,
-        }).catch(() => {
-          // Popup might be closed; that's fine.
-        });
-      }
+      // Drive the popup via the shared TabSnapshot rather than a bespoke
+      // runtime broadcast. storage.onChanged delivers the update to the
+      // popup's reactiveStore.subscribe('sessionState', ...) listener.
+      void this.proposeTabSnapshot({ transcription: broadcast });
     });
     this.estimator = estimator;
     estimator.start();
@@ -1366,17 +1418,11 @@ class SafePlayContentScript {
   private onVideoStateChange(state: ReturnType<VideoController['getState']>): void {
     log('Video state changed:', state);
 
-    // Notify popup of state change (if extension context still valid)
-    if (!isExtensionContextValid()) {
-      log('Extension context invalidated, skipping state change notification');
-      return;
-    }
-
-    chrome.runtime.sendMessage({
-      type: 'VIDEO_STATE_CHANGED',
-      payload: state,
-    }).catch(() => {
-      // Popup might not be open or extension context invalidated
+    // Per-tab snapshot carries filter-active + intervalCount; popup reads
+    // both via subscribe('sessionState', ...). No runtime broadcast needed.
+    void this.proposeTabSnapshot({
+      filterActive: state.status === 'active',
+      intervalCount: state.intervalCount ?? 0,
     });
   }
 
@@ -1402,127 +1448,75 @@ class SafePlayContentScript {
 
   private async handleMessage(message: { type: string; payload?: unknown }): Promise<unknown> {
     switch (message.type) {
-      case 'PREFERENCES_UPDATED': {
-        if (!message.payload || typeof message.payload !== 'object') {
-          log('PREFERENCES_UPDATED: invalid payload shape, ignoring');
-          return { success: false, error: 'Invalid payload' };
-        }
-        const newPrefs = message.payload as UserPreferences;
-        const prevEnabled = this.preferences.enabled !== false;
-        const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
-        const prevAutoAll = this.preferences.autoFilterAllVideos === true;
-        this.preferences = newPrefs;
-        this.videoController?.updatePreferences(newPrefs);
-        this.captionFilter.updatePreferences(newPrefs);
-
-        // Master toggle sync: mirror prefs.enabled onto the injected button,
-        // captions, timeline markers, and isFilterActive so the popup's
-        // On/Off switch and the watch-page button track each other.
-        const nowEnabled = newPrefs.enabled !== false;
-        if (prevEnabled && !nowEnabled && this.isFilterActive) {
-          // Master just went off while filtering was active.
-          this.captionFilter.stop();
-          this.timelineMarkers?.hide();
-          this.isFilterActive = false;
-          this.updateButtonState({
-            state: 'paused',
-            text: 'Paused',
-            intervalCount: this.lastIntervalCount,
-          });
-          log('Filter paused by master toggle (popup Off)');
-        } else if (!prevEnabled && nowEnabled && this.currentVideoId && this.lastIntervalCount > 0) {
-          // Master just came back on with cached filter data — resume in place.
-          this.videoController?.resume();
-          this.captionFilter.start();
-          this.timelineMarkers?.show();
-          this.isFilterActive = true;
-          this.updateButtonState({
-            state: 'filtering',
-            text: `Censored (${this.lastIntervalCount})`,
-            intervalCount: this.lastIntervalCount,
-          });
-          log('Filter resumed by master toggle (popup On)');
-        }
-
-        const nowShowMarkers = newPrefs.showTimelineMarkers !== false;
-        if (prevShowMarkers !== nowShowMarkers) {
-          if (!nowShowMarkers && this.timelineMarkers) {
-            // Toggled off — tear down markers immediately.
-            this.timelineMarkers.destroy();
-            this.timelineMarkers = null;
-            log('Timeline markers destroyed (toggled off)');
-          } else if (nowShowMarkers && this.isFilterActive && !this.timelineMarkers) {
-            // Toggled on while a filter is already active — materialize them
-            // from the intervals the video controller already parsed.
-            const muteIntervals = this.videoController?.getMuteIntervals() || [];
-            const video = this.getVideoElement();
-            if (video && muteIntervals.length > 0) {
-              this.timelineMarkers = new TimelineMarkers({ debug: DEBUG });
-              this.timelineMarkers.initialize(video, muteIntervals);
-              log('Timeline markers initialized (toggled on)');
-            }
-          }
-        }
-
-        // If the user just turned on auto-filter-all while sitting on a
-        // YouTube video page that isn't already filtering, kick one off.
-        // Matches the UX of toggling it on from the options page without
-        // having to refresh or navigate away.
-        const nowAutoAll = newPrefs.autoFilterAllVideos === true;
-        if (!prevAutoAll && nowAutoAll && this.currentVideoId && !this.isFilterActive && !this.isProcessing) {
-          log('Auto-filter-all just enabled — running checkAutoEnable for current video');
-          this.checkAutoEnable();
-        }
-
-        return { success: true };
-      }
-
-      case 'AUTH_STATE_CHANGED': {
-        if (
-          !message.payload ||
-          typeof message.payload !== 'object' ||
-          typeof (message.payload as { isAuthenticated?: unknown }).isAuthenticated !== 'boolean'
-        ) {
-          log('AUTH_STATE_CHANGED: invalid payload shape, ignoring');
-          return { success: false, error: 'Invalid payload' };
-        }
-        const payload = message.payload as { isAuthenticated: boolean };
-        log('Auth state changed:', payload);
-
-        // If user just authenticated and we have a pending video to filter
-        if (payload.isAuthenticated && this.pendingAuthVideoId) {
-          log('User authenticated, closing auth modal and starting filter for:', this.pendingAuthVideoId);
-
-          // Close the auth modal if it's open
-          const authModal = document.querySelector('.safeplay-credit-dialog-overlay');
-          if (authModal) {
-            authModal.remove();
-          }
-
-          // Start filtering the pending video
-          const videoId = this.pendingAuthVideoId;
-          this.pendingAuthVideoId = null;
-          this.onFilterButtonClick(videoId);
-        }
-        return { success: true };
-      }
-
-      case 'GET_VIDEO_STATE': {
-        return {
-          success: true,
-          data: this.videoController?.getState() || null,
-        };
-      }
-
-      case 'GET_TRANSCRIPTION_STATE': {
-        return {
-          success: true,
-          data: this.lastTranscriptionState,
-        };
-      }
-
       default:
+        // All cross-surface state (preferences, auth, per-tab video +
+        // transcription) flows through reactiveStore.subscribe. The content
+        // script no longer exposes request-response RPCs to the popup —
+        // its snapshot is proposed via proposeSelfTab and read from
+        // sessionState. Unknown types are dropped quietly because legacy
+        // broadcasts may still arrive during a staggered reload.
         return { success: false, error: 'Unknown message type' };
+    }
+  }
+
+  // Apply a new UserPreferences snapshot with the same side-effect logic
+  // used by the legacy PREFERENCES_UPDATED broadcast: toggle master on/off
+  // mid-video, materialize/destroy timeline markers, kick auto-filter-all
+  // when it's just been enabled. Called both from the legacy message case
+  // and from reactiveStore.subscribe('preferences', ...).
+  private applyPreferenceUpdate(newPrefs: UserPreferences): void {
+    const prevEnabled = this.preferences.enabled !== false;
+    const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
+    const prevAutoAll = this.preferences.autoFilterAllVideos === true;
+    this.preferences = newPrefs;
+    this.videoController?.updatePreferences(newPrefs);
+    this.captionFilter.updatePreferences(newPrefs);
+
+    const nowEnabled = newPrefs.enabled !== false;
+    if (prevEnabled && !nowEnabled && this.isFilterActive) {
+      this.captionFilter.stop();
+      this.timelineMarkers?.hide();
+      this.isFilterActive = false;
+      this.updateButtonState({
+        state: 'paused',
+        text: 'Paused',
+        intervalCount: this.lastIntervalCount,
+      });
+      log('Filter paused by master toggle (popup Off)');
+    } else if (!prevEnabled && nowEnabled && this.currentVideoId && this.lastIntervalCount > 0) {
+      this.videoController?.resume();
+      this.captionFilter.start();
+      this.timelineMarkers?.show();
+      this.isFilterActive = true;
+      this.updateButtonState({
+        state: 'filtering',
+        text: `Censored (${this.lastIntervalCount})`,
+        intervalCount: this.lastIntervalCount,
+      });
+      log('Filter resumed by master toggle (popup On)');
+    }
+
+    const nowShowMarkers = newPrefs.showTimelineMarkers !== false;
+    if (prevShowMarkers !== nowShowMarkers) {
+      if (!nowShowMarkers && this.timelineMarkers) {
+        this.timelineMarkers.destroy();
+        this.timelineMarkers = null;
+        log('Timeline markers destroyed (toggled off)');
+      } else if (nowShowMarkers && this.isFilterActive && !this.timelineMarkers) {
+        const muteIntervals = this.videoController?.getMuteIntervals() || [];
+        const video = this.getVideoElement();
+        if (video && muteIntervals.length > 0) {
+          this.timelineMarkers = new TimelineMarkers({ debug: DEBUG });
+          this.timelineMarkers.initialize(video, muteIntervals);
+          log('Timeline markers initialized (toggled on)');
+        }
+      }
+    }
+
+    const nowAutoAll = newPrefs.autoFilterAllVideos === true;
+    if (!prevAutoAll && nowAutoAll && this.currentVideoId && !this.isFilterActive && !this.isProcessing) {
+      log('Auto-filter-all just enabled — running checkAutoEnable for current video');
+      this.checkAutoEnable();
     }
   }
 
