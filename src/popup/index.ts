@@ -52,9 +52,6 @@ class PopupController {
   private storeUnsubs: Array<() => void> = [];
 
   // Elements
-  private powerBtn!:          HTMLButtonElement;
-  private powerDot!:          HTMLElement;
-  private powerLabel!:        HTMLElement;
   private ctxHero!:           HTMLElement;
   private strictnessBtns!:    NodeListOf<HTMLButtonElement>;
   private strictnessExample!: HTMLElement;
@@ -223,9 +220,6 @@ class PopupController {
   }
 
   private cacheElements(): void {
-    this.powerBtn          = document.getElementById('powerBtn')         as HTMLButtonElement;
-    this.powerDot          = document.getElementById('powerDot')         as HTMLElement;
-    this.powerLabel        = document.getElementById('powerLabel')        as HTMLElement;
     this.ctxHero           = document.getElementById('ctxHero')           as HTMLElement;
     this.strictnessBtns    = document.querySelectorAll<HTMLButtonElement>('.strictness-btn');
     this.strictnessExample = document.getElementById('strictnessExample') as HTMLElement;
@@ -253,12 +247,6 @@ class PopupController {
   }
 
   private setupListeners(): void {
-    // Power toggle
-    this.powerBtn.addEventListener('click', () => {
-      const next = !this.prefs.enabled;
-      this.savePrefs({ enabled: next });
-    });
-
     // Strictness
     this.strictnessBtns.forEach(btn => {
       btn.addEventListener('click', () => {
@@ -328,12 +316,6 @@ class PopupController {
   }
 
   private renderPrefs(): void {
-    // Power button + global paused state
-    const on = this.prefs.enabled;
-    this.powerLabel.textContent = on ? 'On' : 'Off';
-    this.powerDot.classList.toggle('off', !on);
-    document.body.classList.toggle('is-paused', !on);
-
     // Strictness
     const level = severityToStrictness(this.prefs.severityLevels);
     this.strictnessBtns.forEach(btn => {
@@ -344,9 +326,6 @@ class PopupController {
     // Mode
     this.modeMuteOption.classList.toggle('active',  this.prefs.filterMode === 'mute');
     this.modeBleepOption.classList.toggle('active', this.prefs.filterMode === 'bleep');
-
-    // Re-render the hero since its copy depends on prefs.enabled
-    this.renderHero();
   }
 
   // ── Context detection ──────────────────────────────────────
@@ -394,18 +373,6 @@ class PopupController {
   }
 
   private renderHero(): void {
-    // Master toggle overrides every other state — when paused, nothing filters.
-    if (!this.prefs.enabled) {
-      this.ctxHero.innerHTML = `
-        <div class="ctx-badge">
-          <span class="ctx-dot" style="background:var(--text-muted);box-shadow:0 0 0 3px rgba(138,134,128,0.13)"></span>
-          <span class="ctx-badge-label">Paused</span>
-        </div>
-        <div class="ctx-title">Safeplay is paused.</div>
-        <div class="ctx-sub">Nothing is being filtered. Tap <b>On</b> at the top to resume.</div>`;
-      return;
-    }
-
     if (this.context === 'off-youtube') {
       this.ctxHero.innerHTML = `
         <div class="ctx-title">Safeplay only runs on YouTube.</div>

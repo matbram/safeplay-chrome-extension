@@ -103,43 +103,6 @@ button {
   color: var(--text);
 }
 
-.power-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  background: transparent;
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 500;
-  transition: var(--transition);
-}
-.power-btn:hover { border-color: var(--border-hi); color: var(--text); }
-
-.power-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--success);
-  flex-shrink: 0;
-}
-.power-dot.off { background: var(--text-muted); }
-
-/* ── Paused (master toggle off) ──────────────────────────── */
-body.is-paused .section,
-body.is-paused .usage-bar {
-  opacity: 0.55;
-  pointer-events: none;
-}
-body.is-paused .popup-header,
-body.is-paused .ctx-hero,
-body.is-paused .popup-footer {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 /* ── Context Hero ────────────────────────────────────────── */
 .ctx-hero {
   padding: 4px 16px 16px;
