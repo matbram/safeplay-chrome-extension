@@ -47,23 +47,23 @@
       <div class="section-label">Filter strength</div>
       <div class="strictness-stack">
         <div class="strictness-grid" id="strictnessGrid">
-          <button class="strictness-btn" data-level="adult">
-            <div class="strictness-bars">
-              <span class="bar"></span><span class="bar faded"></span><span class="bar faded"></span>
-            </div>
-            <div class="strictness-label">Mild</div>
-          </button>
-          <button class="strictness-btn" data-level="family">
-            <div class="strictness-bars">
-              <span class="bar"></span><span class="bar"></span><span class="bar faded"></span>
-            </div>
-            <div class="strictness-label">Moderate</div>
-          </button>
-          <button class="strictness-btn" data-level="kids">
-            <div class="strictness-bars">
+          <button class="strictness-btn" data-level="adult" data-bars="1">
+            <span class="strictness-label">Mild</span>
+            <span class="strictness-bars">
               <span class="bar"></span><span class="bar"></span><span class="bar"></span>
-            </div>
-            <div class="strictness-label">Strict</div>
+            </span>
+          </button>
+          <button class="strictness-btn" data-level="family" data-bars="2">
+            <span class="strictness-label">Moderate</span>
+            <span class="strictness-bars">
+              <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            </span>
+          </button>
+          <button class="strictness-btn" data-level="kids" data-bars="3">
+            <span class="strictness-label">Strict</span>
+            <span class="strictness-bars">
+              <span class="bar"></span><span class="bar"></span><span class="bar"></span>
+            </span>
           </button>
         </div>
         <div class="strictness-example" id="strictnessExample"></div>
@@ -72,31 +72,40 @@
 
     <!-- Mute vs Bleep -->
     <div class="section section-mode">
-      <div class="section-label">How to hide words</div>
+      <div class="section-label">How to remove words</div>
       <div class="mode-row">
         <button class="mode-option" id="modeMuteOption" data-mode="mute">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
             <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
           </svg>
-          Silence
+          Mute
         </button>
         <button class="mode-option" id="modeBleepOption" data-mode="bleep">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
           </svg>
-          Beep
+          Bleep
         </button>
       </div>
     </div>
 
-    <!-- Auto-filter -->
-    <div class="section section-mode">
-      <div class="section-label">Auto-filter new videos</div>
-      <div class="mode-row">
-        <button class="mode-option" id="autoAlwaysOption" data-auto="always">Always</button>
-        <button class="mode-option" id="autoAskOption" data-auto="ask">Ask</button>
-        <button class="mode-option" id="autoOffOption" data-auto="off">Off</button>
+    <!-- Auto-filter (compact row) -->
+    <div class="section section-auto">
+      <div class="auto-row" id="autoRow">
+        <div class="auto-row-top">
+          <svg class="auto-row-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2 2-5z"/>
+            <path d="M19 14l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2z"/>
+          </svg>
+          <span class="auto-row-label">Auto-filter new videos</span>
+          <div class="auto-chips">
+            <button class="auto-chip" id="autoOffOption" data-auto="off">Off</button>
+            <button class="auto-chip" id="autoAskOption" data-auto="ask">Ask</button>
+            <button class="auto-chip" id="autoAlwaysOption" data-auto="always">Always</button>
+          </div>
+        </div>
+        <div class="auto-row-caption" id="autoRowCaption"></div>
       </div>
     </div>
 

@@ -30,19 +30,25 @@ const STRENGTH_LABEL: Record<StrictnessLevel, string> = {
   kids: 'strong', family: 'moderate', adult: 'mild',
 };
 
-// Fixed bar heights for the waveform (52 bars, values 0.15–1.0)
-const WAVE_HEIGHTS = [
-  0.35,0.55,0.25,0.70,0.45,0.80,0.30,0.90,0.40,0.60,0.20,0.75,0.50,0.85,0.35,0.65,
-  0.25,0.95,0.40,0.70,0.30,0.85,0.55,0.40,0.75,0.30,0.60,0.90,0.45,0.70,0.25,0.80,
-  0.50,0.65,0.35,0.90,0.55,0.75,0.40,0.85,0.30,0.60,0.45,0.95,0.35,0.70,0.50,0.80,
-  0.25,0.65,0.40,0.55,
-];
-// Which bar indices are "redacted" for each level (cumulative sets)
-const REDACT_ADULT  = new Set([5, 7, 12, 17, 23, 27, 35, 38, 42, 46]);
-const REDACT_FAMILY = new Set([...REDACT_ADULT,  1,  4,  9, 14, 20, 29, 32, 43, 48, 51]);
-const REDACT_KIDS   = new Set([...REDACT_FAMILY, 0,  2,  6, 11, 16, 21, 25, 30, 34, 39]);
-const REDACT_MAP: Record<StrictnessLevel, Set<number>> = {
-  adult: REDACT_ADULT, family: REDACT_FAMILY, kids: REDACT_KIDS,
+// Waveform: 60 bars, heights via sin/cos formula — matches design exactly.
+const WAVE_BARS = 60;
+function waveBarHeight(i: number): number {
+  return 8 + Math.abs(Math.sin(i * 1.4 + 1) * 16) + Math.abs(Math.cos(i * 0.7) * 8);
+}
+// Redaction zones (inclusive bar-index ranges) per strictness — matches design.
+const REDACTIONS: Record<StrictnessLevel, Array<[number, number]>> = {
+  kids:   [[10, 18], [34, 44], [52, 56]], // strict
+  family: [[10, 18], [40, 48]],            // moderate
+  adult:  [[40, 46]],                      // mild
+};
+function inRedaction(i: number, zones: Array<[number, number]>): boolean {
+  return zones.some(([a, b]) => i >= a && i <= b);
+}
+
+const AUTO_SENTENCES = {
+  always: 'Turns on automatically for every new video.',
+  ask:    'Asks you before filtering each new video.',
+  off:    'Only turns on when you click Filter on a video.',
 };
 
 const SAVE_SECTIONS: Section[] = ['settings', 'words', 'advanced'];
@@ -57,11 +63,16 @@ class OptionsController {
 
   // Settings — hero preview + pill segments
   private heroSummary!:      HTMLElement;
-  private heroWaveform!:     HTMLElement;
+  private heroAutoSentence!: HTMLElement;
+  private heroWaveform!:     SVGSVGElement;
+  private legendRedactSwatch!: HTMLElement;
+  private legendRedactLabel!:  HTMLElement;
   private strengthOpts!:     NodeListOf<HTMLButtonElement>;
   private strengthTrack!:    HTMLElement;
   private methodOpts!:       NodeListOf<HTMLButtonElement>;
   private methodTrack!:      HTMLElement;
+  private autoOpts!:         NodeListOf<HTMLButtonElement>;
+  private autoTrack!:        HTMLElement;
 
   // Settings — behavior toggles
   private autoFilterAllVideos!:    HTMLInputElement;
@@ -237,12 +248,17 @@ class OptionsController {
     this.navItems          = document.querySelectorAll<HTMLButtonElement>('.nav-item');
     this.contentSections   = document.querySelectorAll<HTMLElement>('.content-section');
 
-    this.heroSummary   = document.getElementById('heroSummary')    as HTMLElement;
-    this.heroWaveform  = document.getElementById('heroWaveform')   as HTMLElement;
+    this.heroSummary       = document.getElementById('heroSummary')        as HTMLElement;
+    this.heroAutoSentence  = document.getElementById('heroAutoSentence')   as HTMLElement;
+    this.heroWaveform      = document.getElementById('heroWaveform')       as unknown as SVGSVGElement;
+    this.legendRedactSwatch= document.getElementById('legendRedactSwatch') as HTMLElement;
+    this.legendRedactLabel = document.getElementById('legendRedactLabel')  as HTMLElement;
     this.strengthOpts  = document.querySelectorAll<HTMLButtonElement>('#strengthSegment .pill-opt');
     this.strengthTrack = document.getElementById('strengthTrack')  as HTMLElement;
     this.methodOpts    = document.querySelectorAll<HTMLButtonElement>('#methodSegment .pill-opt');
     this.methodTrack   = document.getElementById('methodTrack')    as HTMLElement;
+    this.autoOpts      = document.querySelectorAll<HTMLButtonElement>('#autoSegment .pill-opt');
+    this.autoTrack     = document.getElementById('autoTrack')      as HTMLElement;
 
     this.autoFilterAllVideos       = document.getElementById('autoFilterAllVideos')       as HTMLInputElement;
     this.confirmBeforeAutoFilter   = document.getElementById('confirmBeforeAutoFilter')   as HTMLInputElement;
@@ -348,6 +364,19 @@ class OptionsController {
       });
     });
 
+    // Auto-filter pill segment (Off/Ask/Always)
+    this.autoOpts.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.auto as 'off' | 'ask' | 'always';
+        const updates: Partial<UserPreferences> = mode === 'always'
+          ? { autoFilterAllVideos: true,  confirmBeforeAutoFilter: false }
+          : mode === 'ask'
+            ? { autoFilterAllVideos: true,  confirmBeforeAutoFilter: true  }
+            : { autoFilterAllVideos: false, confirmBeforeAutoFilter: false };
+        this.saveFilteringPrefs(updates);
+      });
+    });
+
     // Settings toggles — autosave on change
     this.autoFilterAllVideos.addEventListener('change', () => {
       this.updateConfirmSubtoggleState();
@@ -438,13 +467,21 @@ class OptionsController {
   private renderPrefs(): void {
     const level  = severityToStrictness(this.prefs.severityLevels);
     const method = this.prefs.filterMode === 'bleep' ? 'bleep' : 'mute';
+    const autoMode: 'off' | 'ask' | 'always' = !this.prefs.autoFilterAllVideos
+      ? 'off'
+      : this.prefs.confirmBeforeAutoFilter ? 'ask' : 'always';
 
-    // Hero preview
+    // Hero preview text
     const strengthWord = STRENGTH_LABEL[level];
     const methodWord   = method === 'mute' ? 'muting' : 'bleeping';
     this.heroSummary.innerHTML =
       `Safeplay removes <strong>${strengthWord}</strong> language by <strong>${methodWord}</strong> it.`;
+    this.heroAutoSentence.textContent = AUTO_SENTENCES[autoMode];
+
+    // Waveform + legend
     this.updateWaveform(level, method);
+    this.legendRedactSwatch.className = `legend-swatch ${method === 'bleep' ? 'swatch-bleep' : 'swatch-mute'}`;
+    this.legendRedactLabel.textContent = method === 'bleep' ? 'bleeped' : 'muted';
 
     // Strength pill segment
     this.strengthOpts.forEach(btn => {
@@ -458,7 +495,13 @@ class OptionsController {
     });
     this.updatePillTrack(this.methodOpts, this.methodTrack, method, 'method');
 
-    // Behavior toggles
+    // Auto-filter pill segment
+    this.autoOpts.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.auto === autoMode);
+    });
+    this.updatePillTrack(this.autoOpts, this.autoTrack, autoMode, 'auto');
+
+    // Hidden inputs (preserved for collectPrefs compatibility)
     this.autoFilterAllVideos.checked     = this.prefs.autoFilterAllVideos === true;
     this.confirmBeforeAutoFilter.checked = this.prefs.confirmBeforeAutoFilter === true;
     this.autoEnableFiltered.checked      = this.prefs.autoEnableForFilteredVideos !== false;
@@ -471,27 +514,42 @@ class OptionsController {
 
     this.paddingBefore.value = (this.prefs.paddingBeforeMs ?? this.prefs.paddingMs).toString();
     this.paddingAfter.value  = (this.prefs.paddingAfterMs  ?? this.prefs.paddingMs).toString();
-
-    this.updateConfirmSubtoggleState();
   }
 
   private buildWaveform(): void {
-    WAVE_HEIGHTS.forEach((h, i) => {
-      const bar = document.createElement('div');
-      bar.className = 'waveform-bar';
-      bar.style.height = `${Math.round(h * 100)}%`;
-      bar.dataset.idx = String(i);
-      this.heroWaveform.appendChild(bar);
-    });
+    const svgNS = 'http://www.w3.org/2000/svg';
+    for (let i = 0; i < WAVE_BARS; i++) {
+      const x = 2 + i * (196 / WAVE_BARS);
+      const h = waveBarHeight(i);
+      const rect = document.createElementNS(svgNS, 'rect');
+      rect.setAttribute('x', x.toFixed(2));
+      rect.setAttribute('y', (28 - h / 2).toFixed(2));
+      rect.setAttribute('width', '1.6');
+      rect.setAttribute('height', h.toFixed(2));
+      rect.setAttribute('rx', '0.8');
+      rect.dataset.idx = String(i);
+      this.heroWaveform.appendChild(rect);
+    }
   }
 
   private updateWaveform(level: StrictnessLevel, method: string): void {
-    const redacted = REDACT_MAP[level];
-    const cls = method === 'bleep' ? 'redacted-bleep' : 'redacted';
-    this.heroWaveform.querySelectorAll<HTMLElement>('.waveform-bar').forEach(bar => {
-      const idx = parseInt(bar.dataset.idx ?? '0', 10);
-      bar.classList.remove('redacted', 'redacted-bleep');
-      if (redacted.has(idx)) bar.classList.add(cls);
+    const zones = REDACTIONS[level];
+    const styles = getComputedStyle(document.body);
+    const textDim   = styles.getPropertyValue('--text-dim').trim()   || '#5a5a5a';
+    const textMuted = styles.getPropertyValue('--text-muted').trim() || '#8a8680';
+    const accent    = styles.getPropertyValue('--accent').trim()     || '#e5232b';
+
+    this.heroWaveform.querySelectorAll<SVGRectElement>('rect').forEach(rect => {
+      const idx = parseInt(rect.dataset.idx ?? '0', 10);
+      const redacted = inRedaction(idx, zones);
+      let fill = textDim;
+      let opacity = '1';
+      if (redacted) {
+        if (method === 'mute') { fill = textMuted; opacity = '0.25'; }
+        else                   { fill = accent;    opacity = '1';    }
+      }
+      rect.setAttribute('fill', fill);
+      rect.setAttribute('opacity', opacity);
     });
   }
 
@@ -499,7 +557,7 @@ class OptionsController {
     opts: NodeListOf<HTMLButtonElement>,
     track: HTMLElement,
     activeValue: string,
-    attr: 'strength' | 'method',
+    attr: 'strength' | 'method' | 'auto',
   ): void {
     const activeBtn = Array.from(opts).find(b => b.dataset[attr] === activeValue);
     if (!activeBtn) return;

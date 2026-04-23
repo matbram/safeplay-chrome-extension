@@ -33,8 +33,8 @@
           <path d="M10 9.2v5.6l4.8-2.8L10 9.2Z" fill="currentColor"/>
         </svg>
       </div>
-      <h1 class="ob-heading">Watch YouTube<br>without the bad words.</h1>
-      <p class="ob-sub">Safeplay quietly mutes profanity as videos play. Nothing to set up — just pick how strict you want it.</p>
+      <h1 class="ob-heading">Watch YouTube<br>without the profanity.</h1>
+      <p class="ob-sub">Safeplay quietly removes profanity as videos play. Nothing to set up — just pick your filter strength.</p>
 
       <div class="ob-demo">
         <div class="ob-demo-label">WHAT YOU HEAR</div>
@@ -52,7 +52,7 @@
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
                 <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
               </svg>
-              muted</span> is going on here?"
+              removed</span> is going on here?"
           </div>
         </div>
       </div>
@@ -60,37 +60,37 @@
 
     <!-- Step 1: Pick strictness -->
     <div class="ob-step" data-step="1" style="display:none">
-      <h2 class="ob-heading-sm">How strict should it be?</h2>
+      <h2 class="ob-heading-sm">Pick a filter strength.</h2>
       <p class="ob-sub-sm">You can change this anytime from the popup.</p>
 
       <div class="ob-levels" id="obLevels">
-        <button class="ob-level" data-level="kids">
+        <button class="ob-level" data-level="kids" data-bars="3">
           <div class="ob-level-bars">
             <span class="ob-bar"></span><span class="ob-bar"></span><span class="ob-bar"></span>
           </div>
           <div class="ob-level-body">
             <div class="ob-level-name">Strict</div>
-            <div class="ob-level-desc">Hide all bad language — the whole list.</div>
+            <div class="ob-level-desc">Safest — removes every bad word, even mild ones.</div>
           </div>
           <span class="ob-level-radio" data-radio="kids"></span>
         </button>
-        <button class="ob-level active" data-level="family">
+        <button class="ob-level active" data-level="family" data-bars="2">
           <div class="ob-level-bars">
-            <span class="ob-bar"></span><span class="ob-bar"></span><span class="ob-bar faded"></span>
+            <span class="ob-bar"></span><span class="ob-bar"></span><span class="ob-bar"></span>
           </div>
           <div class="ob-level-body">
             <div class="ob-level-name">Moderate</div>
-            <div class="ob-level-desc">Hide stronger swears. Let mild words through.</div>
+            <div class="ob-level-desc">Removes common swears and anything stronger.</div>
           </div>
           <span class="ob-level-radio active" data-radio="family"></span>
         </button>
-        <button class="ob-level" data-level="adult">
+        <button class="ob-level" data-level="adult" data-bars="1">
           <div class="ob-level-bars">
-            <span class="ob-bar"></span><span class="ob-bar faded"></span><span class="ob-bar faded"></span>
+            <span class="ob-bar"></span><span class="ob-bar"></span><span class="ob-bar"></span>
           </div>
           <div class="ob-level-body">
             <div class="ob-level-name">Mild</div>
-            <div class="ob-level-desc">Only the worst words. For personal taste.</div>
+            <div class="ob-level-desc">Lightest — only the harshest words are removed.</div>
           </div>
           <span class="ob-level-radio" data-radio="adult"></span>
         </button>
@@ -118,18 +118,20 @@
             </div>
           </div>
           <div class="ob-fake-subscribe">Subscribe</div>
-          <div class="ob-safeplay-btn-preview">
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          <div class="ob-safeplay-btn-wrap">
+            <div class="ob-safeplay-btn-preview">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+              SafePlay
+            </div>
+            <!-- Callout arrow pointing at the button -->
+            <svg class="ob-callout-arrow" width="34" height="26" viewBox="0 0 34 26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+              <path d="M3 3 C 8 14, 16 20, 17 22"/>
+              <polyline points="14,17 17,22 22,19"/>
             </svg>
-            Filter with Safeplay
           </div>
         </div>
-        <!-- Callout arrow pointing at the button -->
-        <svg class="ob-callout-arrow" viewBox="0 0 80 40" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-          <path d="M 10 5 C 20 25, 50 35, 60 36"/>
-          <polyline points="55,31 60,36 65,30"/>
-        </svg>
       </div>
     </div>
 
