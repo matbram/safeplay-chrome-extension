@@ -57,6 +57,10 @@ class PopupController {
   private strictnessExample!: HTMLElement;
   private modeMuteOption!:    HTMLButtonElement;
   private modeBleepOption!:   HTMLButtonElement;
+  private autoAlwaysOption!:  HTMLButtonElement;
+  private autoAskOption!:     HTMLButtonElement;
+  private autoOffOption!:     HTMLButtonElement;
+  private themeToggleBtn!:    HTMLButtonElement;
   private usageBar!:          HTMLElement;
   private usageNumber!:       HTMLElement;
   private usageOf!:           HTMLElement;
@@ -225,6 +229,10 @@ class PopupController {
     this.strictnessExample = document.getElementById('strictnessExample') as HTMLElement;
     this.modeMuteOption    = document.getElementById('modeMuteOption')    as HTMLButtonElement;
     this.modeBleepOption   = document.getElementById('modeBleepOption')   as HTMLButtonElement;
+    this.autoAlwaysOption  = document.getElementById('autoAlwaysOption')  as HTMLButtonElement;
+    this.autoAskOption     = document.getElementById('autoAskOption')     as HTMLButtonElement;
+    this.autoOffOption     = document.getElementById('autoOffOption')     as HTMLButtonElement;
+    this.themeToggleBtn    = document.getElementById('themeToggleBtn')    as HTMLButtonElement;
     this.usageBar          = document.getElementById('usageBar')          as HTMLElement;
     this.usageNumber       = document.getElementById('usageNumber')       as HTMLElement;
     this.usageOf           = document.getElementById('usageOf')           as HTMLElement;
@@ -258,6 +266,20 @@ class PopupController {
     // Mode
     this.modeMuteOption.addEventListener('click',  () => this.savePrefs({ filterMode: 'mute'  }));
     this.modeBleepOption.addEventListener('click', () => this.savePrefs({ filterMode: 'bleep' }));
+
+    // Auto-filter
+    this.autoAlwaysOption.addEventListener('click', () =>
+      this.savePrefs({ autoFilterAllVideos: true,  confirmBeforeAutoFilter: false }));
+    this.autoAskOption.addEventListener('click', () =>
+      this.savePrefs({ autoFilterAllVideos: true,  confirmBeforeAutoFilter: true  }));
+    this.autoOffOption.addEventListener('click', () =>
+      this.savePrefs({ autoFilterAllVideos: false, confirmBeforeAutoFilter: false }));
+
+    // Theme toggle
+    this.themeToggleBtn.addEventListener('click', () => {
+      const isDark = document.body.classList.toggle('dark');
+      try { localStorage.setItem('safeplay_theme', isDark ? 'dark' : 'light'); } catch { /* ignore */ }
+    });
 
     // Add credits
     this.addCreditsBtn.addEventListener('click', () => {
@@ -326,6 +348,14 @@ class PopupController {
     // Mode
     this.modeMuteOption.classList.toggle('active',  this.prefs.filterMode === 'mute');
     this.modeBleepOption.classList.toggle('active', this.prefs.filterMode === 'bleep');
+
+    // Auto-filter
+    const autoAlways = this.prefs.autoFilterAllVideos && !this.prefs.confirmBeforeAutoFilter;
+    const autoAsk    = this.prefs.autoFilterAllVideos &&  this.prefs.confirmBeforeAutoFilter;
+    const autoOff    = !this.prefs.autoFilterAllVideos;
+    this.autoAlwaysOption.classList.toggle('active', autoAlways);
+    this.autoAskOption.classList.toggle('active',    autoAsk);
+    this.autoOffOption.classList.toggle('active',    autoOff);
   }
 
   // ── Context detection ──────────────────────────────────────

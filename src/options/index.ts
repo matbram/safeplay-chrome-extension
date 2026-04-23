@@ -11,6 +11,39 @@ import { subscribe as storeSubscribe } from '../utils/reactiveStore';
 import './options.css';
 
 type Section = 'settings' | 'words' | 'billing' | 'account' | 'advanced';
+type StrictnessLevel = 'kids' | 'family' | 'adult';
+
+const STRICTNESS_SEVERITY: Record<StrictnessLevel, UserPreferences['severityLevels']> = {
+  kids:   { mild: true,  moderate: true,  severe: true,  religious: true  },
+  family: { mild: false, moderate: true,  severe: true,  religious: false },
+  adult:  { mild: false, moderate: false, severe: true,  religious: false },
+};
+
+function severityToStrictness(s: UserPreferences['severityLevels']): StrictnessLevel {
+  if (s.mild && s.moderate && s.severe) return 'kids';
+  if (!s.mild && s.moderate && s.severe) return 'family';
+  if (!s.mild && !s.moderate && s.severe) return 'adult';
+  return 'family';
+}
+
+const STRENGTH_LABEL: Record<StrictnessLevel, string> = {
+  kids: 'strong', family: 'moderate', adult: 'mild',
+};
+
+// Fixed bar heights for the waveform (52 bars, values 0.15–1.0)
+const WAVE_HEIGHTS = [
+  0.35,0.55,0.25,0.70,0.45,0.80,0.30,0.90,0.40,0.60,0.20,0.75,0.50,0.85,0.35,0.65,
+  0.25,0.95,0.40,0.70,0.30,0.85,0.55,0.40,0.75,0.30,0.60,0.90,0.45,0.70,0.25,0.80,
+  0.50,0.65,0.35,0.90,0.55,0.75,0.40,0.85,0.30,0.60,0.45,0.95,0.35,0.70,0.50,0.80,
+  0.25,0.65,0.40,0.55,
+];
+// Which bar indices are "redacted" for each level (cumulative sets)
+const REDACT_ADULT  = new Set([5, 7, 12, 17, 23, 27, 35, 38, 42, 46]);
+const REDACT_FAMILY = new Set([...REDACT_ADULT,  1,  4,  9, 14, 20, 29, 32, 43, 48, 51]);
+const REDACT_KIDS   = new Set([...REDACT_FAMILY, 0,  2,  6, 11, 16, 21, 25, 30, 34, 39]);
+const REDACT_MAP: Record<StrictnessLevel, Set<number>> = {
+  adult: REDACT_ADULT, family: REDACT_FAMILY, kids: REDACT_KIDS,
+};
 
 const SAVE_SECTIONS: Section[] = ['settings', 'words', 'advanced'];
 
@@ -22,7 +55,15 @@ class OptionsController {
   private navItems!:      NodeListOf<HTMLButtonElement>;
   private contentSections!: NodeListOf<HTMLElement>;
 
-  // Settings
+  // Settings — hero preview + pill segments
+  private heroSummary!:      HTMLElement;
+  private heroWaveform!:     HTMLElement;
+  private strengthOpts!:     NodeListOf<HTMLButtonElement>;
+  private strengthTrack!:    HTMLElement;
+  private methodOpts!:       NodeListOf<HTMLButtonElement>;
+  private methodTrack!:      HTMLElement;
+
+  // Settings — behavior toggles
   private autoFilterAllVideos!:    HTMLInputElement;
   private confirmBeforeAutoFilter!: HTMLInputElement;
   private confirmBeforeAutoFilterRow!: HTMLElement;
@@ -196,6 +237,13 @@ class OptionsController {
     this.navItems          = document.querySelectorAll<HTMLButtonElement>('.nav-item');
     this.contentSections   = document.querySelectorAll<HTMLElement>('.content-section');
 
+    this.heroSummary   = document.getElementById('heroSummary')    as HTMLElement;
+    this.heroWaveform  = document.getElementById('heroWaveform')   as HTMLElement;
+    this.strengthOpts  = document.querySelectorAll<HTMLButtonElement>('#strengthSegment .pill-opt');
+    this.strengthTrack = document.getElementById('strengthTrack')  as HTMLElement;
+    this.methodOpts    = document.querySelectorAll<HTMLButtonElement>('#methodSegment .pill-opt');
+    this.methodTrack   = document.getElementById('methodTrack')    as HTMLElement;
+
     this.autoFilterAllVideos       = document.getElementById('autoFilterAllVideos')       as HTMLInputElement;
     this.confirmBeforeAutoFilter   = document.getElementById('confirmBeforeAutoFilter')   as HTMLInputElement;
     this.confirmBeforeAutoFilterRow= document.getElementById('confirmBeforeAutoFilterRow') as HTMLElement;
@@ -281,6 +329,25 @@ class OptionsController {
   }
 
   private setupListeners(): void {
+    // Build waveform bars once
+    this.buildWaveform();
+
+    // Strength pill segment
+    this.strengthOpts.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const level = btn.dataset.strength as StrictnessLevel;
+        this.saveFilteringPrefs({ severityLevels: STRICTNESS_SEVERITY[level] });
+      });
+    });
+
+    // Method pill segment
+    this.methodOpts.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.method as UserPreferences['filterMode'];
+        this.saveFilteringPrefs({ filterMode: mode });
+      });
+    });
+
     // Settings toggles — autosave on change
     this.autoFilterAllVideos.addEventListener('change', () => {
       this.updateConfirmSubtoggleState();
@@ -369,6 +436,29 @@ class OptionsController {
   }
 
   private renderPrefs(): void {
+    const level  = severityToStrictness(this.prefs.severityLevels);
+    const method = this.prefs.filterMode === 'bleep' ? 'bleep' : 'mute';
+
+    // Hero preview
+    const strengthWord = STRENGTH_LABEL[level];
+    const methodWord   = method === 'mute' ? 'muting' : 'bleeping';
+    this.heroSummary.innerHTML =
+      `Safeplay removes <strong>${strengthWord}</strong> language by <strong>${methodWord}</strong> it.`;
+    this.updateWaveform(level, method);
+
+    // Strength pill segment
+    this.strengthOpts.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.strength === level);
+    });
+    this.updatePillTrack(this.strengthOpts, this.strengthTrack, level, 'strength');
+
+    // Method pill segment
+    this.methodOpts.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.method === method);
+    });
+    this.updatePillTrack(this.methodOpts, this.methodTrack, method, 'method');
+
+    // Behavior toggles
     this.autoFilterAllVideos.checked     = this.prefs.autoFilterAllVideos === true;
     this.confirmBeforeAutoFilter.checked = this.prefs.confirmBeforeAutoFilter === true;
     this.autoEnableFiltered.checked      = this.prefs.autoEnableForFilteredVideos !== false;
@@ -383,6 +473,48 @@ class OptionsController {
     this.paddingAfter.value  = (this.prefs.paddingAfterMs  ?? this.prefs.paddingMs).toString();
 
     this.updateConfirmSubtoggleState();
+  }
+
+  private buildWaveform(): void {
+    WAVE_HEIGHTS.forEach((h, i) => {
+      const bar = document.createElement('div');
+      bar.className = 'waveform-bar';
+      bar.style.height = `${Math.round(h * 100)}%`;
+      bar.dataset.idx = String(i);
+      this.heroWaveform.appendChild(bar);
+    });
+  }
+
+  private updateWaveform(level: StrictnessLevel, method: string): void {
+    const redacted = REDACT_MAP[level];
+    const cls = method === 'bleep' ? 'redacted-bleep' : 'redacted';
+    this.heroWaveform.querySelectorAll<HTMLElement>('.waveform-bar').forEach(bar => {
+      const idx = parseInt(bar.dataset.idx ?? '0', 10);
+      bar.classList.remove('redacted', 'redacted-bleep');
+      if (redacted.has(idx)) bar.classList.add(cls);
+    });
+  }
+
+  private updatePillTrack(
+    opts: NodeListOf<HTMLButtonElement>,
+    track: HTMLElement,
+    activeValue: string,
+    attr: 'strength' | 'method',
+  ): void {
+    const activeBtn = Array.from(opts).find(b => b.dataset[attr] === activeValue);
+    if (!activeBtn) return;
+    track.style.left  = `${activeBtn.offsetLeft}px`;
+    track.style.width = `${activeBtn.offsetWidth}px`;
+  }
+
+  private async saveFilteringPrefs(updates: Partial<UserPreferences>): Promise<void> {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'SET_PREFERENCES', payload: updates });
+      if (res?.success && res.data) this.prefs = res.data;
+    } catch {
+      Object.assign(this.prefs, updates);
+    }
+    this.renderPrefs();
   }
 
   private collectPrefs(): Partial<UserPreferences> {

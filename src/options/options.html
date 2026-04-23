@@ -82,8 +82,38 @@
         <p>How Safeplay behaves while you watch YouTube.</p>
       </div>
 
+      <!-- Hero preview -->
+      <div class="hero-preview" id="heroPreview">
+        <p class="hero-summary" id="heroSummary">Safeplay removes <strong>moderate</strong> language by <strong>muting</strong> it.</p>
+        <div class="hero-waveform" id="heroWaveform" aria-hidden="true"></div>
+      </div>
+
+      <!-- Filtering controls -->
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title">Filtering</div>
+        <div class="card-body">
+          <div class="settings-ctrl-row">
+            <div class="settings-ctrl-label">Filter strength</div>
+            <div class="pill-segment" id="strengthSegment">
+              <button class="pill-opt" data-strength="adult">Mild</button>
+              <button class="pill-opt" data-strength="family">Moderate</button>
+              <button class="pill-opt" data-strength="kids">Strict</button>
+              <div class="pill-track" id="strengthTrack"></div>
+            </div>
+          </div>
+          <div class="settings-ctrl-row">
+            <div class="settings-ctrl-label">Censor method</div>
+            <div class="pill-segment" id="methodSegment">
+              <button class="pill-opt" data-method="mute">Silence</button>
+              <button class="pill-opt" data-method="bleep">Beep</button>
+              <div class="pill-track" id="methodTrack"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
-        <div class="card-title">How Safeplay works</div>
+        <div class="card-title">Behavior</div>
         <div class="card-body">
           <div class="toggle-row" id="autoFilterRow">
             <div class="toggle-row-text">

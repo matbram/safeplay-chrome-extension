@@ -223,7 +223,25 @@ button { font-family: inherit; cursor: pointer; line-height: inherit; }
   border-color: var(--accent);
 }
 
-.ob-level-emoji { font-size: 26px; flex-shrink: 0; }
+.ob-level-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.ob-bar {
+  width: 5px;
+  border-radius: 2px;
+  background: currentColor;
+  color: inherit;
+}
+.ob-bar:nth-child(1) { height: 8px; }
+.ob-bar:nth-child(2) { height: 13px; }
+.ob-bar:nth-child(3) { height: 19px; }
+.ob-bar.faded { opacity: 0.2; }
+.ob-level.active .ob-level-bars { color: var(--accent); }
+
 .ob-level-body  { flex: 1; }
 .ob-level-name  { font-size: 15px; font-weight: 700; }
 .ob-level.active .ob-level-name { color: var(--accent); }
