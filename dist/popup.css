@@ -103,6 +103,26 @@ button {
   color: var(--text);
 }
 
+/* ── Theme toggle ────────────────────────────────────────── */
+.theme-toggle {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--border-hi); }
+
+/* In light mode show moon, in dark mode show sun */
+body:not(.dark) .theme-icon-sun { display: none; }
+body.dark       .theme-icon-moon { display: none; }
+
 /* ── Context Hero ────────────────────────────────────────── */
 .ctx-hero {
   padding: 4px 16px 16px;
@@ -194,15 +214,17 @@ button {
 }
 
 .strictness-btn {
-  padding: 10px 8px;
+  padding: 10px 8px 9px;
   background: var(--bg-elevated);
   border: 1.5px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--text);
-  font-size: 12.5px;
-  font-weight: 600;
   text-align: center;
   transition: var(--transition);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
 }
 .strictness-btn:hover {
   border-color: var(--border-hi);
@@ -211,6 +233,28 @@ button {
   background: var(--accent-soft);
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.strictness-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 14px;
+}
+
+.strictness-bars .bar {
+  width: 4px;
+  border-radius: 1px;
+  background: currentColor;
+}
+.strictness-bars .bar:nth-child(1) { height: 6px; }
+.strictness-bars .bar:nth-child(2) { height: 10px; }
+.strictness-bars .bar:nth-child(3) { height: 14px; }
+.strictness-bars .bar.faded { opacity: 0.2; }
+
+.strictness-label {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .strictness-example {
@@ -426,16 +470,18 @@ button {
 .signin-btn:hover { background: var(--accent-hover); }
 
 .settings-btn {
-  width: 32px;
-  height: 32px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 5px;
+  padding: 0 10px;
+  height: 32px;
   background: var(--bg-card);
   color: var(--text-dim);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
   transition: var(--transition);
 }
 .settings-btn:hover { color: var(--text); border-color: var(--border-hi); }
