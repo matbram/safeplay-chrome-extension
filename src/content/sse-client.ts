@@ -7,12 +7,16 @@ export interface SSEConnectedData {
   job_id: string;
   status: string;
   progress?: number;
+  eta_seconds?: number | null;
+  created_at?: string;
 }
 
 export interface SSEProgressData {
   job_id: string;
   status: string;
   progress?: number;
+  eta_seconds?: number | null;
+  created_at?: string;
 }
 
 export interface SSECompleteData {

@@ -7,6 +7,7 @@ import {
   UserCredits,
   CreditInfo,
 } from '../types';
+import { subscribe as storeSubscribe } from '../utils/reactiveStore';
 import './options.css';
 
 type Section = 'settings' | 'words' | 'billing' | 'account' | 'advanced';
@@ -16,6 +17,7 @@ const SAVE_SECTIONS: Section[] = ['settings', 'words', 'advanced'];
 class OptionsController {
   private prefs: UserPreferences = DEFAULT_PREFERENCES;
   private authState: AuthState | null = null;
+  private storeUnsubs: Array<() => void> = [];
   // Nav + sections
   private navItems!:      NodeListOf<HTMLButtonElement>;
   private contentSections!: NodeListOf<HTMLElement>;
@@ -85,6 +87,11 @@ class OptionsController {
     // Register the listener before any awaits so broadcasts that arrive
     // during startup (e.g. CREDIT_UPDATE after a just-completed filter) aren't dropped.
     this.setupMessageListener();
+    this.setupStoreSubscriptions();
+    window.addEventListener('unload', () => {
+      for (const unsub of this.storeUnsubs) unsub();
+      this.storeUnsubs = [];
+    });
 
     // Paint cached account + credits first so the page never opens with
     // blank sections. Revalidation below replaces stale values once the
@@ -142,19 +149,42 @@ class OptionsController {
   }
 
   private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg?.type === 'PREFERENCES_UPDATED' && msg.payload && typeof msg.payload === 'object') {
-        this.prefs = msg.payload as UserPreferences;
+    // All cross-surface state (preferences, auth, credits) flows through
+    // reactiveStore.subscribe → chrome.storage.onChanged. No bespoke
+    // runtime messages remain. Retained as a hook point.
+  }
+
+  // Reactive-store subscriptions: one listener path for auth state, driven
+  // by chrome.storage.onChanged rather than bespoke runtime messages. A
+  // logout triggered from the website, popup, or another options tab lands
+  // here within one storage round-trip.
+  private setupStoreSubscriptions(): void {
+    this.storeUnsubs.push(
+      storeSubscribe('authState', (next) => {
+        this.authState = next;
+        this.renderAccount();
+        // Server-authoritative: prime fresh credits on auth flip. The
+        // creditInfo subscription below covers steady-state changes.
+        void this.loadCredits();
+      }),
+      storeSubscribe('preferences', (next) => {
+        this.prefs = next;
         this.renderPrefs();
-      }
-      if (msg?.type === 'AUTH_STATE_CHANGED') {
-        this.loadAuthState();
-        this.loadCredits();
-      }
-      if (msg?.type === 'CREDIT_UPDATE') {
-        this.loadCredits();
-      }
-    });
+      }),
+      storeSubscribe('creditInfo', (next) => {
+        // Observe server-committed credit changes directly from storage —
+        // no GET_CREDITS round-trip. This is the one path responsible for
+        // keeping the sidebar + billing usage bars in sync.
+        if (!next) return;
+        this.renderCredits(
+          next.available,
+          next.used_this_period,
+          next.plan_allocation,
+          next.plan ?? '',
+          next.reset_date,
+        );
+      }),
+    );
   }
 
   private loadTheme(): void {

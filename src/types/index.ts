@@ -75,7 +75,7 @@ export interface FilterStartResponse {
 
 // Job status response
 export interface JobStatusResponse {
-  status: 'pending' | 'downloading' | 'transcribing' | 'completed' | 'failed';
+  status: 'pending' | 'processing' | 'downloading' | 'transcribing' | 'completed' | 'failed';
   progress: number;
   message?: string;
   transcript?: Transcript;
@@ -85,6 +85,20 @@ export interface JobStatusResponse {
     youtube_id: string;
     title?: string;
   };
+  // Expected completion time for the job in seconds (server-computed from
+  // video duration). May be null if the duration couldn't be resolved.
+  eta_seconds?: number | null;
+  // ISO-8601 creation timestamp of the job row on the server. Used by the
+  // extension to compute elapsed time for the in-session retry budget.
+  created_at?: string;
+}
+
+// Response from POST /api/filter/retry
+export interface RetryJobResponse {
+  status: 'processing';
+  job_id: string;
+  youtube_id?: string;
+  message?: string;
 }
 
 // Legacy FilterResponse - kept for compatibility during migration
@@ -123,7 +137,7 @@ export interface ButtonStateInfo {
   // these are present.
   remainingSeconds?: number | null;
   totalEstimatedSeconds?: number | null;
-  phase?: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'done' | 'error';
+  phase?: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'still-working' | 'done' | 'error';
   statusText?: string;
 }
 
@@ -131,7 +145,7 @@ export interface ButtonStateInfo {
 // countdown without running independent timers.
 export interface TranscriptionStateBroadcast {
   youtubeId: string;
-  phase: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'done' | 'error';
+  phase: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'still-working' | 'done' | 'error';
   remainingSeconds: number | null;
   totalEstimatedSeconds: number | null;
   statusText: string;
@@ -230,6 +244,7 @@ export type MessageType =
   | 'GET_PREVIEW'
   | 'START_FILTER'
   | 'CHECK_JOB'
+  | 'RETRY_JOB'
   | 'GET_CREDITS'
   | 'GET_PREFERENCES'
   | 'SET_PREFERENCES'
@@ -240,8 +255,10 @@ export type MessageType =
   | 'LOGOUT'
   | 'OPEN_LOGIN'
   | 'CLEAR_CACHE'
-  | 'TRANSCRIPTION_STATE_CHANGED'
-  | 'GET_TRANSCRIPTION_STATE';
+  // Reactive store plumbing: non-background contexts send STORE_PROPOSE to
+  // the background when they want to mutate a shared key. Background is the
+  // only writer — every other surface subscribes via chrome.storage.onChanged.
+  | 'STORE_PROPOSE';
 
 export interface Message<T = unknown> {
   type: MessageType;
@@ -316,4 +333,72 @@ export interface AuthState {
   subscription: UserSubscription | null;
   credits: UserCredits | null;
   token: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Reactive store state — per-tab snapshots and singleflight visibility.
+//
+// SessionState lives in chrome.storage.local and is wholly owned by the
+// background worker. Content scripts propose patches; popup/options read via
+// chrome.storage.onChanged. Tab IDs don't survive a browser restart, so
+// background wipes `byTab` on onStartup.
+// ---------------------------------------------------------------------------
+
+export interface TabSnapshot {
+  tabId: number;
+  url: string;
+  videoId: string | null;
+  filterActive: boolean;
+  buttonState: ButtonStateInfo;
+  transcription: TranscriptionStateBroadcast | null;
+  intervalCount: number;
+  updatedAt: number;
+}
+
+export interface JobSummary {
+  jobId: string;
+  youtubeId: string;
+  status: 'pending' | 'processing' | 'downloading' | 'transcribing' | 'completed' | 'failed';
+  startedAt: number;
+  creditCost?: number;
+}
+
+export interface SessionState {
+  byTab: Record<number, TabSnapshot>;
+  activeJobs: Record<string, JobSummary>;
+  lastUpdated: number;
+}
+
+// InflightState lives in chrome.storage.session (per-browser-session, fires
+// onChanged in every context). Popup subscribes to render "fetching..." UI
+// without requiring bespoke messages from background.
+export interface InflightState {
+  // keyed by youtubeId — a filter start in flight to the server
+  filterStarts: Record<string, { startedAt: number }>;
+  // keyed by youtubeId — a preview fetch in flight
+  previews: Record<string, { startedAt: number }>;
+  // keyed by some coarse identifier — credit balance refresh in flight
+  creditFetch: { startedAt: number } | null;
+}
+
+export const EMPTY_INFLIGHT_STATE: InflightState = {
+  filterStarts: {},
+  previews: {},
+  creditFetch: null,
+};
+
+export const EMPTY_SESSION_STATE: SessionState = {
+  byTab: {},
+  activeJobs: {},
+  lastUpdated: 0,
+};
+
+// STORE_PROPOSE payload: non-background surfaces send a partial patch for a
+// top-level reactive key. Background merges with a per-key mutex and commits.
+export interface StoreProposePayload {
+  key: 'preferences' | 'sessionState' | 'inflight';
+  // For sessionState, patch is { byTab?: Record<tabId, Partial<TabSnapshot>>,
+  //                              activeJobs?: Record<jobId, Partial<JobSummary> | null> }.
+  // A null value under byTab/activeJobs means "delete this entry".
+  patch: unknown;
 }

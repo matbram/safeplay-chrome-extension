@@ -1,6 +1,7 @@
 import {
   FilterStartResponse,
   JobStatusResponse,
+  RetryJobResponse,
   Transcript,
   PreviewResponse,
   CreditBalanceResponse,
@@ -92,7 +93,27 @@ async function request<T>(
 
           if (result.kind === 'ok') {
             logApi('Token refreshed, retrying request...');
-            return request<T>(endpoint, { ...options, _isRetry: true });
+            try {
+              return await request<T>(endpoint, { ...options, _isRetry: true });
+            } catch (retryErr) {
+              // If the retry still fails with 401 immediately after a
+              // successful refresh, it's almost always a transient
+              // server-side cache propagation lag — not a real logout.
+              // Surface as SESSION_TRANSIENT so upstream handlers (like
+              // handleGetUserProfile) preserve tokens and fall back to
+              // cached data, instead of a bare "Request failed with
+              // status 401" message that a substring match could misread.
+              if (retryErr instanceof ApiError && retryErr.statusCode === 401) {
+                logApi('Retry after refresh still 401 — surfacing as transient');
+                throw new ApiError(
+                  'Authentication hiccup; please try again shortly.',
+                  401,
+                  retryErr.response,
+                  'SESSION_TRANSIENT'
+                );
+              }
+              throw retryErr;
+            }
           }
 
           if (result.kind === 'transient') {
@@ -118,19 +139,9 @@ async function request<T>(
         logApi('Clearing auth data and notifying UI');
         await clearAuthData();
 
-        // Broadcast logout to YouTube tabs (only where content scripts run).
-        if (typeof chrome !== 'undefined' && chrome.tabs) {
-          chrome.tabs.query({ url: '*://*.youtube.com/*' }).then(tabs => {
-            for (const tab of tabs) {
-              if (tab.id) {
-                chrome.tabs.sendMessage(tab.id, {
-                  type: 'AUTH_STATE_CHANGED',
-                  payload: { isAuthenticated: false },
-                }).catch(() => {});
-              }
-            }
-          });
-        }
+        // No bespoke broadcast: clearAuthData wipes the backing storage
+        // keys and every reactiveStore.subscribe('authState', ...) listener
+        // (popup, options, content) converges via chrome.storage.onChanged.
 
         throw new ApiError(
           'Session expired. Please sign in again.',
@@ -226,6 +237,23 @@ export async function checkJobStatus(jobId: string): Promise<JobStatusResponse> 
   logApi('=== checkJobStatus ===', jobId);
   return request<JobStatusResponse>(`/api/filter/status/${jobId}`, {
     method: 'GET',
+    requiresAuth: true,
+  });
+}
+
+/**
+ * Restart a stuck transcription job. The server deletes the cached videos
+ * row, cancels the old orchestrator job, and starts a fresh one under the
+ * same job_id — so the extension can keep polling the same status URL.
+ *
+ * The extension is only allowed to call this ONCE per job_id within a
+ * session; the server's background sweep handles persistent failures.
+ */
+export async function retryFilterJob(jobId: string): Promise<RetryJobResponse> {
+  logApi('=== retryFilterJob ===', jobId);
+  return request<RetryJobResponse>('/api/filter/retry', {
+    method: 'POST',
+    body: { action: 'restart', job_id: jobId },
     requiresAuth: true,
   });
 }

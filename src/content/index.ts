@@ -3,7 +3,15 @@ import { ResilientInjector } from './resilient-injector';
 import { VideoController } from './video-controller';
 import { CaptionFilter } from './caption-filter';
 import { TimelineMarkers } from './timeline-markers';
-import { CreditConfirmation, showAuthRequiredMessage, showFilterErrorNotification } from './credit-confirmation';
+import {
+  CreditConfirmation,
+  dismissCheckBackLaterNotification,
+  showAuthRequiredMessage,
+  showCheckBackLaterNotification,
+  showFilterErrorNotification,
+  showUnfilterableVideoNotification,
+} from './credit-confirmation';
+import { preflightVideoFilterable } from './preflight';
 import { TranscriptionSSEClient } from './sse-client';
 import { TimeEstimator, TranscriptionStateSnapshot } from './time-estimator';
 import {
@@ -14,6 +22,7 @@ import {
   PreviewData,
   TranscriptionStateBroadcast,
 } from '../types';
+import { subscribe as storeSubscribe, proposeSelfTab } from '../utils/reactiveStore';
 
 const API_BASE_URL = 'https://trysafeplay.com';
 // Floor for the transcription budget (applies to short/medium videos).
@@ -21,6 +30,13 @@ const API_BASE_URL = 'https://trysafeplay.com';
 // see SafePlayContentScript.transcriptionBudgetMs().
 const TRANSCRIPTION_BUDGET_FLOOR_MS = 6 * 60 * 1000;
 const FALLBACK_POLL_INTERVAL_MS = 2000;
+// Grace period added on top of the server-provided eta_seconds before we
+// consider a job stuck. Matches the website's own stale-threshold heuristic.
+const RETRY_GRACE_SECONDS = 30;
+// Conservative fallback when the server didn't send eta_seconds (old job
+// row, duration unresolvable). After this much elapsed time we give up in
+// session and defer to the background sweep.
+const NO_ETA_GIVE_UP_SECONDS = 5 * 60;
 import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
 import './styles.css';
 
@@ -73,6 +89,7 @@ class SafePlayContentScript {
   private isFilterActive = false; // Track if filter is currently active
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
   private navigationId = 0; // Incremented on each navigation to cancel stale async operations
+  private storeUnsubs: Array<() => void> = []; // reactiveStore subscriptions; torn down on teardown
   private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
   private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
   private lastVideoDuration: number | undefined; // Duration in seconds from preview, used to compute the transcription countdown
@@ -84,6 +101,27 @@ class SafePlayContentScript {
   private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
   private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
   private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
+  // Per-job in-session retry tracking. The extension is allowed one retry
+  // per job_id; after the second ETA+grace window we defer to the server's
+  // background sweep and show the check-back-later message. Survives SSE ↔
+  // polling transitions because it's keyed on job_id, not on which transport
+  // happens to be active.
+  private retryState: {
+    jobId: string;
+    retried: boolean;
+    giveUpTriggered: boolean;
+    retryInFlight: boolean;
+    etaSeconds: number | null;
+    createdAt: string | null;
+    // Fallback anchor when the server didn't send created_at (old rows).
+    localStartMs: number;
+  } | null = null;
+  // Set of job_ids we've already fired /api/filter/retry for in this
+  // content-script session. Outlives retryState (which gets cleared on
+  // give-up / navigation) so the contract "one retry per job_id per
+  // session" holds even if the user clicks Filter again and the server's
+  // dedupe hands back the same still-in-flight job.
+  private retriedJobIds: Set<string> = new Set();
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -124,11 +162,43 @@ class SafePlayContentScript {
 
     // Listen for messages from background/popup
     this.setupMessageListener();
+    this.setupStoreSubscriptions();
 
     // Listen for URL changes (YouTube SPA)
     this.setupNavigationListener();
 
     log('SafePlay initialized');
+  }
+
+  // Subscribe to reactive-store keys whose changes should drive behavior in
+  // the content script. Currently: preferences (master toggle, strictness,
+  // marker visibility). authState and sessionState are driven elsewhere.
+  private setupStoreSubscriptions(): void {
+    try {
+      this.storeUnsubs.push(
+        storeSubscribe('preferences', (next) => {
+          this.applyPreferenceUpdate(next);
+        }),
+        storeSubscribe('authState', (next, prev) => {
+          // Pending-auth resumption: if the user was waiting on a
+          // sign-in before we kicked off a filter (e.g. clicked "Filter"
+          // on a video while signed out), fire it now that the auth
+          // state has flipped. Only fire on the false→true transition so
+          // re-renders don't re-trigger.
+          const becameAuthed = next.isAuthenticated && prev && !prev.isAuthenticated;
+          if (becameAuthed && this.pendingAuthVideoId) {
+            log('authState transitioned to authenticated; resuming pending filter');
+            const modal = document.querySelector('.safeplay-credit-dialog-overlay');
+            if (modal) modal.remove();
+            const videoId = this.pendingAuthVideoId;
+            this.pendingAuthVideoId = null;
+            this.onFilterButtonClick(videoId);
+          }
+        }),
+      );
+    } catch (err) {
+      log('Failed to register reactiveStore subscriptions:', err);
+    }
   }
 
   private async loadPreferences(): Promise<void> {
@@ -171,6 +241,28 @@ class SafePlayContentScript {
 
   private updateButtonState(stateInfo: ButtonStateInfo): void {
     this.injector.updateButtonState(stateInfo);
+    // Mirror the state into the per-tab snapshot so the popup and any other
+    // subscriber (in-player overlay, badge, future UI) renders from the
+    // exact same source. proposeSelfTab is fire-and-forget; on a closed
+    // popup this write has no observers but still keeps storage fresh for
+    // the next open. Extension context validity is implicit in proposeSelfTab
+    // (chrome.runtime.sendMessage rejects quietly if the worker is gone).
+    void this.proposeTabSnapshot({
+      buttonState: stateInfo,
+      filterActive: this.isFilterActive,
+      videoId: this.currentVideoId,
+      intervalCount: this.lastIntervalCount,
+    });
+  }
+
+  // Lightweight wrapper so the few call sites that want to push transcription
+  // state or filter-active changes don't each have to know the rest of the
+  // snapshot contract.
+  private proposeTabSnapshot(patch: Partial<import('../types').TabSnapshot>): Promise<void> {
+    if (!isExtensionContextValid()) return Promise.resolve();
+    return proposeSelfTab(patch).catch(err => {
+      log('proposeSelfTab failed (non-fatal):', err);
+    });
   }
 
   // Schedule a silent auto-retry after a delay, dismissing the error modal automatically
@@ -264,6 +356,17 @@ class SafePlayContentScript {
       log('Auth check failed:', error);
       this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
       showAuthRequiredMessage();
+      return;
+    }
+
+    // Step 0.5: Client-side pre-flight gate. Catches private, age-restricted,
+    // members-only, deleted, and currently-live videos before we hit our own
+    // backend or show a credit dialog. Fail-open on network errors — the
+    // server-side validation is still the source of truth.
+    const preflight = await preflightVideoFilterable(youtubeId);
+    if (!preflight.ok) {
+      log(`Pre-flight rejected ${youtubeId}: ${preflight.reason}`);
+      showUnfilterableVideoNotification(preflight.reason);
       return;
     }
 
@@ -538,6 +641,7 @@ class SafePlayContentScript {
   private async runTranscriptionFlow(jobId: string, videoId: string): Promise<void> {
     this.jobStartedAt = Date.now();
     this.startEstimator(videoId);
+    this.ensureRetryState(jobId);
 
     const navigationId = this.navigationId;
     const isStillCurrent = () =>
@@ -580,10 +684,14 @@ class SafePlayContentScript {
         if (!isStillCurrent()) return;
         log('SSE connected:', data.status);
         this.estimator?.setServerStatus(data.status);
+        this.ingestJobMeta(jobId, data.eta_seconds, data.created_at);
+        this.evaluateRetryOrGiveUp(jobId, videoId, data.status);
       },
       onProgress: (data) => {
         if (!isStillCurrent()) return;
         this.estimator?.setServerStatus(data.status);
+        this.ingestJobMeta(jobId, data.eta_seconds, data.created_at);
+        this.evaluateRetryOrGiveUp(jobId, videoId, data.status);
       },
       onComplete: async (data) => {
         clearSafety();
@@ -638,7 +746,15 @@ class SafePlayContentScript {
     type JobCheckResponse = {
       success: boolean;
       error?: string;
-      data?: { status: string; progress: number; transcript?: Transcript; error?: string; error_code?: string };
+      data?: {
+        status: string;
+        progress: number;
+        transcript?: Transcript;
+        error?: string;
+        error_code?: string;
+        eta_seconds?: number | null;
+        created_at?: string;
+      };
     };
     let response: JobCheckResponse | null;
     try {
@@ -672,7 +788,8 @@ class SafePlayContentScript {
       return;
     }
 
-    const { status, transcript, error, error_code } = response.data;
+    const { status, transcript, error, error_code, eta_seconds, created_at } = response.data;
+    this.ingestJobMeta(jobId, eta_seconds, created_at);
     if (status === 'completed' && transcript) {
       await this.applyCompletedTranscript(transcript, videoId);
       return;
@@ -699,6 +816,7 @@ class SafePlayContentScript {
     }
 
     if (!this.estimator) this.startEstimator(videoId);
+    this.ensureRetryState(jobId);
     const startedAt = Date.now();
     const budgetMs = this.transcriptionBudgetMs();
     const navigationId = this.navigationId;
@@ -718,7 +836,15 @@ class SafePlayContentScript {
         response = await safeSendMessage<{
           success: boolean;
           error?: string;
-          data?: { status: string; progress: number; transcript?: Transcript; error?: string; error_code?: string };
+          data?: {
+            status: string;
+            progress: number;
+            transcript?: Transcript;
+            error?: string;
+            error_code?: string;
+            eta_seconds?: number | null;
+            created_at?: string;
+          };
         }>({ type: 'CHECK_JOB', payload: { jobId } });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown error';
@@ -747,7 +873,8 @@ class SafePlayContentScript {
         return;
       }
 
-      const { status, transcript, error, error_code } = response.data;
+      const { status, transcript, error, error_code, eta_seconds, created_at } = response.data;
+      this.ingestJobMeta(jobId, eta_seconds, created_at);
       log(`Fallback poll status: ${status}`);
 
       if (status === 'completed' && transcript) {
@@ -762,6 +889,13 @@ class SafePlayContentScript {
       }
 
       this.estimator?.setServerStatus(status);
+
+      // Evaluate the in-session retry budget. If this triggers the
+      // give-up path it tears down polling via stopTranscriptionResources,
+      // so check afterwards and bail out instead of scheduling another tick.
+      this.evaluateRetryOrGiveUp(jobId, videoId, status);
+      if (!isStillCurrent() || this.retryState?.giveUpTriggered) return;
+
       this.fallbackPollTimer = setTimeout(tick, FALLBACK_POLL_INTERVAL_MS);
     };
 
@@ -785,6 +919,11 @@ class SafePlayContentScript {
     this.statusCallInFlight = false;
     this.lastTranscriptionState = null;
     this.jobStartedAt = 0;
+    // stopTranscriptionResources is only called on terminal paths
+    // (success, error, give-up, navigation). The SSE→polling fallback
+    // tears down the SSE client directly without calling this method, so
+    // the retry state correctly survives that transition.
+    this.retryState = null;
   }
 
   // Create the estimator and wire its updates to the button UI + popup.
@@ -818,17 +957,217 @@ class SafePlayContentScript {
         statusText: state.statusText,
       });
 
-      if (isExtensionContextValid()) {
-        chrome.runtime.sendMessage({
-          type: 'TRANSCRIPTION_STATE_CHANGED',
-          payload: broadcast,
-        }).catch(() => {
-          // Popup might be closed; that's fine.
-        });
-      }
+      // Drive the popup via the shared TabSnapshot rather than a bespoke
+      // runtime broadcast. storage.onChanged delivers the update to the
+      // popup's reactiveStore.subscribe('sessionState', ...) listener.
+      void this.proposeTabSnapshot({ transcription: broadcast });
     });
     this.estimator = estimator;
     estimator.start();
+  }
+
+  // Set up per-job retry bookkeeping. Preserved across SSE ↔ polling
+  // transitions (same jobId keeps its `retried` flag) so we never exceed
+  // the one-retry-per-job-per-session rule. Called from both the SSE and
+  // polling entry points.
+  private ensureRetryState(jobId: string): void {
+    if (this.retryState?.jobId === jobId) return;
+    // If we already burned our one retry for this job_id earlier in the
+    // session (user gave up, came back, and hit the server's dedupe), we
+    // must NOT fire a second retry. The Set survives stopTranscriptionResources.
+    const alreadyRetried = this.retriedJobIds.has(jobId);
+    this.retryState = {
+      jobId,
+      retried: alreadyRetried,
+      giveUpTriggered: false,
+      retryInFlight: false,
+      etaSeconds: null,
+      createdAt: null,
+      localStartMs: Date.now(),
+    };
+  }
+
+  // Merge server-provided job metadata (eta_seconds, created_at) into the
+  // retry state. Called on every status update from SSE progress events and
+  // CHECK_JOB responses.
+  private ingestJobMeta(
+    jobId: string,
+    etaSeconds?: number | null,
+    createdAt?: string
+  ): void {
+    if (!this.retryState || this.retryState.jobId !== jobId) return;
+    if (etaSeconds !== undefined) {
+      // eta_seconds may be explicitly null (old job row / duration unknown);
+      // preserve that — the retry evaluator treats null as "skip in-session
+      // retry, use conservative fallback timeout."
+      this.retryState.etaSeconds = etaSeconds;
+    }
+    if (createdAt) {
+      this.retryState.createdAt = createdAt;
+    }
+  }
+
+  // Elapsed time since the server created the job row. Falls back to the
+  // local start timestamp if the server didn't send created_at.
+  private elapsedSeconds(): number {
+    if (!this.retryState) return 0;
+    if (this.retryState.createdAt) {
+      const created = Date.parse(this.retryState.createdAt);
+      if (!Number.isNaN(created)) {
+        return Math.max(0, (Date.now() - created) / 1000);
+      }
+    }
+    return Math.max(0, (Date.now() - this.retryState.localStartMs) / 1000);
+  }
+
+  // Core in-session retry policy, invoked on every non-terminal status
+  // update. Two windows keyed off the server's eta_seconds:
+  //   * elapsed > ETA + 30s → surface the reassuring "taking longer" modal
+  //     and fire the one allowed retry silently in the background.
+  //   * elapsed > 2*(ETA+30)s → tear down in-session polling. Don't re-show
+  //     the modal (it's either already up or the user dismissed it).
+  // When eta_seconds is null (old job row / duration unknown) we skip the
+  // retry entirely and use a conservative 5-minute fallback for give-up
+  // (which still surfaces the modal at the give-up moment, since the user
+  // hasn't seen any prior reassurance).
+  private evaluateRetryOrGiveUp(jobId: string, videoId: string, status: string): void {
+    const state = this.retryState;
+    if (!state || state.jobId !== jobId) return;
+    if (state.giveUpTriggered || state.retryInFlight) return;
+    // Only evaluate for non-terminal states. completed/failed are handled
+    // by the existing branches before this is called.
+    if (status === 'completed' || status === 'failed') return;
+
+    const elapsed = this.elapsedSeconds();
+
+    // No ETA from the server → skip the in-session retry entirely per the
+    // API contract; just enforce a conservative give-up deadline so we
+    // don't poll forever.
+    if (state.etaSeconds == null) {
+      if (elapsed > NO_ETA_GIVE_UP_SECONDS) {
+        log(`No eta_seconds; exceeded ${NO_ETA_GIVE_UP_SECONDS}s — giving up in session for ${jobId}`);
+        this.surfaceCheckBackLater(videoId);
+      }
+      return;
+    }
+
+    const windowSec = state.etaSeconds + RETRY_GRACE_SECONDS;
+
+    if (state.retried) {
+      // Already used our one retry — second window means tear down polling.
+      // Don't re-show the modal; either it's still up from window 1, or the
+      // user dismissed it on purpose. Re-popping is annoying.
+      if (elapsed > 2 * windowSec) {
+        log(`Retry exhausted and elapsed ${Math.round(elapsed)}s > ${2 * windowSec}s — terminating polling for ${jobId}`);
+        this.terminateInSession(videoId);
+      }
+      return;
+    }
+
+    if (elapsed > windowSec) {
+      log(`Elapsed ${Math.round(elapsed)}s > ${windowSec}s — surfacing reassurance + firing one retry for ${jobId}`);
+      // Surface the modal *before* the retry so the user sees the
+      // reassurance immediately, even if the retry POST takes a moment.
+      // The retry continues silently; if it succeeds and the job completes
+      // the modal auto-dismisses (see applyCompletedTranscript).
+      showCheckBackLaterNotification();
+      state.retryInFlight = true;
+      this.fireJobRetry(jobId, videoId);
+    }
+  }
+
+  // Fire the one allowed retry via the background. On success we mark
+  // retried=true so we never fire a second one, and leave polling/SSE
+  // running — the server keeps the same job_id so the existing transport
+  // stays valid. On failure we short-circuit to the check-back-later UI
+  // since the contract says not to attempt a second retry.
+  private async fireJobRetry(jobId: string, videoId: string): Promise<void> {
+    const state = this.retryState;
+    if (!state || state.jobId !== jobId) return;
+    // Record the attempt EAGERLY — before awaiting — so that even if
+    // retryState gets nulled mid-flight (surfaceJobError, navigation), a
+    // later re-entry on the same job_id won't fire a second retry. The
+    // contract is "one /api/filter/retry call per job_id per session"
+    // regardless of the outcome of this call.
+    this.retriedJobIds.add(jobId);
+    try {
+      const response = await safeSendMessage<{
+        success: boolean;
+        error?: string;
+        data?: { jobId: string; status: string };
+      }>({ type: 'RETRY_JOB', payload: { jobId } });
+
+      if (this.retryState !== state || state.jobId !== jobId) {
+        // Navigation / new job raced the retry — abandon silently. The
+        // jobId is already in retriedJobIds so the one-retry contract
+        // still holds if the user re-enters.
+        return;
+      }
+
+      state.retryInFlight = false;
+
+      if (!response || !response.success) {
+        const errMsg = response?.error || 'Retry request failed';
+        log(`Retry failed for ${jobId}: ${errMsg}`);
+        // Per contract: no second retry attempt.
+        state.retried = true;
+        this.surfaceCheckBackLater(videoId);
+        return;
+      }
+
+      state.retried = true;
+      log(`Retry accepted for ${jobId}; continuing to poll same job_id`);
+    } catch (err) {
+      if (this.retryState === state) {
+        state.retryInFlight = false;
+        state.retried = true;
+        log(`Retry threw for ${jobId}:`, err);
+        this.surfaceCheckBackLater(videoId);
+      }
+    }
+  }
+
+  // Tear down in-session transport + reset processing state, leaving the
+  // button in a clean idle state. Does NOT show any modal — callers decide
+  // whether the user needs a message. Used by both the give-up paths
+  // (with modal) and the second-window terminal path (without modal,
+  // because the modal is already on screen from the first window).
+  private terminateInSession(videoId: string): void {
+    if (this.retryState) this.retryState.giveUpTriggered = true;
+    // Cancel any pending auto-retry from an earlier error path — it would
+    // re-fire onFilterButtonClick in ~5s and restart the filter, which is
+    // exactly the opposite of the deferred-to-server state we're entering.
+    if (this.autoRetryTimer) {
+      clearTimeout(this.autoRetryTimer);
+      this.autoRetryTimer = null;
+    }
+    this.stopTranscriptionResources();
+
+    this.updateButtonState({
+      state: 'idle',
+      text: 'SafePlay',
+      videoId,
+    });
+
+    if (this.videoWasPlaying) {
+      const video = this.getVideoElement();
+      if (video) {
+        video.play();
+        log('Video resumed after terminating in-session polling');
+      }
+      this.videoWasPlaying = false;
+    }
+    this.isProcessing = false;
+    this.filteringVideoId = null;
+  }
+
+  // Give-up path: tear down transport AND show the friendly deferred-to-server
+  // message. Used by the no-ETA fallback and by retry-failure call sites
+  // (where the modal may not be on screen yet). The modal helper is
+  // idempotent, so callers that may double-fire don't need to coordinate.
+  private surfaceCheckBackLater(videoId: string): void {
+    this.terminateInSession(videoId);
+    showCheckBackLaterNotification();
   }
 
   // Apply a completed transcript — wraps the existing applyFilter to make
@@ -851,6 +1190,10 @@ class SafePlayContentScript {
       this.jobStartedAt = 0;
     }
     this.stopTranscriptionResources();
+    // If the "taking longer than expected" modal is still on screen from
+    // window 1, quietly remove it now that the job has actually completed.
+    // No-op when the modal isn't present.
+    dismissCheckBackLaterNotification();
     this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
     await this.applyFilter(transcript);
   }
@@ -1111,17 +1454,11 @@ class SafePlayContentScript {
   private onVideoStateChange(state: ReturnType<VideoController['getState']>): void {
     log('Video state changed:', state);
 
-    // Notify popup of state change (if extension context still valid)
-    if (!isExtensionContextValid()) {
-      log('Extension context invalidated, skipping state change notification');
-      return;
-    }
-
-    chrome.runtime.sendMessage({
-      type: 'VIDEO_STATE_CHANGED',
-      payload: state,
-    }).catch(() => {
-      // Popup might not be open or extension context invalidated
+    // Per-tab snapshot carries filter-active + intervalCount; popup reads
+    // both via subscribe('sessionState', ...). No runtime broadcast needed.
+    void this.proposeTabSnapshot({
+      filterActive: state.status === 'active',
+      intervalCount: state.intervalCount ?? 0,
     });
   }
 
@@ -1147,127 +1484,75 @@ class SafePlayContentScript {
 
   private async handleMessage(message: { type: string; payload?: unknown }): Promise<unknown> {
     switch (message.type) {
-      case 'PREFERENCES_UPDATED': {
-        if (!message.payload || typeof message.payload !== 'object') {
-          log('PREFERENCES_UPDATED: invalid payload shape, ignoring');
-          return { success: false, error: 'Invalid payload' };
-        }
-        const newPrefs = message.payload as UserPreferences;
-        const prevEnabled = this.preferences.enabled !== false;
-        const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
-        const prevAutoAll = this.preferences.autoFilterAllVideos === true;
-        this.preferences = newPrefs;
-        this.videoController?.updatePreferences(newPrefs);
-        this.captionFilter.updatePreferences(newPrefs);
-
-        // Master toggle sync: mirror prefs.enabled onto the injected button,
-        // captions, timeline markers, and isFilterActive so the popup's
-        // On/Off switch and the watch-page button track each other.
-        const nowEnabled = newPrefs.enabled !== false;
-        if (prevEnabled && !nowEnabled && this.isFilterActive) {
-          // Master just went off while filtering was active.
-          this.captionFilter.stop();
-          this.timelineMarkers?.hide();
-          this.isFilterActive = false;
-          this.updateButtonState({
-            state: 'paused',
-            text: 'Paused',
-            intervalCount: this.lastIntervalCount,
-          });
-          log('Filter paused by master toggle (popup Off)');
-        } else if (!prevEnabled && nowEnabled && this.currentVideoId && this.lastIntervalCount > 0) {
-          // Master just came back on with cached filter data — resume in place.
-          this.videoController?.resume();
-          this.captionFilter.start();
-          this.timelineMarkers?.show();
-          this.isFilterActive = true;
-          this.updateButtonState({
-            state: 'filtering',
-            text: `Censored (${this.lastIntervalCount})`,
-            intervalCount: this.lastIntervalCount,
-          });
-          log('Filter resumed by master toggle (popup On)');
-        }
-
-        const nowShowMarkers = newPrefs.showTimelineMarkers !== false;
-        if (prevShowMarkers !== nowShowMarkers) {
-          if (!nowShowMarkers && this.timelineMarkers) {
-            // Toggled off — tear down markers immediately.
-            this.timelineMarkers.destroy();
-            this.timelineMarkers = null;
-            log('Timeline markers destroyed (toggled off)');
-          } else if (nowShowMarkers && this.isFilterActive && !this.timelineMarkers) {
-            // Toggled on while a filter is already active — materialize them
-            // from the intervals the video controller already parsed.
-            const muteIntervals = this.videoController?.getMuteIntervals() || [];
-            const video = this.getVideoElement();
-            if (video && muteIntervals.length > 0) {
-              this.timelineMarkers = new TimelineMarkers({ debug: DEBUG });
-              this.timelineMarkers.initialize(video, muteIntervals);
-              log('Timeline markers initialized (toggled on)');
-            }
-          }
-        }
-
-        // If the user just turned on auto-filter-all while sitting on a
-        // YouTube video page that isn't already filtering, kick one off.
-        // Matches the UX of toggling it on from the options page without
-        // having to refresh or navigate away.
-        const nowAutoAll = newPrefs.autoFilterAllVideos === true;
-        if (!prevAutoAll && nowAutoAll && this.currentVideoId && !this.isFilterActive && !this.isProcessing) {
-          log('Auto-filter-all just enabled — running checkAutoEnable for current video');
-          this.checkAutoEnable();
-        }
-
-        return { success: true };
-      }
-
-      case 'AUTH_STATE_CHANGED': {
-        if (
-          !message.payload ||
-          typeof message.payload !== 'object' ||
-          typeof (message.payload as { isAuthenticated?: unknown }).isAuthenticated !== 'boolean'
-        ) {
-          log('AUTH_STATE_CHANGED: invalid payload shape, ignoring');
-          return { success: false, error: 'Invalid payload' };
-        }
-        const payload = message.payload as { isAuthenticated: boolean };
-        log('Auth state changed:', payload);
-
-        // If user just authenticated and we have a pending video to filter
-        if (payload.isAuthenticated && this.pendingAuthVideoId) {
-          log('User authenticated, closing auth modal and starting filter for:', this.pendingAuthVideoId);
-
-          // Close the auth modal if it's open
-          const authModal = document.querySelector('.safeplay-credit-dialog-overlay');
-          if (authModal) {
-            authModal.remove();
-          }
-
-          // Start filtering the pending video
-          const videoId = this.pendingAuthVideoId;
-          this.pendingAuthVideoId = null;
-          this.onFilterButtonClick(videoId);
-        }
-        return { success: true };
-      }
-
-      case 'GET_VIDEO_STATE': {
-        return {
-          success: true,
-          data: this.videoController?.getState() || null,
-        };
-      }
-
-      case 'GET_TRANSCRIPTION_STATE': {
-        return {
-          success: true,
-          data: this.lastTranscriptionState,
-        };
-      }
-
       default:
+        // All cross-surface state (preferences, auth, per-tab video +
+        // transcription) flows through reactiveStore.subscribe. The content
+        // script no longer exposes request-response RPCs to the popup —
+        // its snapshot is proposed via proposeSelfTab and read from
+        // sessionState. Unknown types are dropped quietly because legacy
+        // broadcasts may still arrive during a staggered reload.
         return { success: false, error: 'Unknown message type' };
+    }
+  }
+
+  // Apply a new UserPreferences snapshot with the same side-effect logic
+  // used by the legacy PREFERENCES_UPDATED broadcast: toggle master on/off
+  // mid-video, materialize/destroy timeline markers, kick auto-filter-all
+  // when it's just been enabled. Called both from the legacy message case
+  // and from reactiveStore.subscribe('preferences', ...).
+  private applyPreferenceUpdate(newPrefs: UserPreferences): void {
+    const prevEnabled = this.preferences.enabled !== false;
+    const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
+    const prevAutoAll = this.preferences.autoFilterAllVideos === true;
+    this.preferences = newPrefs;
+    this.videoController?.updatePreferences(newPrefs);
+    this.captionFilter.updatePreferences(newPrefs);
+
+    const nowEnabled = newPrefs.enabled !== false;
+    if (prevEnabled && !nowEnabled && this.isFilterActive) {
+      this.captionFilter.stop();
+      this.timelineMarkers?.hide();
+      this.isFilterActive = false;
+      this.updateButtonState({
+        state: 'paused',
+        text: 'Paused',
+        intervalCount: this.lastIntervalCount,
+      });
+      log('Filter paused by master toggle (popup Off)');
+    } else if (!prevEnabled && nowEnabled && this.currentVideoId && this.lastIntervalCount > 0) {
+      this.videoController?.resume();
+      this.captionFilter.start();
+      this.timelineMarkers?.show();
+      this.isFilterActive = true;
+      this.updateButtonState({
+        state: 'filtering',
+        text: `Censored (${this.lastIntervalCount})`,
+        intervalCount: this.lastIntervalCount,
+      });
+      log('Filter resumed by master toggle (popup On)');
+    }
+
+    const nowShowMarkers = newPrefs.showTimelineMarkers !== false;
+    if (prevShowMarkers !== nowShowMarkers) {
+      if (!nowShowMarkers && this.timelineMarkers) {
+        this.timelineMarkers.destroy();
+        this.timelineMarkers = null;
+        log('Timeline markers destroyed (toggled off)');
+      } else if (nowShowMarkers && this.isFilterActive && !this.timelineMarkers) {
+        const muteIntervals = this.videoController?.getMuteIntervals() || [];
+        const video = this.getVideoElement();
+        if (video && muteIntervals.length > 0) {
+          this.timelineMarkers = new TimelineMarkers({ debug: DEBUG });
+          this.timelineMarkers.initialize(video, muteIntervals);
+          log('Timeline markers initialized (toggled on)');
+        }
+      }
+    }
+
+    const nowAutoAll = newPrefs.autoFilterAllVideos === true;
+    if (!prevAutoAll && nowAutoAll && this.currentVideoId && !this.isFilterActive && !this.isProcessing) {
+      log('Auto-filter-all just enabled — running checkAutoEnable for current video');
+      this.checkAutoEnable();
     }
   }
 

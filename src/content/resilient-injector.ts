@@ -27,6 +27,7 @@ function compactButtonText(info: ButtonStateInfo): string {
   // Connecting doesn't get a countdown even if we know the total — we
   // haven't actually started the work yet.
   if (info.phase === 'connecting') return 'Starting...';
+  if (info.phase === 'still-working') return 'Still working...';
   if (info.phase === 'almost-done' || info.remainingSeconds == null) {
     return 'Almost done...';
   }
@@ -36,6 +37,7 @@ function compactButtonText(info: ButtonStateInfo): string {
 function compactShortsLabel(info: ButtonStateInfo): string {
   if (info.phase === 'done') return 'Done';
   if (info.phase === 'error') return 'Retry';
+  if (info.phase === 'still-working') return '…';
   if (info.phase === 'almost-done' || info.remainingSeconds == null) return '…';
   return formatEta(info.remainingSeconds);
 }
@@ -45,7 +47,7 @@ function compactShortsLabel(info: ButtonStateInfo): string {
 // while we're still waiting so the button doesn't imply completion.
 function waterFillPercent(info: ButtonStateInfo): number {
   if (info.phase === 'done') return 100;
-  if (info.phase === 'almost-done') return 95;
+  if (info.phase === 'almost-done' || info.phase === 'still-working') return 95;
   const total = info.totalEstimatedSeconds;
   const remaining = info.remainingSeconds;
   if (total && total > 0 && remaining != null) {

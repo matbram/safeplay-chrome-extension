@@ -8,6 +8,8 @@ import {
   UserSubscription,
   UserCredits,
 } from '../types';
+import { subscribe as storeSubscribe } from '../utils/reactiveStore';
+import type { SessionState, TabSnapshot } from '../types';
 import './popup.css';
 
 // Strictness level → severityLevels mapping
@@ -36,8 +38,6 @@ function severityToStrictness(s: UserPreferences['severityLevels']): StrictnessL
 type PopupContext = 'off-youtube' | 'no-video' | 'watching';
 type YTState = 'idle' | 'connecting' | 'processing' | 'almost-done' | 'done' | 'error' | 'age-restricted' | 'disabled';
 
-const CREDIT_POLL_MS = 5000;
-const VIDEO_POLL_MS  = 2000;
 
 class PopupController {
   private prefs: UserPreferences = DEFAULT_PREFERENCES;
@@ -46,13 +46,12 @@ class PopupController {
   private context: PopupContext = 'off-youtube';
   private ytState: YTState = 'idle';
   private wordCount = 0;
-  private creditPollTimer: number | null = null;
+  private activeTabId: number | null = null;
+  private latestSessionState: SessionState | null = null;
   private videoPollTimer:  number | null = null;
+  private storeUnsubs: Array<() => void> = [];
 
   // Elements
-  private powerBtn!:          HTMLButtonElement;
-  private powerDot!:          HTMLElement;
-  private powerLabel!:        HTMLElement;
   private ctxHero!:           HTMLElement;
   private strictnessBtns!:    NodeListOf<HTMLButtonElement>;
   private strictnessExample!: HTMLElement;
@@ -78,9 +77,10 @@ class PopupController {
     this.loadTheme();
     this.setupListeners();
     // Register the broadcast listener before any awaits so updates that
-    // arrive during startup (CREDIT_UPDATE after a just-completed filter,
-    // AUTH_STATE_CHANGED from a concurrent website login) aren't dropped.
+    // arrive during startup (CREDIT_UPDATE after a just-completed filter)
+    // aren't dropped. Auth now flows through reactiveStore.subscribe below.
     this.setupMessageListener();
+    this.setupStoreSubscriptions();
 
     // Paint cached account + credits first so the popup never opens
     // with blank sections. Revalidation below will silently replace
@@ -94,7 +94,89 @@ class PopupController {
     ]);
 
     this.startPolling();
-    window.addEventListener('unload', () => this.stopPolling());
+    window.addEventListener('unload', () => {
+      this.stopPolling();
+      for (const unsub of this.storeUnsubs) unsub();
+      this.storeUnsubs = [];
+    });
+  }
+
+  // Subscribe to reactive-store keys so cross-surface updates (a website
+  // logout, a website credit purchase, a preferences change from options)
+  // reach the popup without bespoke broadcast messages. This is the one
+  // path auth state travels — no polling, no AUTH_STATE_CHANGED.
+  private setupStoreSubscriptions(): void {
+    this.storeUnsubs.push(
+      storeSubscribe('authState', (next) => {
+        this.authState = next;
+        this.renderAccount();
+        if (next.isAuthenticated) {
+          // Kick a server-side refresh on sign-in so the usage bar isn't
+          // stuck on "—" waiting for the 2-minute alarm tick.
+          void this.loadCredits();
+        }
+      }),
+      storeSubscribe('preferences', (next) => {
+        this.prefs = next;
+        this.renderPrefs();
+      }),
+      storeSubscribe('creditInfo', (next) => {
+        // Server-authoritative credits: whenever background commits a new
+        // CreditInfo (after a filter, purchase, or the 2-min alarm), the
+        // usage bar re-renders from storage without polling.
+        if (!next) return;
+        const planName = this.formatPlanName(next.plan ?? '');
+        const resetDate = next.reset_date
+          ? new Date(next.reset_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+          : '';
+        this.renderUsage(next.available, next.plan_allocation, planName, resetDate);
+      }),
+      storeSubscribe('sessionState', (next) => {
+        // Per-tab snapshot arrives here whenever any content script pushes
+        // an update. Slice on the popup's active tab and re-render the hero.
+        this.latestSessionState = next;
+        this.applyActiveTabSnapshot();
+      }),
+    );
+  }
+
+  // Slice the current SessionState on the popup's active tab and drive
+  // ytState / wordCount / transcriptionState from that snapshot. Called
+  // whenever sessionState changes or the active tab changes.
+  private applyActiveTabSnapshot(): void {
+    if (this.context !== 'watching' || this.activeTabId == null) return;
+    const snap: TabSnapshot | undefined = this.latestSessionState?.byTab[this.activeTabId];
+    if (!snap) return;
+    if (snap.transcription) {
+      this.transcriptionState = snap.transcription;
+      this.ytState = this.phaseToYTState(snap.transcription.phase);
+    } else {
+      this.ytState = this.buttonStateToYTState(snap.buttonState, snap.filterActive);
+    }
+    this.wordCount = snap.intervalCount ?? 0;
+    this.renderHero();
+  }
+
+  // Map a content-script ButtonStateInfo to the popup's coarser YTState.
+  // Used when there's no active transcription snapshot — the button state
+  // alone determines what the hero should show.
+  private buttonStateToYTState(
+    info: import('./../types').ButtonStateInfo | undefined,
+    filterActive: boolean,
+  ): YTState {
+    if (!info) return filterActive ? 'done' : 'idle';
+    switch (info.state) {
+      case 'connecting':      return 'connecting';
+      case 'downloading':     return 'connecting';
+      case 'transcribing':    return 'processing';
+      case 'processing':      return 'processing';
+      case 'filtering':       return 'done';
+      case 'paused':          return 'disabled';
+      case 'error':           return 'error';
+      case 'age-restricted':  return 'age-restricted';
+      case 'idle':            return filterActive ? 'done' : 'idle';
+      default:                return 'idle';
+    }
   }
 
   // Read the last-known user/credit snapshot directly from
@@ -138,9 +220,6 @@ class PopupController {
   }
 
   private cacheElements(): void {
-    this.powerBtn          = document.getElementById('powerBtn')         as HTMLButtonElement;
-    this.powerDot          = document.getElementById('powerDot')         as HTMLElement;
-    this.powerLabel        = document.getElementById('powerLabel')        as HTMLElement;
     this.ctxHero           = document.getElementById('ctxHero')           as HTMLElement;
     this.strictnessBtns    = document.querySelectorAll<HTMLButtonElement>('.strictness-btn');
     this.strictnessExample = document.getElementById('strictnessExample') as HTMLElement;
@@ -168,12 +247,6 @@ class PopupController {
   }
 
   private setupListeners(): void {
-    // Power toggle
-    this.powerBtn.addEventListener('click', () => {
-      const next = !this.prefs.enabled;
-      this.savePrefs({ enabled: next });
-    });
-
     // Strictness
     this.strictnessBtns.forEach(btn => {
       btn.addEventListener('click', () => {
@@ -243,12 +316,6 @@ class PopupController {
   }
 
   private renderPrefs(): void {
-    // Power button + global paused state
-    const on = this.prefs.enabled;
-    this.powerLabel.textContent = on ? 'On' : 'Off';
-    this.powerDot.classList.toggle('off', !on);
-    document.body.classList.toggle('is-paused', !on);
-
     // Strictness
     const level = severityToStrictness(this.prefs.severityLevels);
     this.strictnessBtns.forEach(btn => {
@@ -259,9 +326,6 @@ class PopupController {
     // Mode
     this.modeMuteOption.classList.toggle('active',  this.prefs.filterMode === 'mute');
     this.modeBleepOption.classList.toggle('active', this.prefs.filterMode === 'bleep');
-
-    // Re-render the hero since its copy depends on prefs.enabled
-    this.renderHero();
   }
 
   // ── Context detection ──────────────────────────────────────
@@ -270,6 +334,7 @@ class PopupController {
     try {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
       const url = tab?.url ?? '';
+      this.activeTabId = tab?.id ?? null;
 
       if (!url.includes('youtube.com')) {
         this.context = 'off-youtube';
@@ -284,22 +349,11 @@ class PopupController {
       }
 
       this.context = 'watching';
-
-      // Get video state from content script
-      if (tab?.id) {
-        const [videoResp, transcResp] = await Promise.all([
-          chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_STATE' }).catch(() => null),
-          chrome.tabs.sendMessage(tab.id, { type: 'GET_TRANSCRIPTION_STATE' }).catch(() => null),
-        ]);
-
-        if (transcResp?.success && transcResp.data) {
-          this.transcriptionState = transcResp.data as TranscriptionStateBroadcast;
-          this.ytState = this.phaseToYTState(this.transcriptionState.phase);
-        } else if (videoResp?.success && videoResp.data) {
-          this.ytState = this.videoStatusToYTState(videoResp.data.status);
-          this.wordCount = videoResp.data.intervalCount ?? 0;
-        }
-      }
+      // The sessionState subscription below feeds ytState / wordCount /
+      // transcription snapshot as soon as the content script has proposed
+      // its snapshot. If sessionState is already populated (cached from a
+      // prior popup open), slice it now so the hero renders immediately.
+      this.applyActiveTabSnapshot();
     } catch {
       this.context = 'off-youtube';
     }
@@ -312,37 +366,14 @@ class PopupController {
       case 'preparing':    return 'connecting';
       case 'transcribing': return 'processing';
       case 'almost-done':  return 'almost-done';
+      case 'still-working': return 'almost-done';
       case 'done':         return 'done';
       case 'error':        return 'error';
       default:             return 'idle';
     }
   }
 
-  private videoStatusToYTState(status: string): YTState {
-    switch (status) {
-      case 'filtering':      return 'done';
-      case 'active':         return 'done';
-      case 'paused':         return 'disabled';
-      case 'disabled':       return 'disabled';
-      case 'error':          return 'error';
-      case 'age-restricted': return 'age-restricted';
-      default:               return 'idle';
-    }
-  }
-
   private renderHero(): void {
-    // Master toggle overrides every other state — when paused, nothing filters.
-    if (!this.prefs.enabled) {
-      this.ctxHero.innerHTML = `
-        <div class="ctx-badge">
-          <span class="ctx-dot" style="background:var(--text-muted);box-shadow:0 0 0 3px rgba(138,134,128,0.13)"></span>
-          <span class="ctx-badge-label">Paused</span>
-        </div>
-        <div class="ctx-title">Safeplay is paused.</div>
-        <div class="ctx-sub">Nothing is being filtered. Tap <b>On</b> at the top to resume.</div>`;
-      return;
-    }
-
     if (this.context === 'off-youtube') {
       this.ctxHero.innerHTML = `
         <div class="ctx-title">Safeplay only runs on YouTube.</div>
@@ -509,73 +540,21 @@ class PopupController {
   // ── Polling ────────────────────────────────────────────────
 
   private startPolling(): void {
-    this.creditPollTimer = window.setInterval(() => {
-      if (this.authState?.isAuthenticated) this.loadCredits();
-    }, CREDIT_POLL_MS);
-
-    this.videoPollTimer = window.setInterval(() => {
-      this.pollVideoState();
-    }, VIDEO_POLL_MS);
+    // All polling retired: video + transcription state comes from
+    // reactiveStore.subscribe('sessionState', ...) and credits from
+    // subscribe('creditInfo', ...) / the 2-minute alarm. Kept as a
+    // no-op hook in case a future surface wants periodic behavior.
   }
 
   private stopPolling(): void {
-    if (this.creditPollTimer !== null) { clearInterval(this.creditPollTimer); this.creditPollTimer = null; }
-    if (this.videoPollTimer  !== null) { clearInterval(this.videoPollTimer);  this.videoPollTimer  = null; }
-  }
-
-  private async pollVideoState(): Promise<void> {
-    if (this.context !== 'watching') return;
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) return;
-      const [videoResp, transcResp] = await Promise.all([
-        chrome.tabs.sendMessage(tab.id, { type: 'GET_VIDEO_STATE' }).catch(() => null),
-        chrome.tabs.sendMessage(tab.id, { type: 'GET_TRANSCRIPTION_STATE' }).catch(() => null),
-      ]);
-
-      let changed = false;
-      if (transcResp?.success && transcResp.data) {
-        const next = transcResp.data as TranscriptionStateBroadcast;
-        const nextState = this.phaseToYTState(next.phase);
-        if (nextState !== this.ytState || next.statusText !== this.transcriptionState?.statusText) {
-          this.transcriptionState = next;
-          this.ytState = nextState;
-          changed = true;
-        }
-      } else if (videoResp?.success && videoResp.data) {
-        const nextState = this.videoStatusToYTState(videoResp.data.status);
-        const nextCount = videoResp.data.intervalCount ?? 0;
-        if (nextState !== this.ytState || nextCount !== this.wordCount) {
-          this.ytState = nextState;
-          this.wordCount = nextCount;
-          changed = true;
-        }
-      }
-      if (changed) this.renderHero();
-    } catch { /* tab closed */ }
+    if (this.videoPollTimer !== null) { clearInterval(this.videoPollTimer); this.videoPollTimer = null; }
   }
 
   private setupMessageListener(): void {
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.type === 'TRANSCRIPTION_STATE_CHANGED' && msg.payload && this.context === 'watching') {
-        this.transcriptionState = msg.payload as TranscriptionStateBroadcast;
-        this.ytState = this.phaseToYTState(this.transcriptionState.phase);
-        this.renderHero();
-      }
-      if (msg.type === 'VIDEO_STATE_CHANGED' && msg.payload && this.context === 'watching') {
-        const nextState = this.videoStatusToYTState(msg.payload.status);
-        this.ytState = nextState;
-        this.wordCount = msg.payload.intervalCount ?? 0;
-        this.renderHero();
-      }
-      if (msg.type === 'PREFERENCES_UPDATED' && msg.payload) {
-        this.prefs = msg.payload as UserPreferences;
-        this.renderPrefs();
-      }
-      if (msg.type === 'AUTH_STATE_CHANGED') {
-        this.loadAuthState();
-      }
-    });
+    // All cross-surface state (auth, preferences, credits, per-tab video +
+    // transcription) now flows through reactiveStore.subscribe. The popup's
+    // runtime message listener is intentionally empty — it's retained as a
+    // hook point in case we add bespoke one-shot signals later.
   }
 }
 
