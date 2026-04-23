@@ -137,7 +137,7 @@ export interface ButtonStateInfo {
   // these are present.
   remainingSeconds?: number | null;
   totalEstimatedSeconds?: number | null;
-  phase?: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'done' | 'error';
+  phase?: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'still-working' | 'done' | 'error';
   statusText?: string;
 }
 
@@ -145,7 +145,7 @@ export interface ButtonStateInfo {
 // countdown without running independent timers.
 export interface TranscriptionStateBroadcast {
   youtubeId: string;
-  phase: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'done' | 'error';
+  phase: 'connecting' | 'preparing' | 'transcribing' | 'almost-done' | 'still-working' | 'done' | 'error';
   remainingSeconds: number | null;
   totalEstimatedSeconds: number | null;
   statusText: string;

@@ -5,10 +5,13 @@ import { CaptionFilter } from './caption-filter';
 import { TimelineMarkers } from './timeline-markers';
 import {
   CreditConfirmation,
+  dismissCheckBackLaterNotification,
   showAuthRequiredMessage,
   showCheckBackLaterNotification,
   showFilterErrorNotification,
+  showUnfilterableVideoNotification,
 } from './credit-confirmation';
+import { preflightVideoFilterable } from './preflight';
 import { TranscriptionSSEClient } from './sse-client';
 import { TimeEstimator, TranscriptionStateSnapshot } from './time-estimator';
 import {
@@ -353,6 +356,17 @@ class SafePlayContentScript {
       log('Auth check failed:', error);
       this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
       showAuthRequiredMessage();
+      return;
+    }
+
+    // Step 0.5: Client-side pre-flight gate. Catches private, age-restricted,
+    // members-only, deleted, and currently-live videos before we hit our own
+    // backend or show a credit dialog. Fail-open on network errors — the
+    // server-side validation is still the source of truth.
+    const preflight = await preflightVideoFilterable(youtubeId);
+    if (!preflight.ok) {
+      log(`Pre-flight rejected ${youtubeId}: ${preflight.reason}`);
+      showUnfilterableVideoNotification(preflight.reason);
       return;
     }
 
@@ -1008,11 +1022,14 @@ class SafePlayContentScript {
 
   // Core in-session retry policy, invoked on every non-terminal status
   // update. Two windows keyed off the server's eta_seconds:
-  //   * elapsed > ETA + 30s → fire the one allowed retry
-  //   * elapsed > 2*(ETA+30)s → give up and defer to the server's background
-  //     sweep with a friendly check-back-later message
+  //   * elapsed > ETA + 30s → surface the reassuring "taking longer" modal
+  //     and fire the one allowed retry silently in the background.
+  //   * elapsed > 2*(ETA+30)s → tear down in-session polling. Don't re-show
+  //     the modal (it's either already up or the user dismissed it).
   // When eta_seconds is null (old job row / duration unknown) we skip the
-  // retry entirely and use a conservative 5-minute fallback for give-up.
+  // retry entirely and use a conservative 5-minute fallback for give-up
+  // (which still surfaces the modal at the give-up moment, since the user
+  // hasn't seen any prior reassurance).
   private evaluateRetryOrGiveUp(jobId: string, videoId: string, status: string): void {
     const state = this.retryState;
     if (!state || state.jobId !== jobId) return;
@@ -1037,16 +1054,23 @@ class SafePlayContentScript {
     const windowSec = state.etaSeconds + RETRY_GRACE_SECONDS;
 
     if (state.retried) {
-      // Already used our one retry — second window means give up.
+      // Already used our one retry — second window means tear down polling.
+      // Don't re-show the modal; either it's still up from window 1, or the
+      // user dismissed it on purpose. Re-popping is annoying.
       if (elapsed > 2 * windowSec) {
-        log(`Retry exhausted and elapsed ${Math.round(elapsed)}s > ${2 * windowSec}s — giving up for ${jobId}`);
-        this.surfaceCheckBackLater(videoId);
+        log(`Retry exhausted and elapsed ${Math.round(elapsed)}s > ${2 * windowSec}s — terminating polling for ${jobId}`);
+        this.terminateInSession(videoId);
       }
       return;
     }
 
     if (elapsed > windowSec) {
-      log(`Elapsed ${Math.round(elapsed)}s > ${windowSec}s — firing one retry for ${jobId}`);
+      log(`Elapsed ${Math.round(elapsed)}s > ${windowSec}s — surfacing reassurance + firing one retry for ${jobId}`);
+      // Surface the modal *before* the retry so the user sees the
+      // reassurance immediately, even if the retry POST takes a moment.
+      // The retry continues silently; if it succeeds and the job completes
+      // the modal auto-dismisses (see applyCompletedTranscript).
+      showCheckBackLaterNotification();
       state.retryInFlight = true;
       this.fireJobRetry(jobId, videoId);
     }
@@ -1103,15 +1127,16 @@ class SafePlayContentScript {
     }
   }
 
-  // Give-up path: tear down transport, show the friendly deferred-to-server
-  // message, and leave the button in a non-error paused-ish state so the
-  // user can click it again later without a scary red "Retry" label.
-  private surfaceCheckBackLater(videoId: string): void {
+  // Tear down in-session transport + reset processing state, leaving the
+  // button in a clean idle state. Does NOT show any modal — callers decide
+  // whether the user needs a message. Used by both the give-up paths
+  // (with modal) and the second-window terminal path (without modal,
+  // because the modal is already on screen from the first window).
+  private terminateInSession(videoId: string): void {
     if (this.retryState) this.retryState.giveUpTriggered = true;
     // Cancel any pending auto-retry from an earlier error path — it would
     // re-fire onFilterButtonClick in ~5s and restart the filter, which is
-    // exactly the opposite of the "check back later" message we're about
-    // to show the user.
+    // exactly the opposite of the deferred-to-server state we're entering.
     if (this.autoRetryTimer) {
       clearTimeout(this.autoRetryTimer);
       this.autoRetryTimer = null;
@@ -1124,18 +1149,25 @@ class SafePlayContentScript {
       videoId,
     });
 
-    showCheckBackLaterNotification();
-
     if (this.videoWasPlaying) {
       const video = this.getVideoElement();
       if (video) {
         video.play();
-        log('Video resumed after deferring to server background sweep');
+        log('Video resumed after terminating in-session polling');
       }
       this.videoWasPlaying = false;
     }
     this.isProcessing = false;
     this.filteringVideoId = null;
+  }
+
+  // Give-up path: tear down transport AND show the friendly deferred-to-server
+  // message. Used by the no-ETA fallback and by retry-failure call sites
+  // (where the modal may not be on screen yet). The modal helper is
+  // idempotent, so callers that may double-fire don't need to coordinate.
+  private surfaceCheckBackLater(videoId: string): void {
+    this.terminateInSession(videoId);
+    showCheckBackLaterNotification();
   }
 
   // Apply a completed transcript — wraps the existing applyFilter to make
@@ -1158,6 +1190,10 @@ class SafePlayContentScript {
       this.jobStartedAt = 0;
     }
     this.stopTranscriptionResources();
+    // If the "taking longer than expected" modal is still on screen from
+    // window 1, quietly remove it now that the job has actually completed.
+    // No-op when the modal isn't present.
+    dismissCheckBackLaterNotification();
     this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
     await this.applyFilter(transcript);
   }

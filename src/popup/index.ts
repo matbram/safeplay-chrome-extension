@@ -366,6 +366,7 @@ class PopupController {
       case 'preparing':    return 'connecting';
       case 'transcribing': return 'processing';
       case 'almost-done':  return 'almost-done';
+      case 'still-working': return 'almost-done';
       case 'done':         return 'done';
       case 'error':        return 'error';
       default:             return 'idle';

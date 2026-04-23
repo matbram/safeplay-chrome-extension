@@ -8,8 +8,16 @@ export type TranscriptionPhase =
   | 'preparing'       // server is fetching the video / queueing
   | 'transcribing'    // ElevenLabs is running
   | 'almost-done'     // countdown hit zero but SSE hasn't said complete yet
+  | 'still-working'   // past ETA + STILL_WORKING_DELAY_SECONDS — soft "running long" hint
   | 'done'            // complete has fired
   | 'error';
+
+// How long the user sits in 'almost-done' before the button text softens to
+// "Still working…". Picked so that on the median job the user never sees this
+// (jobs typically complete within a few seconds of ETA), but on a job that's
+// genuinely running long the button starts telegraphing it before the
+// reassurance modal appears at ETA + RETRY_GRACE_SECONDS.
+export const STILL_WORKING_DELAY_SECONDS = 15;
 
 export interface TranscriptionStateSnapshot {
   phase: TranscriptionPhase;
@@ -60,6 +68,8 @@ function statusPrefix(phase: TranscriptionPhase): string {
       return 'Processing video';
     case 'almost-done':
       return 'Almost done';
+    case 'still-working':
+      return 'Still working';
     case 'done':
       return 'Done!';
     case 'error':
@@ -74,6 +84,9 @@ export class TimeEstimator {
   private phase: TranscriptionPhase = 'connecting';
   private closed = false;
   private readonly listener: EstimatorListener;
+  // Wall-clock anchor for the moment we entered 'almost-done', used to
+  // promote to 'still-working' after STILL_WORKING_DELAY_SECONDS.
+  private almostDoneEnteredMs: number | null = null;
 
   constructor(durationSeconds: number | undefined, listener: EstimatorListener) {
     this.listener = listener;
@@ -131,6 +144,7 @@ export class TimeEstimator {
     if (this.closed || this.phase === 'done' || this.phase === 'error') return;
     this.phase = 'almost-done';
     this.remaining = null;
+    this.almostDoneEnteredMs = Date.now();
     this.emit();
   }
 
@@ -138,6 +152,16 @@ export class TimeEstimator {
     if (this.closed) return;
     if (this.phase === 'done' || this.phase === 'error') return;
     if (this.remaining === null) {
+      // Already in indeterminate territory ('almost-done' or 'still-working').
+      // Promote 'almost-done' → 'still-working' once we've sat past ETA long
+      // enough for the user to start wondering if it's stuck.
+      if (
+        this.phase === 'almost-done' &&
+        this.almostDoneEnteredMs !== null &&
+        Date.now() - this.almostDoneEnteredMs >= STILL_WORKING_DELAY_SECONDS * 1000
+      ) {
+        this.phase = 'still-working';
+      }
       this.emit();
       return;
     }
@@ -145,6 +169,7 @@ export class TimeEstimator {
     if (this.remaining === 0 && this.phase !== 'almost-done') {
       this.phase = 'almost-done';
       this.remaining = null;
+      this.almostDoneEnteredMs = Date.now();
     }
     this.emit();
   }
