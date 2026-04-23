@@ -42,6 +42,7 @@ import {
   getCreditBalance,
   getUserProfile,
   recordCachedHistory,
+  ApiError,
 } from '../api/client';
 
 function log(...args: unknown[]): void {
@@ -973,9 +974,16 @@ async function handleGetUserProfile(): Promise<MessageResponse<AuthState>> {
   } catch (error) {
     logError('handleGetUserProfile error:', error);
 
-    // If token is invalid, clear auth data
-    if (error instanceof Error && error.message.includes('401')) {
-      log('Token invalid, clearing auth data');
+    // Only wipe auth when the API client has *definitively* said the
+    // session is gone (SESSION_EXPIRED: refresh token revoked by server,
+    // or no refresh token on hand). Everything else — SESSION_TRANSIENT,
+    // retry-after-refresh 401s, network errors, 5xx — falls through to
+    // the cached-data branch so the user isn't logged out on a server
+    // hiccup. Previously this used a `error.message.includes('401')`
+    // substring match which false-positived on any error string that
+    // happened to contain "401" and clobbered healthy sessions.
+    if (error instanceof ApiError && error.errorCode === 'SESSION_EXPIRED') {
+      log('Session expired by server, clearing auth data');
       await clearAuthData();
       return {
         success: true,

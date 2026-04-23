@@ -93,7 +93,27 @@ async function request<T>(
 
           if (result.kind === 'ok') {
             logApi('Token refreshed, retrying request...');
-            return request<T>(endpoint, { ...options, _isRetry: true });
+            try {
+              return await request<T>(endpoint, { ...options, _isRetry: true });
+            } catch (retryErr) {
+              // If the retry still fails with 401 immediately after a
+              // successful refresh, it's almost always a transient
+              // server-side cache propagation lag — not a real logout.
+              // Surface as SESSION_TRANSIENT so upstream handlers (like
+              // handleGetUserProfile) preserve tokens and fall back to
+              // cached data, instead of a bare "Request failed with
+              // status 401" message that a substring match could misread.
+              if (retryErr instanceof ApiError && retryErr.statusCode === 401) {
+                logApi('Retry after refresh still 401 — surfacing as transient');
+                throw new ApiError(
+                  'Authentication hiccup; please try again shortly.',
+                  401,
+                  retryErr.response,
+                  'SESSION_TRANSIENT'
+                );
+              }
+              throw retryErr;
+            }
           }
 
           if (result.kind === 'transient') {

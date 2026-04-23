@@ -120,6 +120,18 @@ async function persistRefreshResult(
     console.log('[SafePlay Storage] ✅ Token refreshed; expires at', new Date(seconds * 1000).toISOString());
   }
   await chrome.storage.local.set(data);
+  // If the refresh response didn't include any expiry info, drop the stale
+  // stored timestamp rather than leaving a past-dated value in place.
+  // Keeping the old value would cause getAuthToken() to see the fresh
+  // token as immediately expired and trigger another refresh on every
+  // subsequent call — an infinite refresh loop that hammers the server
+  // and massively amplifies the chance of hitting a transient failure.
+  // With no stored expiry, getAuthToken() trusts the fresh token until
+  // the server itself 401s it.
+  if (expiresAt === undefined || expiresAt === null) {
+    await chrome.storage.local.remove([STORAGE_KEYS.TOKEN_EXPIRES_AT]);
+    console.log('[SafePlay Storage] ✅ Token refreshed (no expiry in response; cleared stale stored timestamp)');
+  }
 }
 
 // Wipe only the three token keys — keep profile/subscription/credits bundle.
@@ -162,10 +174,21 @@ async function refreshViaToken(refreshToken: string): Promise<RefreshResult | nu
       console.log('[SafePlay Storage] /api/auth/refresh returned 200 without access_token');
       return null; // malformed — try cookie fallback
     }
+    // Accept either an absolute timestamp (`expires_at` / `expiresAt`) or a
+    // relative duration (`expires_in`, standard OAuth convention — seconds
+    // from now). Previously only the absolute forms were parsed, so a
+    // standards-compliant server response would leave the stored expiry
+    // un-updated, producing the stale-expiry loop described in
+    // persistRefreshResult above.
+    const expiresAt = data.expires_at ?? data.expiresAt ?? (
+      typeof data.expires_in === 'number'
+        ? Math.floor(Date.now() / 1000) + data.expires_in
+        : undefined
+    );
     await persistRefreshResult(
       accessToken,
       data.refresh_token || data.refreshToken,
-      data.expires_at ?? data.expiresAt
+      expiresAt
     );
     return { kind: 'ok', token: accessToken };
   }
