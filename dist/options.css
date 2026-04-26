@@ -630,6 +630,181 @@ a { color: inherit; text-decoration: none; }
 .btn-outline.danger { color: var(--danger); border-color: rgba(229,35,43,0.3); }
 .btn-outline.danger:hover { background: var(--danger-soft); }
 
+/* ── Hero preview (ambient) ──────────────────────────────── */
+.hero-preview {
+  position: relative;
+  overflow: hidden;
+  padding: 32px 36px;
+  background:
+    radial-gradient(1000px 320px at 15% 0%, rgba(229,35,43,0.11), transparent 60%),
+    var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.hero-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr 240px;
+  gap: 40px;
+  align-items: center;
+}
+
+.hero-eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 14px;
+}
+
+.hero-summary {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.hero-summary strong { color: var(--accent); font-weight: 700; }
+
+.hero-auto-sentence {
+  font-size: 14px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  max-width: 440px;
+}
+
+.hero-waveform-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 18px 18px 16px;
+}
+.hero-waveform-card .waveform-eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  margin-bottom: 12px;
+}
+
+.hero-waveform {
+  display: block;
+  width: 100%;
+  height: 56px;
+}
+
+.waveform-legend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.legend-swatch { width: 10px; height: 3px; border-radius: 1px; background: var(--text-dim); }
+.legend-swatch.swatch-mute  { background: var(--text-muted); opacity: 0.3; }
+.legend-swatch.swatch-bleep { background: var(--accent); opacity: 1; }
+
+/* ── Settings group + row primitives ─────────────────────── */
+.settings-group { margin-top: 28px; }
+.settings-group:first-of-type { margin-top: 28px; }
+
+.settings-group-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 4px 12px;
+}
+
+.settings-group-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  padding: 18px 22px;
+  min-height: 58px;
+}
+.settings-row + .settings-row {
+  position: relative;
+}
+.settings-row + .settings-row::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 22px; right: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.settings-row-text { flex: 1; min-width: 0; }
+.settings-row-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: -0.005em;
+}
+.settings-row-desc {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  line-height: 1.45;
+}
+.settings-row-control { flex-shrink: 0; }
+
+/* ── Pill segment control ────────────────────────────────── */
+.pill-segment {
+  position: relative;
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.pill-opt {
+  position: relative;
+  z-index: 1;
+  padding: 7px 14px;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: color 0.15s;
+  white-space: nowrap;
+}
+.pill-opt:hover { color: var(--text); }
+.pill-opt.active { color: var(--accent-cc); }
+
+.pill-track {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  background: var(--accent);
+  border-radius: 999px;
+  box-shadow: 0 1px 4px rgba(229,35,43,0.27);
+  transition: left 0.2s cubic-bezier(0.4, 0, 0.2, 1), width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+  z-index: 0;
+}
+
 /* ── Save bar ────────────────────────────────────────────── */
 .save-bar {
   position: sticky;

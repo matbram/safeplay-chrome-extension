@@ -82,51 +82,115 @@
         <p>How Safeplay behaves while you watch YouTube.</p>
       </div>
 
-      <div class="card">
-        <div class="card-title">How Safeplay works</div>
-        <div class="card-body">
-          <div class="toggle-row" id="autoFilterRow">
-            <div class="toggle-row-text">
-              <div class="toggle-row-label">Turn on for every video automatically</div>
-              <div class="toggle-row-desc">As soon as a video starts, Safeplay scans its captions and mutes bad words. No button to press.</div>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" id="autoFilterAllVideos">
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
+      <!-- Hero preview (ambient) -->
+      <section class="hero-preview" id="heroPreview">
+        <div class="hero-grid">
+          <div class="hero-text">
+            <div class="hero-eyebrow">Your setup</div>
+            <div class="hero-summary" id="heroSummary">Safeplay removes <strong>moderate</strong> language by <strong>muting</strong> it.</div>
+            <div class="hero-auto-sentence" id="heroAutoSentence">Asks you before filtering each new video.</div>
           </div>
-
-          <div class="toggle-row toggle-row-sub" id="confirmBeforeAutoFilterRow">
-            <div class="toggle-row-text">
-              <div class="toggle-row-label">Ask before spending credits on each video</div>
-              <div class="toggle-row-desc">When on, new videos briefly pause to show the credit cost before filtering. Cached videos never prompt.</div>
+          <div class="hero-waveform-card">
+            <div class="hero-eyebrow waveform-eyebrow">How it sounds</div>
+            <svg id="heroWaveform" class="hero-waveform" viewBox="0 0 200 56" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <div class="waveform-legend">
+              <span class="legend-item"><span class="legend-swatch swatch-audio"></span>audio</span>
+              <span class="legend-item"><span class="legend-swatch" id="legendRedactSwatch"></span><span id="legendRedactLabel">muted</span></span>
             </div>
-            <label class="toggle-switch">
-              <input type="checkbox" id="confirmBeforeAutoFilter">
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
           </div>
+        </div>
+      </section>
 
-          <div class="toggle-row">
-            <div class="toggle-row-text">
-              <div class="toggle-row-label">Remember videos you've filtered before</div>
-              <div class="toggle-row-desc">If you've already filtered a video, Safeplay turns on automatically the next time you watch it — no credits used.</div>
+      <!-- Filtering group -->
+      <div class="settings-group">
+        <div class="settings-group-label">Filtering</div>
+        <div class="settings-group-card">
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">Filter strength</div>
+              <div class="settings-row-desc">How much language to remove. Stricter catches more words, including milder ones.</div>
             </div>
-            <label class="toggle-switch">
-              <input type="checkbox" id="autoEnableFiltered" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
+            <div class="settings-row-control">
+              <div class="pill-segment" id="strengthSegment" data-min-width="86">
+                <div class="pill-track" id="strengthTrack"></div>
+                <button class="pill-opt" data-strength="adult">Mild</button>
+                <button class="pill-opt" data-strength="family">Moderate</button>
+                <button class="pill-opt" data-strength="kids">Strict</button>
+              </div>
+            </div>
           </div>
-
-          <div class="toggle-row">
-            <div class="toggle-row-text">
-              <div class="toggle-row-label">Show tick marks on the video timeline</div>
-              <div class="toggle-row-desc">Red ticks on the YouTube progress bar show exactly where words will be muted, so nothing takes you by surprise.</div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">Censor method</div>
+              <div class="settings-row-desc">What plays in place of each removed word.</div>
             </div>
-            <label class="toggle-switch">
-              <input type="checkbox" id="showTimelineMarkers" checked>
-              <span class="toggle-track"><span class="toggle-thumb"></span></span>
-            </label>
+            <div class="settings-row-control">
+              <div class="pill-segment" id="methodSegment" data-min-width="78">
+                <div class="pill-track" id="methodTrack"></div>
+                <button class="pill-opt" data-method="mute">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/>
+                    <line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>
+                  </svg>
+                  Mute
+                </button>
+                <button class="pill-opt" data-method="bleep">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/>
+                  </svg>
+                  Bleep
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Behavior group -->
+      <div class="settings-group">
+        <div class="settings-group-label">Behavior</div>
+        <div class="settings-group-card">
+          <div class="settings-row" id="autoFilterRow">
+            <div class="settings-row-text">
+              <div class="settings-row-title">Auto-filter</div>
+              <div class="settings-row-desc">Always: every new video starts clean (uses more credits). Ask: prompt before filtering. Off: only filter when you click the button.</div>
+            </div>
+            <div class="settings-row-control">
+              <div class="pill-segment" id="autoSegment" data-min-width="62">
+                <div class="pill-track" id="autoTrack"></div>
+                <button class="pill-opt" data-auto="off">Off</button>
+                <button class="pill-opt" data-auto="ask">Ask</button>
+                <button class="pill-opt" data-auto="always">Always</button>
+              </div>
+              <!-- Hidden inputs preserved for state collection compatibility -->
+              <input type="checkbox" id="autoFilterAllVideos" hidden>
+              <input type="checkbox" id="confirmBeforeAutoFilter" hidden>
+              <input type="hidden" id="confirmBeforeAutoFilterRow">
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">Remember filtered videos</div>
+              <div class="settings-row-desc">If you've already filtered a video, turn on automatically next time — no credits used.</div>
+            </div>
+            <div class="settings-row-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="autoEnableFiltered" checked>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </label>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <div class="settings-row-title">Show markers on the timeline</div>
+              <div class="settings-row-desc">Adds red ticks to YouTube's progress bar where words will be removed.</div>
+            </div>
+            <div class="settings-row-control">
+              <label class="toggle-switch">
+                <input type="checkbox" id="showTimelineMarkers" checked>
+                <span class="toggle-track"><span class="toggle-thumb"></span></span>
+              </label>
+            </div>
           </div>
         </div>
       </div>
