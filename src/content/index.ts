@@ -112,8 +112,6 @@ class SafePlayContentScript {
   private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
   private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
   private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
-  private lastTranscriptionPropagateAt = 0;
-  private lastTranscriptionPropagatedPhase: string | null = null;
   // Per-job in-session retry tracking. The extension is allowed one retry
   // per job_id; after the second ETA+grace window we defer to the server's
   // background sweep and show the check-back-later message. Survives SSE ↔
@@ -301,11 +299,63 @@ class SafePlayContentScript {
     });
   }
 
-  // Lightweight wrapper so the few call sites that want to push transcription
-  // state or filter-active changes don't each have to know the rest of the
-  // snapshot contract.
+  // Wrapper for STORE_PROPOSE writes from this content script. All
+  // sessionState mutations (button state, transcription progress,
+  // filter-active flips, video state ticks) flow through here.
+  //
+  // Throttled: at most one storage write every TAB_SNAPSHOT_THROTTLE_MS
+  // (2.5s). The first write after a quiet period flushes immediately so
+  // user-visible transitions (Idle → Connecting, Connecting → Filtering)
+  // appear instantly in the popup. Subsequent writes within the throttle
+  // window get coalesced into a single pending patch and flushed at the
+  // window boundary.
+  //
+  // Without throttling, three call sites combined to produce 100+ writes
+  // per filtered video: the transcription estimator ticks at 1Hz, the
+  // VideoController fires onstate-change roughly per timeupdate event
+  // (~4Hz during playback), and updateButtonState fires per estimator
+  // tick. Each write went through chained-mutex commit + chrome.storage
+  // fanout, dominating the service-worker logs. Coalesce here once
+  // rather than throttling each call site individually (which is what
+  // the previous fix attempted and missed two of three sites).
+  private static readonly TAB_SNAPSHOT_THROTTLE_MS = 2500;
+  private pendingTabSnapshotPatch: Partial<import('../types').TabSnapshot> | null = null;
+  private tabSnapshotFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastTabSnapshotFlushAt = 0;
+
   private proposeTabSnapshot(patch: Partial<import('../types').TabSnapshot>): Promise<void> {
     if (!isExtensionContextValid()) return Promise.resolve();
+
+    // Merge into the pending patch (last writer wins per top-level field).
+    this.pendingTabSnapshotPatch = { ...this.pendingTabSnapshotPatch, ...patch };
+
+    const now = Date.now();
+    const elapsed = now - this.lastTabSnapshotFlushAt;
+    if (elapsed >= SafePlayContentScript.TAB_SNAPSHOT_THROTTLE_MS) {
+      // Quiet period — flush immediately for snappy UX.
+      return this.flushTabSnapshotNow();
+    }
+
+    // Inside throttle window — schedule a single trailing flush at the
+    // window boundary if one isn't already scheduled.
+    if (this.tabSnapshotFlushTimer === null) {
+      this.tabSnapshotFlushTimer = setTimeout(() => {
+        this.tabSnapshotFlushTimer = null;
+        void this.flushTabSnapshotNow();
+      }, SafePlayContentScript.TAB_SNAPSHOT_THROTTLE_MS - elapsed);
+    }
+    return Promise.resolve();
+  }
+
+  private flushTabSnapshotNow(): Promise<void> {
+    if (this.tabSnapshotFlushTimer !== null) {
+      clearTimeout(this.tabSnapshotFlushTimer);
+      this.tabSnapshotFlushTimer = null;
+    }
+    const patch = this.pendingTabSnapshotPatch;
+    this.pendingTabSnapshotPatch = null;
+    this.lastTabSnapshotFlushAt = Date.now();
+    if (!patch) return Promise.resolve();
     return proposeSelfTab(patch).catch(err => {
       log('proposeSelfTab failed (non-fatal):', err);
     });
@@ -989,8 +1039,6 @@ class SafePlayContentScript {
     }
     this.statusCallInFlight = false;
     this.lastTranscriptionState = null;
-    this.lastTranscriptionPropagateAt = 0;
-    this.lastTranscriptionPropagatedPhase = null;
     this.jobStartedAt = 0;
     // stopTranscriptionResources is only called on terminal paths
     // (success, error, give-up, navigation). The SSE→polling fallback
@@ -1030,25 +1078,14 @@ class SafePlayContentScript {
         statusText: state.statusText,
       });
 
-      // Drive the popup via the shared TabSnapshot rather than a bespoke
-      // runtime broadcast. storage.onChanged delivers the update to the
-      // popup's reactiveStore.subscribe('sessionState', ...) listener.
-      //
-      // Throttle to at most once every 2.5s during a steady countdown.
-      // The estimator ticks at 1Hz; without throttling each tick produces
-      // a STORE_PROPOSE → chained-mutex commit → storage.onChanged fanout
-      // to every extension surface, which we observed flooding the
-      // service worker logs with 100+ writes per filtered video. Always
-      // propagate on phase transitions (connecting/transcribing/almost-done/
-      // still-working/done/error) so the UI never appears stuck mid-phase.
-      const now = Date.now();
-      const phaseChanged = this.lastTranscriptionPropagatedPhase !== state.phase;
-      const enoughElapsed = now - this.lastTranscriptionPropagateAt >= 2500;
-      if (phaseChanged || enoughElapsed) {
-        this.lastTranscriptionPropagateAt = now;
-        this.lastTranscriptionPropagatedPhase = state.phase;
-        void this.proposeTabSnapshot({ transcription: broadcast });
-      }
+      // Drive the popup via the shared TabSnapshot. Throttling lives in
+      // proposeTabSnapshot itself now (see TAB_SNAPSHOT_THROTTLE_MS), so
+      // this just hands off the latest broadcast and lets the wrapper
+      // coalesce with concurrent updates from updateButtonState and
+      // onVideoStateChange. storage.onChanged delivers the eventual
+      // commit to the popup's reactiveStore.subscribe('sessionState')
+      // listener.
+      void this.proposeTabSnapshot({ transcription: broadcast });
     });
     this.estimator = estimator;
     estimator.start();
@@ -1696,6 +1733,16 @@ class SafePlayContentScript {
       clearTimeout(this.initialAutoEnableTimer);
       this.initialAutoEnableTimer = null;
     }
+
+    // Drop any throttled-but-not-yet-flushed tab-snapshot patch from the
+    // previous video. We're about to overwrite the relevant fields anyway
+    // (currentVideoId, filterActive, intervalCount), and the trailing
+    // flush would otherwise land a stale snapshot against the new page.
+    if (this.tabSnapshotFlushTimer !== null) {
+      clearTimeout(this.tabSnapshotFlushTimer);
+      this.tabSnapshotFlushTimer = null;
+    }
+    this.pendingTabSnapshotPatch = null;
 
     // Close any active SSE connection + fallback poll + estimator tick
     this.stopTranscriptionResources();
