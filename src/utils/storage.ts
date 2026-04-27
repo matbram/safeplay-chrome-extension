@@ -185,15 +185,21 @@ async function refreshViaToken(refreshToken: string): Promise<RefreshResult | nu
 
   if (response.status === 401 || response.status === 403) {
     // Don't treat a single refresh-endpoint rejection as definitive logout.
-    // The website handoff (chrome.runtime.sendMessage AUTH_TOKEN) has been
-    // observed to send a non-functional refresh_token value (the cookie-stored
-    // session on the website doesn't expose the real refresh token to the
-    // browser-side `session.refresh_token`). A 401 here usually means
-    // "the token we were given was never valid", not "the user revoked
-    // their session." Fall through to the cookie path; if THAT also fails
-    // with an explicit signed-out signal, the caller will surface the
-    // sign-in UI organically.
-    console.log(`[SafePlay Storage] /api/auth/refresh returned ${response.status}; falling back to cookie path (no auto-wipe)`);
+    // Supabase rotates refresh tokens on use, and the website's own Supabase
+    // client refreshes independently of the extension. When the website
+    // refreshes (auto-refresh, navigation, manual action), the extension's
+    // stored copy of the refresh token becomes stale — Supabase issued a
+    // new one to the website but the extension wasn't told. The next time
+    // the extension uses its now-stale copy here, Supabase returns 401.
+    // Previously we interpreted that as "user revoked their session" and
+    // wiped all auth data, forcing the user to sign in again every time
+    // the website ran a refresh in another tab. Fall through to the cookie
+    // path instead — it can recover a fresh session via the website's
+    // session cookie, which IS still valid in this scenario. The proper
+    // long-term fix is on the website side: have the website forward
+    // every rotated session to the extension via chrome.runtime.sendMessage
+    // so the two contexts never drift.
+    console.log(`[SafePlay Storage] /api/auth/refresh returned ${response.status} — likely rotation drift; falling back to cookie path (no auto-wipe)`);
     return null;
   }
 
