@@ -23,6 +23,11 @@ import {
   TranscriptionStateBroadcast,
 } from '../types';
 import { subscribe as storeSubscribe, proposeSelfTab } from '../utils/reactiveStore';
+import {
+  captureOperation,
+  isOperationStale,
+  bumpEpoch,
+} from '../utils/operation-epoch';
 
 const API_BASE_URL = 'https://trysafeplay.com';
 // Floor for the transcription budget (applies to short/medium videos).
@@ -88,8 +93,14 @@ class SafePlayContentScript {
   private lastIntervalCount = 0; // Store interval count for toggle restore
   private isFilterActive = false; // Track if filter is currently active
   private timelineMarkers: TimelineMarkers | null = null; // Visual markers on progress bar
-  private navigationId = 0; // Incremented on each navigation to cancel stale async operations
+  // navigationId removed — replaced by the OperationEpoch primitive in
+  // src/utils/operation-epoch.ts. Async paths now capture an OperationToken
+  // at entry and check isOperationStale() at every await boundary. The same
+  // token also covers preference toggles and auth flip-out, not just
+  // navigation, which the old navigationId field never did.
   private storeUnsubs: Array<() => void> = []; // reactiveStore subscriptions; torn down on teardown
+  private initialAutoEnableTimer: ReturnType<typeof setTimeout> | null = null;
+  private currentVideoIdRev = 0; // Bumps every time currentVideoId is replaced — used by waitForVideoReady to abort stale callbacks.
   private pendingAuthVideoId: string | null = null; // Track video ID when waiting for auth
   private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
   private lastVideoDuration: number | undefined; // Duration in seconds from preview, used to compute the transcription countdown
@@ -152,11 +163,18 @@ class SafePlayContentScript {
 
     // Check if we're on a watch page or Shorts page
     if (this.isWatchPage() || this.isShortsPage()) {
-      this.currentVideoId = this.getVideoIdFromUrl();
+      this.setCurrentVideoId(this.getVideoIdFromUrl());
 
-      // Check for auto-enable after a short delay (allow button to inject first)
+      // Check for auto-enable after a short delay (allow button to inject first).
+      // Stored on the instance so onNavigation can cancel it if the user
+      // navigates within the first second of page load — without that, the
+      // timer would still fire against whatever currentVideoId became after
+      // the navigation, racing with the new page's own checkAutoEnable.
       if (this.currentVideoId) {
-        setTimeout(() => this.checkAutoEnable(), 1000);
+        this.initialAutoEnableTimer = setTimeout(() => {
+          this.initialAutoEnableTimer = null;
+          this.checkAutoEnable();
+        }, 1000);
       }
     }
 
@@ -180,6 +198,14 @@ class SafePlayContentScript {
           this.applyPreferenceUpdate(next);
         }),
         storeSubscribe('authState', (next, prev) => {
+          // Auth flipped to signed-out — every in-flight async operation
+          // is now invalid (no token to call APIs with). Bump the epoch so
+          // anything waiting on a server response drops its result instead
+          // of acting on it.
+          if (prev?.isAuthenticated && !next.isAuthenticated) {
+            bumpEpoch('signed-out');
+          }
+
           // Pending-auth resumption: if the user was waiting on a
           // sign-in before we kicked off a filter (e.g. clicked "Filter"
           // on a video while signed out), fire it now that the auth
@@ -187,18 +213,36 @@ class SafePlayContentScript {
           // re-renders don't re-trigger.
           const becameAuthed = next.isAuthenticated && prev && !prev.isAuthenticated;
           if (becameAuthed && this.pendingAuthVideoId) {
+            const pendingId = this.pendingAuthVideoId;
+            this.pendingAuthVideoId = null;
+            // Don't blindly resume — the user may have navigated to a
+            // different video while waiting on sign-in. If the page no
+            // longer matches the original click, do nothing. The user can
+            // click Filter again on whatever they're now watching.
+            if (this.currentVideoId !== pendingId) {
+              log(`Pending-auth resumption skipped: page is on ${this.currentVideoId}, click was for ${pendingId}`);
+              return;
+            }
             log('authState transitioned to authenticated; resuming pending filter');
             const modal = document.querySelector('.safeplay-credit-dialog-overlay');
             if (modal) modal.remove();
-            const videoId = this.pendingAuthVideoId;
-            this.pendingAuthVideoId = null;
-            this.onFilterButtonClick(videoId);
+            this.onFilterButtonClick(pendingId);
           }
         }),
       );
     } catch (err) {
       log('Failed to register reactiveStore subscriptions:', err);
     }
+  }
+
+  // Centralized setter for currentVideoId. Bumps a per-video revision
+  // counter so waitForVideoReady callbacks can detect navigation that
+  // happened while they were waiting and bail out instead of running
+  // against the new video.
+  private setCurrentVideoId(id: string | null): void {
+    if (this.currentVideoId === id) return;
+    this.currentVideoId = id;
+    this.currentVideoIdRev++;
   }
 
   private async loadPreferences(): Promise<void> {
@@ -255,11 +299,63 @@ class SafePlayContentScript {
     });
   }
 
-  // Lightweight wrapper so the few call sites that want to push transcription
-  // state or filter-active changes don't each have to know the rest of the
-  // snapshot contract.
+  // Wrapper for STORE_PROPOSE writes from this content script. All
+  // sessionState mutations (button state, transcription progress,
+  // filter-active flips, video state ticks) flow through here.
+  //
+  // Throttled: at most one storage write every TAB_SNAPSHOT_THROTTLE_MS
+  // (2.5s). The first write after a quiet period flushes immediately so
+  // user-visible transitions (Idle → Connecting, Connecting → Filtering)
+  // appear instantly in the popup. Subsequent writes within the throttle
+  // window get coalesced into a single pending patch and flushed at the
+  // window boundary.
+  //
+  // Without throttling, three call sites combined to produce 100+ writes
+  // per filtered video: the transcription estimator ticks at 1Hz, the
+  // VideoController fires onstate-change roughly per timeupdate event
+  // (~4Hz during playback), and updateButtonState fires per estimator
+  // tick. Each write went through chained-mutex commit + chrome.storage
+  // fanout, dominating the service-worker logs. Coalesce here once
+  // rather than throttling each call site individually (which is what
+  // the previous fix attempted and missed two of three sites).
+  private static readonly TAB_SNAPSHOT_THROTTLE_MS = 2500;
+  private pendingTabSnapshotPatch: Partial<import('../types').TabSnapshot> | null = null;
+  private tabSnapshotFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastTabSnapshotFlushAt = 0;
+
   private proposeTabSnapshot(patch: Partial<import('../types').TabSnapshot>): Promise<void> {
     if (!isExtensionContextValid()) return Promise.resolve();
+
+    // Merge into the pending patch (last writer wins per top-level field).
+    this.pendingTabSnapshotPatch = { ...this.pendingTabSnapshotPatch, ...patch };
+
+    const now = Date.now();
+    const elapsed = now - this.lastTabSnapshotFlushAt;
+    if (elapsed >= SafePlayContentScript.TAB_SNAPSHOT_THROTTLE_MS) {
+      // Quiet period — flush immediately for snappy UX.
+      return this.flushTabSnapshotNow();
+    }
+
+    // Inside throttle window — schedule a single trailing flush at the
+    // window boundary if one isn't already scheduled.
+    if (this.tabSnapshotFlushTimer === null) {
+      this.tabSnapshotFlushTimer = setTimeout(() => {
+        this.tabSnapshotFlushTimer = null;
+        void this.flushTabSnapshotNow();
+      }, SafePlayContentScript.TAB_SNAPSHOT_THROTTLE_MS - elapsed);
+    }
+    return Promise.resolve();
+  }
+
+  private flushTabSnapshotNow(): Promise<void> {
+    if (this.tabSnapshotFlushTimer !== null) {
+      clearTimeout(this.tabSnapshotFlushTimer);
+      this.tabSnapshotFlushTimer = null;
+    }
+    const patch = this.pendingTabSnapshotPatch;
+    this.pendingTabSnapshotPatch = null;
+    this.lastTabSnapshotFlushAt = Date.now();
+    if (!patch) return Promise.resolve();
     return proposeSelfTab(patch).catch(err => {
       log('proposeSelfTab failed (non-fatal):', err);
     });
@@ -310,20 +406,47 @@ class SafePlayContentScript {
     }
   }
 
-  // Main filter flow - called when SafePlay button is clicked
+  // Main filter flow - called when SafePlay button is clicked.
+  //
+  // Two structural changes from the previous version:
+  //
+  //   1. isProcessing is set BEFORE any awaits. Previously the guard was
+  //      checked at function entry but the flag wasn't set until after
+  //      auth + preflight had completed (~1s of awaits), leaving a window
+  //      where two parallel entries (user click + auto-trigger) would both
+  //      pass the guard and produce stacked confirmation dialogs.
+  //   2. Every async result is gated by isOperationStale(). Navigation,
+  //      preference toggles, and sign-out all bump the operation epoch;
+  //      stale results silently drop instead of mutating UI / charging
+  //      credits / filtering the wrong video.
+  //
+  // currentVideoId is no longer overwritten here. That's a property of the
+  // page, not of the click. Use filteringVideoId to track what we're
+  // operating on.
   private async onFilterButtonClick(youtubeId: string): Promise<void> {
     if (this.isProcessing) {
       log('Already processing, ignoring click');
       return;
     }
 
+    // Close the guard gap immediately.
+    this.isProcessing = true;
+    this.filteringVideoId = youtubeId;
+    const token = captureOperation(youtubeId);
+    const stale = (): boolean => isOperationStale(token, this.currentVideoId);
+    const release = (): void => {
+      // Only release if we still own the flag — a confirmation-dialog flow
+      // may have already handed off to proceedWithFiltering, which manages
+      // isProcessing for the remainder of the lifecycle.
+      if (this.filteringVideoId === youtubeId) {
+        this.isProcessing = false;
+        this.filteringVideoId = null;
+      }
+    };
+
     log('Filter button clicked for:', youtubeId);
 
-    // If the master switch is off, flipping on the button should also flip
-    // the popup's On/Off toggle. Update local state synchronously and fire
-    // SET_PREFERENCES so the popup + options page catch up via
-    // PREFERENCES_UPDATED (we've already updated our local copy, so the
-    // handler's master-toggle-sync branch is a no-op on this tab).
+    // Master toggle flip-on (synchronous; no race surface here).
     if (this.preferences.enabled === false) {
       log('Master toggle was off — flipping on before filtering');
       this.preferences = { ...this.preferences, enabled: true };
@@ -333,49 +456,47 @@ class SafePlayContentScript {
       }).catch(() => {});
     }
 
-    // Step 0: Check authentication via background script (uses getAuthToken with auto-refresh)
+    // Step 0: Auth check via background (uses getAuthToken with refresh)
     try {
       const authResponse = await safeSendMessage<{ success: boolean; data?: { authenticated: boolean } }>({
         type: 'CHECK_AUTH_STRICT',
       });
 
-      // Null response means extension context invalidated (extension was reloaded)
+      if (stale()) { log(`onFilterButtonClick aborted post-auth: stale operation`); release(); return; }
+
       if (!authResponse) {
-        log('Extension context invalidated, showing reload message');
         this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: youtubeId });
+        release();
         return;
       }
-
       if (!authResponse.success || !authResponse.data?.authenticated) {
         log('User not authenticated, showing sign in modal');
-        this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
+        this.pendingAuthVideoId = youtubeId;
+        release();
         showAuthRequiredMessage();
         return;
       }
     } catch (error) {
       log('Auth check failed:', error);
-      this.pendingAuthVideoId = youtubeId; // Store video ID to filter after auth
-      showAuthRequiredMessage();
+      if (!stale()) {
+        this.pendingAuthVideoId = youtubeId;
+        showAuthRequiredMessage();
+      }
+      release();
       return;
     }
 
-    // Step 0.5: Client-side pre-flight gate. Catches private, age-restricted,
-    // members-only, deleted, and currently-live videos before we hit our own
-    // backend or show a credit dialog. Fail-open on network errors — the
-    // server-side validation is still the source of truth.
+    // Step 0.5: Pre-flight gate
     const preflight = await preflightVideoFilterable(youtubeId);
+    if (stale()) { log('onFilterButtonClick aborted post-preflight: stale operation'); release(); return; }
     if (!preflight.ok) {
       log(`Pre-flight rejected ${youtubeId}: ${preflight.reason}`);
       showUnfilterableVideoNotification(preflight.reason);
+      release();
       return;
     }
 
-    this.isProcessing = true;
-    this.currentVideoId = youtubeId;
-    this.filteringVideoId = youtubeId;
-
     try {
-      // Step 1: Get preview (credit cost and video info)
       this.updateButtonState({ state: 'connecting', text: 'Checking...', videoId: youtubeId });
 
       const previewResponse = await safeSendMessage<{ success: boolean; error?: string; data?: PreviewData }>({
@@ -383,23 +504,23 @@ class SafePlayContentScript {
         payload: { youtubeId },
       });
 
-      // Handle extension context invalidated
+      if (stale()) { log('onFilterButtonClick aborted post-preview: stale operation'); release(); return; }
+
       if (!previewResponse) {
-        this.isProcessing = false;
-        this.filteringVideoId = null;
         this.updateButtonState({ state: 'error', text: 'Reload page', error: 'Extension reloaded', videoId: youtubeId });
+        release();
         return;
       }
 
-      // Handle auth errors
+      // The "user not signed in" case was already handled by the
+      // CHECK_AUTH_STRICT gate above. A 401 here is almost always transient
+      // (rotation drift between the website and the extension, retry-
+      // after-refresh 401, server hiccup) — surface it through the normal
+      // error path instead of popping the sign-in modal. Previously this
+      // branch substring-matched the error message for "401" / "UNAUTHORIZED"
+      // and re-fired showAuthRequiredMessage(), which false-positived on
+      // healthy sessions.
       if (!previewResponse.success) {
-        if (previewResponse.error?.includes('UNAUTHORIZED') || previewResponse.error?.includes('401')) {
-          this.isProcessing = false;
-          this.filteringVideoId = null;
-          this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
-          showAuthRequiredMessage();
-          return;
-        }
         throw new Error(previewResponse.error || 'Failed to get preview');
       }
 
@@ -411,20 +532,18 @@ class SafePlayContentScript {
       this.lastCreditCost = previewData.creditCost;
       this.lastVideoDuration = previewData.video.duration || undefined;
 
-      // Skip the confirmation modal when the video is cached/free, or when
-      // skipNextConfirmation was explicitly set by an auto-trigger path
-      // (auto-filter-all with confirmBeforeAutoFilter off, or silent
-      // auto-retry after a transient error).
+      // Cached / skip-next-confirmation: hand off to proceedWithFiltering.
+      // proceedWithFiltering manages its own isProcessing lifecycle, so we
+      // release here to satisfy its "if (isProcessing) return" guard.
       if ((previewData.isCached && previewData.creditCost === 0) || this.skipNextConfirmation) {
         log(this.skipNextConfirmation ? 'Skipping confirmation (auto-trigger or retry)' : 'Video is cached, skipping confirmation');
         this.skipNextConfirmation = false;
-        // Reset isProcessing since proceedWithFiltering will set it again
-        this.isProcessing = false;
+        release();
         await this.proceedWithFiltering(youtubeId);
         return;
       }
 
-      // Pause video before showing confirmation dialog so user can review without missing content
+      // Pause video and show confirmation dialog
       const video = this.getVideoElement();
       const videoWasPlayingBeforeDialog = !!(video && !video.paused);
       if (video && videoWasPlayingBeforeDialog) {
@@ -432,21 +551,25 @@ class SafePlayContentScript {
         log('Video paused for credit confirmation');
       }
 
-      // Show credit confirmation dialog
       this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
-      this.isProcessing = false;
+      release();
 
       const confirmation = new CreditConfirmation({
         onConfirm: async () => {
           log('User confirmed filtering');
-          // Pass the video state to proceedWithFiltering
+          // Recheck staleness — the user may have navigated while the
+          // dialog was up. A confirmed dialog whose underlying page has
+          // changed should NOT trigger filtering on the new page.
+          if (stale()) {
+            log('Confirmation accepted but operation is stale — dropping');
+            return;
+          }
           this.videoWasPlaying = videoWasPlayingBeforeDialog;
           await this.proceedWithFiltering(youtubeId);
         },
         onCancel: () => {
           log('User cancelled filtering');
           this.filteringVideoId = null;
-          // Resume video if it was playing before we showed the dialog
           if (videoWasPlayingBeforeDialog && video) {
             video.play();
             log('Video resumed after cancel');
@@ -458,6 +581,7 @@ class SafePlayContentScript {
       confirmation.show(previewData);
     } catch (error) {
       log('Preview request failed:', error);
+      if (stale()) { release(); return; }
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.updateButtonState({
         state: 'error',
@@ -465,11 +589,8 @@ class SafePlayContentScript {
         error: `${errorMessage} - Click to retry`,
         videoId: youtubeId,
       });
-      this.isProcessing = false;
-      this.filteringVideoId = null;
-      // Show notification about the filtering issue
+      release();
       showFilterErrorNotification();
-      // Silently auto-retry after a delay
       this.scheduleAutoRetry(youtubeId);
     }
   }
@@ -484,8 +605,10 @@ class SafePlayContentScript {
     log('Proceeding with filtering for:', youtubeId);
     this.isProcessing = true;
     this.filteringVideoId = youtubeId;
-    // Capture navigation ID to detect if user navigates away during filtering
-    const startNavigationId = this.navigationId;
+    // Capture an operation token. Replaces the old navigationId-only check;
+    // also catches preference flips and auth flip-out, not just navigation.
+    const token = captureOperation(youtubeId);
+    const stale = (): boolean => isOperationStale(token, this.currentVideoId);
 
     // Video should already be paused from the confirmation dialog
     // If not (e.g., for cached videos that skip confirmation), pause it now
@@ -513,9 +636,8 @@ class SafePlayContentScript {
         payload: { youtubeId, filterType: this.preferences.filterMode, creditCost: this.lastCreditCost },
       });
 
-      // Check if user navigated away during the request
-      if (this.navigationId !== startNavigationId) {
-        log(`Filtering aborted for ${youtubeId}: user navigated away during START_FILTER`);
+      if (stale()) {
+        log(`Filtering aborted for ${youtubeId}: stale post-START_FILTER`);
         return;
       }
 
@@ -582,9 +704,8 @@ class SafePlayContentScript {
         // Transcript was cached (locally or on server), skip to processing
         log('Using cached transcript');
 
-        // Final navigation check before applying filter
-        if (this.navigationId !== startNavigationId) {
-          log(`Filtering aborted for ${youtubeId}: user navigated away before applying cached filter`);
+        if (stale()) {
+          log(`Filtering aborted for ${youtubeId}: stale before applying cached filter`);
           return;
         }
 
@@ -643,9 +764,9 @@ class SafePlayContentScript {
     this.startEstimator(videoId);
     this.ensureRetryState(jobId);
 
-    const navigationId = this.navigationId;
-    const isStillCurrent = () =>
-      this.navigationId === navigationId && this.filteringVideoId === videoId;
+    const opToken = captureOperation(videoId);
+    const isStillCurrent = (): boolean =>
+      !isOperationStale(opToken, this.currentVideoId) && this.filteringVideoId === videoId;
 
     // Ask the background for a fresh bearer token (it handles refresh).
     const authResp = await safeSendMessage<{
@@ -819,9 +940,9 @@ class SafePlayContentScript {
     this.ensureRetryState(jobId);
     const startedAt = Date.now();
     const budgetMs = this.transcriptionBudgetMs();
-    const navigationId = this.navigationId;
-    const isStillCurrent = () =>
-      this.navigationId === navigationId && this.filteringVideoId === videoId;
+    const opToken = captureOperation(videoId);
+    const isStillCurrent = (): boolean =>
+      !isOperationStale(opToken, this.currentVideoId) && this.filteringVideoId === videoId;
 
     const tick = async (): Promise<void> => {
       if (!isStillCurrent()) return;
@@ -957,9 +1078,13 @@ class SafePlayContentScript {
         statusText: state.statusText,
       });
 
-      // Drive the popup via the shared TabSnapshot rather than a bespoke
-      // runtime broadcast. storage.onChanged delivers the update to the
-      // popup's reactiveStore.subscribe('sessionState', ...) listener.
+      // Drive the popup via the shared TabSnapshot. Throttling lives in
+      // proposeTabSnapshot itself now (see TAB_SNAPSHOT_THROTTLE_MS), so
+      // this just hands off the latest broadcast and lets the wrapper
+      // coalesce with concurrent updates from updateButtonState and
+      // onVideoStateChange. storage.onChanged delivers the eventual
+      // commit to the popup's reactiveStore.subscribe('sessionState')
+      // listener.
       void this.proposeTabSnapshot({ transcription: broadcast });
     });
     this.estimator = estimator;
@@ -1246,8 +1371,8 @@ class SafePlayContentScript {
       throw new Error('No video ID');
     }
 
-    // Capture navigation ID to detect if user navigates during async operations
-    const startNavigationId = this.navigationId;
+    const opToken = captureOperation(videoId);
+    const stale = (): boolean => isOperationStale(opToken, this.currentVideoId);
 
     // Log transcript structure
     log('Transcript received for filtering:', {
@@ -1263,9 +1388,8 @@ class SafePlayContentScript {
       // Initialize video controller with transcript
       await this.videoController.initialize(videoId, this.preferences);
 
-      // Check if user navigated away during initialization
-      if (this.navigationId !== startNavigationId) {
-        log(`Filter apply aborted for ${videoId}: user navigated away during initialization`);
+      if (stale()) {
+        log(`Filter apply aborted for ${videoId}: stale during initialization`);
         return;
       }
 
@@ -1274,9 +1398,8 @@ class SafePlayContentScript {
       // Apply the filter
       await this.videoController.applyFilter();
 
-      // Check if user navigated away during filter application
-      if (this.navigationId !== startNavigationId) {
-        log(`Filter apply aborted for ${videoId}: user navigated away during filter application`);
+      if (stale()) {
+        log(`Filter apply aborted for ${videoId}: stale during filter application`);
         return;
       }
 
@@ -1504,6 +1627,17 @@ class SafePlayContentScript {
     const prevEnabled = this.preferences.enabled !== false;
     const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
     const prevAutoAll = this.preferences.autoFilterAllVideos === true;
+    const nowEnabledLocal = newPrefs.enabled !== false;
+    const nowAutoAllLocal = newPrefs.autoFilterAllVideos === true;
+
+    // Bump the epoch for any preference change that invalidates an in-flight
+    // operation. Master flipped off → no filter should land. Auto-filter-all
+    // flipped off → an in-flight checkAutoEnable should drop. The epoch is
+    // bumped BEFORE this.preferences is updated so functions reading
+    // captured tokens see the change immediately.
+    if (prevEnabled && !nowEnabledLocal) bumpEpoch('master-off');
+    if (prevAutoAll && !nowAutoAllLocal) bumpEpoch('auto-filter-all-off');
+
     this.preferences = newPrefs;
     this.videoController?.updatePreferences(newPrefs);
     this.captionFilter.updatePreferences(newPrefs);
@@ -1570,10 +1704,8 @@ class SafePlayContentScript {
   }
 
   private onNavigation(): void {
-    // Increment navigation ID to cancel any stale async operations
-    this.navigationId++;
-    const currentNavId = this.navigationId;
-    log(`Navigation detected, navigationId: ${currentNavId}`);
+    bumpEpoch('navigation');
+    log(`Navigation detected`);
 
     // Reset the controller's per-video state. See VideoController.destroy()
     // for why this intentionally does NOT close the AudioContext — YouTube's
@@ -1593,6 +1725,25 @@ class SafePlayContentScript {
     }
     this.skipNextConfirmation = false;
 
+    // Cancel the initial-page-load auto-enable timer if it hasn't fired yet.
+    // Without this, a navigation within the first 1s of page load would
+    // leave the timer to fire against the new page, racing with the new
+    // page's own checkAutoEnable.
+    if (this.initialAutoEnableTimer) {
+      clearTimeout(this.initialAutoEnableTimer);
+      this.initialAutoEnableTimer = null;
+    }
+
+    // Drop any throttled-but-not-yet-flushed tab-snapshot patch from the
+    // previous video. We're about to overwrite the relevant fields anyway
+    // (currentVideoId, filterActive, intervalCount), and the trailing
+    // flush would otherwise land a stale snapshot against the new page.
+    if (this.tabSnapshotFlushTimer !== null) {
+      clearTimeout(this.tabSnapshotFlushTimer);
+      this.tabSnapshotFlushTimer = null;
+    }
+    this.pendingTabSnapshotPatch = null;
+
     // Close any active SSE connection + fallback poll + estimator tick
     this.stopTranscriptionResources();
 
@@ -1603,7 +1754,7 @@ class SafePlayContentScript {
     }
 
     // Reset ALL state to prevent stale data from persisting
-    this.currentVideoId = null;
+    this.setCurrentVideoId(null);
     this.filteringVideoId = null;
     this.isProcessing = false;
     this.pendingAuthVideoId = null;
@@ -1619,12 +1770,14 @@ class SafePlayContentScript {
 
     // Update video ID if on watch page or Shorts page
     if (this.isWatchPage() || this.isShortsPage()) {
-      this.currentVideoId = this.getVideoIdFromUrl();
+      this.setCurrentVideoId(this.getVideoIdFromUrl());
 
-      // Check for auto-enable once YouTube's new <video> element is actually
-      // in the DOM. Used to be a blind setTimeout(500) that was too slow on
-      // fast devices and potentially too short on slow ones; waiting for the
-      // real signal means auto-filter fires as soon as the video is ready.
+      // Wait until YouTube's data layer has caught up with the new video
+      // before running auto-enable. See waitForVideoReady for why we now
+      // listen for yt-page-data-updated rather than just any <video>
+      // element appearing — YouTube reuses the same <video> across SPA
+      // navigations, so "video element exists" can fire while metadata
+      // (duration, title, etc.) still reflects the previous page.
       if (this.currentVideoId) {
         this.waitForVideoReady(() => this.checkAutoEnable());
       }
@@ -1638,32 +1791,46 @@ class SafePlayContentScript {
    * video appears. A 5-second safety timeout fires the callback anyway so we
    * never hang forever if something unexpected happens to YouTube's DOM.
    */
+  // Wait for YouTube's SPA to actually finish loading the new video's data
+  // before running the callback. The previous version checked only for the
+  // presence of a <video> element, but YouTube REUSES the same <video>
+  // across SPA navigations — so getVideoElement() can return immediately
+  // while the underlying metadata (duration, title, etc.) still reflects
+  // the previous page. Auto-enable would then make decisions on stale
+  // information.
+  //
+  // The right signal is `yt-page-data-updated`, which YouTube fires once
+  // its data layer has caught up with the URL. Listen for that one event,
+  // with a 5s safety fallback if it doesn't arrive.
+  //
+  // Also captures the per-video revision counter at registration time and
+  // re-checks before firing the callback. If the user navigates again
+  // before this fires, the callback drops silently — the new navigation's
+  // own waitForVideoReady will queue its own callback.
   private waitForVideoReady(callback: () => void): void {
-    if (this.getVideoElement()) {
-      callback();
-      return;
-    }
-
+    const rev = this.currentVideoIdRev;
     let fired = false;
-    const fire = () => {
+
+    const fire = (reason: string): void => {
       if (fired) return;
       fired = true;
-      observer.disconnect();
+      document.removeEventListener('yt-page-data-updated', onUpdated);
       window.clearTimeout(timeoutId);
+      if (this.currentVideoIdRev !== rev) {
+        log(`waitForVideoReady: dropping callback (${reason}); navigated again before ready`);
+        return;
+      }
       callback();
     };
 
-    const observer = new MutationObserver(() => {
-      if (this.getVideoElement()) {
-        fire();
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+    const onUpdated = (): void => fire('yt-page-data-updated');
+    document.addEventListener('yt-page-data-updated', onUpdated, { once: true });
 
-    const timeoutId = window.setTimeout(() => {
-      log('waitForVideoReady: 5s safety timeout fired without seeing <video>');
-      fire();
-    }, 5000);
+    // YouTube has been observed to skip yt-page-data-updated on certain
+    // back/forward navigations. The 5s fallback ensures auto-enable still
+    // runs in those cases — slightly stale metadata is better than no
+    // auto-enable at all.
+    const timeoutId = window.setTimeout(() => fire('5s safety timeout'), 5000);
   }
 
   // Check if we should auto-enable filter for this video.
@@ -1674,49 +1841,64 @@ class SafePlayContentScript {
   //      triggers only for known videos.
   // Both paths are gated on master `enabled`, auth, and no in-flight filter.
   private async checkAutoEnable(): Promise<void> {
-    if (!this.currentVideoId) return;
+    // Capture identity at entry. Every read of `this.currentVideoId` and
+    // `this.preferences` after an await must check against this token —
+    // otherwise a navigation, master-off, or autoFilterAll-off during the
+    // await silently filters the wrong video (or filters one the user no
+    // longer wants filtered).
+    const videoId = this.currentVideoId;
+    if (!videoId) return;
     if (this.isProcessing) return;
     if (this.isFilterActive) return;
-    // Master toggle off — don't auto-trigger (would burn credits on a
-    // filter that VideoController.applyFilter would then short-circuit).
     if (this.preferences.enabled === false) return;
 
     const autoFilterAll = this.preferences.autoFilterAllVideos === true;
     const autoEnableFiltered = this.preferences.autoEnableForFilteredVideos !== false;
     if (!autoFilterAll && !autoEnableFiltered) return;
 
+    const token = captureOperation(videoId);
+    const stale = (): boolean => isOperationStale(token, this.currentVideoId);
+
     try {
-      // First check if user is authenticated - silently skip if not
-      // (don't show auth modal on navigation, only when user clicks button)
+      // Auth: silent skip when signed out (don't pop a sign-in modal on
+      // navigation; only on explicit user click).
       const authResponse = await safeSendMessage<{ success: boolean; data?: { authenticated: boolean } }>({
         type: 'CHECK_AUTH_STRICT',
       });
+
+      if (stale()) { log('Auto-enable aborted post-auth: stale operation'); return; }
 
       if (!authResponse?.success || !authResponse?.data?.authenticated) {
         log('Auto-enable skipped: user not authenticated');
         return;
       }
 
+      // No need for a second explicit master-enabled / auto-filter-all
+      // recheck here: applyPreferenceUpdate calls bumpEpoch('master-off')
+      // and bumpEpoch('auto-filter-all-off') the moment those flip, so a
+      // stale() check at the next await boundary already covers it. We
+      // do still snapshot autoFilterAll here to choose which sub-path to
+      // run — captured at function entry, used here.
+
       if (autoFilterAll) {
-        // Auto-filter-all is the user's explicit opt-in to a low-friction
-        // workflow. Unless they've asked for per-video credit prompts via
-        // the sub-toggle, suppress the confirmation modal. The existing
-        // `skipNextConfirmation` one-shot is reused for this (same flag
-        // the auto-retry path uses) so the rest of onFilterButtonClick
-        // doesn't need to know about auto-filter specifically.
         const requireConfirmation = this.preferences.confirmBeforeAutoFilter === true;
         if (!requireConfirmation) {
           this.skipNextConfirmation = true;
         }
-        log(`Auto-enabling filter (auto-filter-all on, confirm=${requireConfirmation}) for: ${this.currentVideoId}`);
-        this.onFilterButtonClick(this.currentVideoId);
+        log(`Auto-enabling filter (auto-filter-all on, confirm=${requireConfirmation}) for: ${videoId}`);
+        this.onFilterButtonClick(videoId);
         return;
       }
 
-      const wasFiltered = await isVideoFiltered(this.currentVideoId);
+      // Storage lookup of "did the user previously filter this video".
+      // Pass the captured videoId — if currentVideoId has changed during
+      // the await, we want the answer for the ORIGINAL operation, not the
+      // new page.
+      const wasFiltered = await isVideoFiltered(videoId);
+      if (stale()) { log('Auto-enable aborted post-isVideoFiltered: stale operation'); return; }
       if (wasFiltered) {
-        log(`Auto-enabling filter for previously filtered video: ${this.currentVideoId}`);
-        this.onFilterButtonClick(this.currentVideoId);
+        log(`Auto-enabling filter for previously filtered video: ${videoId}`);
+        this.onFilterButtonClick(videoId);
       }
     } catch (error) {
       log('Error checking auto-enable:', error);

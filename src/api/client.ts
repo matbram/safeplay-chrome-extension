@@ -188,14 +188,50 @@ export async function getPreview(youtubeId: string): Promise<PreviewResponse> {
 }
 
 /**
- * Get user's credit balance
+ * Get user's credit balance.
+ *
+ * The server returns `{balance: {available, usedThisPeriod, rollover, topup,
+ * periodStart, periodEnd, planCredits, percentUsed}}` — note the camelCase
+ * fields and the `balance` wrapper. The extension's CreditBalanceResponse
+ * type expects `{success, credits: {available, used_this_period,
+ * plan_allocation, percent_consumed, plan}}` (snake_case, different shape).
+ * This mismatch caused every successful refresh to be treated as failure
+ * and trigger the retry loop, producing back-to-back identical credit fetches.
+ *
+ * Adapt at the boundary: parse the server shape, project into the in-extension
+ * shape. If the server response ever changes again, this is the single place
+ * to update.
  */
 export async function getCreditBalance(): Promise<CreditBalanceResponse> {
   logApi('=== getCreditBalance ===');
-  return request<CreditBalanceResponse>('/api/credits/balance', {
+  const raw = await request<{
+    balance?: {
+      available?: number;
+      usedThisPeriod?: number;
+      planCredits?: number;
+      percentUsed?: number;
+    };
+  }>('/api/credits/balance', {
     method: 'GET',
     requiresAuth: true,
   });
+  const b = raw?.balance;
+  if (!b || typeof b.available !== 'number') {
+    return {
+      success: false,
+      credits: { available: 0, used_this_period: 0, plan_allocation: 0, percent_consumed: 0 },
+      error: 'Malformed /api/credits/balance response',
+    };
+  }
+  return {
+    success: true,
+    credits: {
+      available: b.available,
+      used_this_period: b.usedThisPeriod ?? 0,
+      plan_allocation: b.planCredits ?? 0,
+      percent_consumed: b.percentUsed ?? 0,
+    },
+  };
 }
 
 /**

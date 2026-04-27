@@ -134,16 +134,6 @@ async function persistRefreshResult(
   }
 }
 
-// Wipe only the three token keys — keep profile/subscription/credits bundle.
-// api/client.ts's clearAuthData() does the bigger wipe when appropriate.
-async function wipeTokensOnly(): Promise<void> {
-  await chrome.storage.local.remove([
-    STORAGE_KEYS.AUTH_TOKEN,
-    STORAGE_KEYS.REFRESH_TOKEN,
-    STORAGE_KEYS.TOKEN_EXPIRES_AT,
-  ]);
-}
-
 // Primary refresh path: POST the stored refresh token to /api/auth/refresh.
 // Succeeds when the server deploys that endpoint and the token is still
 // valid. Returns:
@@ -194,9 +184,23 @@ async function refreshViaToken(refreshToken: string): Promise<RefreshResult | nu
   }
 
   if (response.status === 401 || response.status === 403) {
-    console.log('[SafePlay Storage] /api/auth/refresh rejected token — revoked');
-    await wipeTokensOnly();
-    return { kind: 'revoked' };
+    // Don't treat a single refresh-endpoint rejection as definitive logout.
+    // Supabase rotates refresh tokens on use, and the website's own Supabase
+    // client refreshes independently of the extension. When the website
+    // refreshes (auto-refresh, navigation, manual action), the extension's
+    // stored copy of the refresh token becomes stale — Supabase issued a
+    // new one to the website but the extension wasn't told. The next time
+    // the extension uses its now-stale copy here, Supabase returns 401.
+    // Previously we interpreted that as "user revoked their session" and
+    // wiped all auth data, forcing the user to sign in again every time
+    // the website ran a refresh in another tab. Fall through to the cookie
+    // path instead — it can recover a fresh session via the website's
+    // session cookie, which IS still valid in this scenario. The proper
+    // long-term fix is on the website side: have the website forward
+    // every rotated session to the extension via chrome.runtime.sendMessage
+    // so the two contexts never drift.
+    console.log(`[SafePlay Storage] /api/auth/refresh returned ${response.status} — likely rotation drift; falling back to cookie path (no auto-wipe)`);
+    return null;
   }
 
   // 404 = endpoint not deployed; 5xx = transient. Either way, fall back.

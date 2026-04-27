@@ -706,8 +706,24 @@ export function dismissCheckBackLaterNotification(): void {
   document.querySelector('[data-safeplay-check-back-later]')?.remove();
 }
 
+// Per-tab cooldown so transient auth blips (network hiccup, refresh-endpoint
+// rejecting a token the website handed us) don't spam the user with the
+// sign-in modal. A real signed-out user clicking Filter again after a minute
+// will still see it; what we suppress is the same modal popping twice in
+// quick succession from independent code paths.
+const AUTH_MODAL_COOLDOWN_MS = 60 * 1000;
+let lastAuthModalAt = 0;
+
 // Helper function to show a quick "not authenticated" message
 export function showAuthRequiredMessage(): void {
+  // Suppress within the cooldown window. Also suppress if a modal is already
+  // on screen — multiple call sites (preflight, preview-401, pending-auth
+  // resumption) can race and try to render the same overlay.
+  const now = Date.now();
+  if (now - lastAuthModalAt < AUTH_MODAL_COOLDOWN_MS) return;
+  if (document.querySelector('.safeplay-credit-dialog-overlay')) return;
+  lastAuthModalAt = now;
+
   // Get extension ID for the auth callback URL
   const extensionId = chrome.runtime?.id || '';
   const authUrl = `https://trysafeplay.com/extension/auth?extensionId=${extensionId}`;
