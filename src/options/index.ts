@@ -46,7 +46,7 @@ function inRedaction(i: number, zones: Array<[number, number]>): boolean {
 }
 
 const AUTO_SENTENCES = {
-  on:  'Turns on automatically for videos already in our library.',
+  on:  'Turns on automatically for videos SafePlay has cleaned before.',
   off: 'Only turns on when you click Filter on a video.',
 };
 
