@@ -152,32 +152,15 @@
         <div class="settings-group-card">
           <div class="settings-row" id="autoFilterRow">
             <div class="settings-row-text">
-              <div class="settings-row-title">Auto-filter</div>
-              <div class="settings-row-desc">Always: every new video starts clean (uses more credits). Ask: prompt before filtering. Off: only filter when you click the button.</div>
+              <div class="settings-row-title">Auto-filter known videos</div>
+              <div class="settings-row-desc">SafePlay starts filtering the moment you open a video we've cleaned before. Brand-new videos still need one click.</div>
             </div>
             <div class="settings-row-control">
               <div class="pill-segment" id="autoSegment" data-min-width="62">
                 <div class="pill-track" id="autoTrack"></div>
                 <button class="pill-opt" data-auto="off">Off</button>
-                <button class="pill-opt" data-auto="ask">Ask</button>
-                <button class="pill-opt" data-auto="always">Always</button>
+                <button class="pill-opt" data-auto="on">On</button>
               </div>
-              <!-- Hidden inputs preserved for state collection compatibility -->
-              <input type="checkbox" id="autoFilterAllVideos" hidden>
-              <input type="checkbox" id="confirmBeforeAutoFilter" hidden>
-              <input type="hidden" id="confirmBeforeAutoFilterRow">
-            </div>
-          </div>
-          <div class="settings-row">
-            <div class="settings-row-text">
-              <div class="settings-row-title">Remember filtered videos</div>
-              <div class="settings-row-desc">If you've already filtered a video, turn on automatically next time — no credits used.</div>
-            </div>
-            <div class="settings-row-control">
-              <label class="toggle-switch">
-                <input type="checkbox" id="autoEnableFiltered" checked>
-                <span class="toggle-track"><span class="toggle-thumb"></span></span>
-              </label>
             </div>
           </div>
           <div class="settings-row">
