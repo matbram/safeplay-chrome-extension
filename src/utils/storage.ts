@@ -134,16 +134,6 @@ async function persistRefreshResult(
   }
 }
 
-// Wipe only the three token keys — keep profile/subscription/credits bundle.
-// api/client.ts's clearAuthData() does the bigger wipe when appropriate.
-async function wipeTokensOnly(): Promise<void> {
-  await chrome.storage.local.remove([
-    STORAGE_KEYS.AUTH_TOKEN,
-    STORAGE_KEYS.REFRESH_TOKEN,
-    STORAGE_KEYS.TOKEN_EXPIRES_AT,
-  ]);
-}
-
 // Primary refresh path: POST the stored refresh token to /api/auth/refresh.
 // Succeeds when the server deploys that endpoint and the token is still
 // valid. Returns:
@@ -194,9 +184,17 @@ async function refreshViaToken(refreshToken: string): Promise<RefreshResult | nu
   }
 
   if (response.status === 401 || response.status === 403) {
-    console.log('[SafePlay Storage] /api/auth/refresh rejected token — revoked');
-    await wipeTokensOnly();
-    return { kind: 'revoked' };
+    // Don't treat a single refresh-endpoint rejection as definitive logout.
+    // The website handoff (chrome.runtime.sendMessage AUTH_TOKEN) has been
+    // observed to send a non-functional refresh_token value (the cookie-stored
+    // session on the website doesn't expose the real refresh token to the
+    // browser-side `session.refresh_token`). A 401 here usually means
+    // "the token we were given was never valid", not "the user revoked
+    // their session." Fall through to the cookie path; if THAT also fails
+    // with an explicit signed-out signal, the caller will surface the
+    // sign-in UI organically.
+    console.log(`[SafePlay Storage] /api/auth/refresh returned ${response.status}; falling back to cookie path (no auto-wipe)`);
+    return null;
   }
 
   // 404 = endpoint not deployed; 5xx = transient. Either way, fall back.

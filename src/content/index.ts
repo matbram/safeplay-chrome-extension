@@ -101,6 +101,8 @@ class SafePlayContentScript {
   private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
   private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
   private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
+  private lastTranscriptionPropagateAt = 0;
+  private lastTranscriptionPropagatedPhase: string | null = null;
   // Per-job in-session retry tracking. The extension is allowed one retry
   // per job_id; after the second ETA+grace window we defer to the server's
   // background sweep and show the check-back-later message. Survives SSE ↔
@@ -391,15 +393,16 @@ class SafePlayContentScript {
         return;
       }
 
-      // Handle auth errors
+      // The "user not signed in" case was already handled by the
+      // CHECK_AUTH_STRICT gate above. If preview fails here, it's a
+      // server-side or network problem — surface it through the normal
+      // error path. Previously this branch did substring-matched the
+      // error message for "401" / "UNAUTHORIZED" and re-fired the sign-in
+      // modal, which false-positived on transient 401s (refresh-endpoint
+      // rejecting the website-handoff refresh token, retry-after-refresh
+      // 401s) and produced spurious "please sign in" prompts for users
+      // who were demonstrably already signed in.
       if (!previewResponse.success) {
-        if (previewResponse.error?.includes('UNAUTHORIZED') || previewResponse.error?.includes('401')) {
-          this.isProcessing = false;
-          this.filteringVideoId = null;
-          this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
-          showAuthRequiredMessage();
-          return;
-        }
         throw new Error(previewResponse.error || 'Failed to get preview');
       }
 
@@ -918,6 +921,8 @@ class SafePlayContentScript {
     }
     this.statusCallInFlight = false;
     this.lastTranscriptionState = null;
+    this.lastTranscriptionPropagateAt = 0;
+    this.lastTranscriptionPropagatedPhase = null;
     this.jobStartedAt = 0;
     // stopTranscriptionResources is only called on terminal paths
     // (success, error, give-up, navigation). The SSE→polling fallback
@@ -960,7 +965,22 @@ class SafePlayContentScript {
       // Drive the popup via the shared TabSnapshot rather than a bespoke
       // runtime broadcast. storage.onChanged delivers the update to the
       // popup's reactiveStore.subscribe('sessionState', ...) listener.
-      void this.proposeTabSnapshot({ transcription: broadcast });
+      //
+      // Throttle to at most once every 2.5s during a steady countdown.
+      // The estimator ticks at 1Hz; without throttling each tick produces
+      // a STORE_PROPOSE → chained-mutex commit → storage.onChanged fanout
+      // to every extension surface, which we observed flooding the
+      // service worker logs with 100+ writes per filtered video. Always
+      // propagate on phase transitions (connecting/transcribing/almost-done/
+      // still-working/done/error) so the UI never appears stuck mid-phase.
+      const now = Date.now();
+      const phaseChanged = this.lastTranscriptionPropagatedPhase !== state.phase;
+      const enoughElapsed = now - this.lastTranscriptionPropagateAt >= 2500;
+      if (phaseChanged || enoughElapsed) {
+        this.lastTranscriptionPropagateAt = now;
+        this.lastTranscriptionPropagatedPhase = state.phase;
+        void this.proposeTabSnapshot({ transcription: broadcast });
+      }
     });
     this.estimator = estimator;
     estimator.start();
