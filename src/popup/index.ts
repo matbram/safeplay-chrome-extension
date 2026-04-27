@@ -28,7 +28,7 @@ const STRICTNESS_EXAMPLES: Record<StrictnessLevel, string> = {
 };
 
 const AUTO_CAPTIONS = {
-  on:  'SafePlay starts filtering the moment you press play on videos it has cleaned before.',
+  on:  'SafePlay starts filtering the moment you open a video we\'ve cleaned before.',
   off: 'Click the button to filter each video.',
 };
 
