@@ -28,9 +28,8 @@ const STRICTNESS_EXAMPLES: Record<StrictnessLevel, string> = {
 };
 
 const AUTO_CAPTIONS = {
-  always: 'Every video starts clean (uses more credits).',
-  ask:    'You decide before each new video.',
-  off:    'Only clean the videos you pick.',
+  on:  'Auto-filters videos already in the SafePlay library — free.',
+  off: 'Click the button to filter each video.',
 };
 
 function severityToStrictness(s: UserPreferences['severityLevels']): StrictnessLevel {
@@ -63,8 +62,7 @@ class PopupController {
   private strictnessExample!: HTMLElement;
   private modeMuteOption!:    HTMLButtonElement;
   private modeBleepOption!:   HTMLButtonElement;
-  private autoAlwaysOption!:  HTMLButtonElement;
-  private autoAskOption!:     HTMLButtonElement;
+  private autoOnOption!:      HTMLButtonElement;
   private autoOffOption!:     HTMLButtonElement;
   private autoRowCaption!:    HTMLElement;
   private themeToggleBtn!:    HTMLButtonElement;
@@ -236,8 +234,7 @@ class PopupController {
     this.strictnessExample = document.getElementById('strictnessExample') as HTMLElement;
     this.modeMuteOption    = document.getElementById('modeMuteOption')    as HTMLButtonElement;
     this.modeBleepOption   = document.getElementById('modeBleepOption')   as HTMLButtonElement;
-    this.autoAlwaysOption  = document.getElementById('autoAlwaysOption')  as HTMLButtonElement;
-    this.autoAskOption     = document.getElementById('autoAskOption')     as HTMLButtonElement;
+    this.autoOnOption      = document.getElementById('autoOnOption')      as HTMLButtonElement;
     this.autoOffOption     = document.getElementById('autoOffOption')     as HTMLButtonElement;
     this.autoRowCaption    = document.getElementById('autoRowCaption')    as HTMLElement;
     this.themeToggleBtn    = document.getElementById('themeToggleBtn')    as HTMLButtonElement;
@@ -276,12 +273,8 @@ class PopupController {
     this.modeBleepOption.addEventListener('click', () => this.savePrefs({ filterMode: 'bleep' }));
 
     // Auto-filter
-    this.autoAlwaysOption.addEventListener('click', () =>
-      this.savePrefs({ autoFilterAllVideos: true,  confirmBeforeAutoFilter: false }));
-    this.autoAskOption.addEventListener('click', () =>
-      this.savePrefs({ autoFilterAllVideos: true,  confirmBeforeAutoFilter: true  }));
-    this.autoOffOption.addEventListener('click', () =>
-      this.savePrefs({ autoFilterAllVideos: false, confirmBeforeAutoFilter: false }));
+    this.autoOnOption.addEventListener('click',  () => this.savePrefs({ autoFilterCachedVideos: true  }));
+    this.autoOffOption.addEventListener('click', () => this.savePrefs({ autoFilterCachedVideos: false }));
 
     // Theme toggle
     this.themeToggleBtn.addEventListener('click', () => {
@@ -358,14 +351,10 @@ class PopupController {
     this.modeBleepOption.classList.toggle('active', this.prefs.filterMode === 'bleep');
 
     // Auto-filter
-    const autoAlways = this.prefs.autoFilterAllVideos && !this.prefs.confirmBeforeAutoFilter;
-    const autoAsk    = this.prefs.autoFilterAllVideos &&  this.prefs.confirmBeforeAutoFilter;
-    const autoOff    = !this.prefs.autoFilterAllVideos;
-    this.autoAlwaysOption.classList.toggle('active', autoAlways);
-    this.autoAskOption.classList.toggle('active',    autoAsk);
-    this.autoOffOption.classList.toggle('active',    autoOff);
-    const autoKey: keyof typeof AUTO_CAPTIONS = autoAlways ? 'always' : autoAsk ? 'ask' : 'off';
-    this.autoRowCaption.textContent = AUTO_CAPTIONS[autoKey];
+    const autoOn = this.prefs.autoFilterCachedVideos === true;
+    this.autoOnOption.classList.toggle('active',  autoOn);
+    this.autoOffOption.classList.toggle('active', !autoOn);
+    this.autoRowCaption.textContent = AUTO_CAPTIONS[autoOn ? 'on' : 'off'];
   }
 
   // ── Context detection ──────────────────────────────────────

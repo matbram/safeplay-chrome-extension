@@ -42,7 +42,7 @@ const RETRY_GRACE_SECONDS = 30;
 // row, duration unresolvable). After this much elapsed time we give up in
 // session and defer to the background sweep.
 const NO_ETA_GIVE_UP_SECONDS = 5 * 60;
-import { addFilteredVideo, isVideoFiltered } from '../utils/storage';
+import { addFilteredVideo } from '../utils/storage';
 import './styles.css';
 
 const DEBUG = true;
@@ -1626,17 +1626,17 @@ class SafePlayContentScript {
   private applyPreferenceUpdate(newPrefs: UserPreferences): void {
     const prevEnabled = this.preferences.enabled !== false;
     const prevShowMarkers = this.preferences.showTimelineMarkers !== false;
-    const prevAutoAll = this.preferences.autoFilterAllVideos === true;
+    const prevAutoCached = this.preferences.autoFilterCachedVideos === true;
     const nowEnabledLocal = newPrefs.enabled !== false;
-    const nowAutoAllLocal = newPrefs.autoFilterAllVideos === true;
+    const nowAutoCachedLocal = newPrefs.autoFilterCachedVideos === true;
 
     // Bump the epoch for any preference change that invalidates an in-flight
-    // operation. Master flipped off → no filter should land. Auto-filter-all
+    // operation. Master flipped off → no filter should land. Auto-filter-cached
     // flipped off → an in-flight checkAutoEnable should drop. The epoch is
     // bumped BEFORE this.preferences is updated so functions reading
     // captured tokens see the change immediately.
     if (prevEnabled && !nowEnabledLocal) bumpEpoch('master-off');
-    if (prevAutoAll && !nowAutoAllLocal) bumpEpoch('auto-filter-all-off');
+    if (prevAutoCached && !nowAutoCachedLocal) bumpEpoch('auto-filter-cached-off');
 
     this.preferences = newPrefs;
     this.videoController?.updatePreferences(newPrefs);
@@ -1683,9 +1683,9 @@ class SafePlayContentScript {
       }
     }
 
-    const nowAutoAll = newPrefs.autoFilterAllVideos === true;
-    if (!prevAutoAll && nowAutoAll && this.currentVideoId && !this.isFilterActive && !this.isProcessing) {
-      log('Auto-filter-all just enabled — running checkAutoEnable for current video');
+    const nowAutoCached = newPrefs.autoFilterCachedVideos === true;
+    if (!prevAutoCached && nowAutoCached && this.currentVideoId && !this.isFilterActive && !this.isProcessing) {
+      log('Auto-filter-cached just enabled — running checkAutoEnable for current video');
       this.checkAutoEnable();
     }
   }
@@ -1834,27 +1834,32 @@ class SafePlayContentScript {
   }
 
   // Check if we should auto-enable filter for this video.
-  // Two paths, in order of user intent:
-  //   1. autoFilterAllVideos — user opted into filtering every video. Triggers
-  //      regardless of whether they've filtered this one before.
-  //   2. autoEnableForFilteredVideos + previously filtered — legacy behavior,
-  //      triggers only for known videos.
-  // Both paths are gated on master `enabled`, auth, and no in-flight filter.
+  // Single path: only auto-fire when SafePlay already has a transcript for
+  // this video. This avoids spending money on transcribing brand-new videos
+  // automatically — the user can still click the button to opt in.
+  //
+  // Cache lookup goes through GET_PREVIEW, which:
+  //   1. Hits the local 15-entry transcript LRU first (zero network) and
+  //      returns isCached=true if found.
+  //   2. Otherwise calls /api/filter/preview (a free metadata probe — no
+  //      job, no credit deduction) and returns
+  //      isCached = response.cached || response.has_transcript.
+  //
+  // Fail closed: any error (auth, network, 5xx, AGE_RESTRICTED,
+  // VIDEO_UNAVAILABLE) → no auto-fire, idle button, user can click manually.
+  // Gated on master `enabled`, auth, and no in-flight filter.
   private async checkAutoEnable(): Promise<void> {
     // Capture identity at entry. Every read of `this.currentVideoId` and
     // `this.preferences` after an await must check against this token —
-    // otherwise a navigation, master-off, or autoFilterAll-off during the
-    // await silently filters the wrong video (or filters one the user no
-    // longer wants filtered).
+    // otherwise a navigation, master-off, or autoFilterCached-off during
+    // the await silently filters the wrong video (or filters one the user
+    // no longer wants filtered).
     const videoId = this.currentVideoId;
     if (!videoId) return;
     if (this.isProcessing) return;
     if (this.isFilterActive) return;
     if (this.preferences.enabled === false) return;
-
-    const autoFilterAll = this.preferences.autoFilterAllVideos === true;
-    const autoEnableFiltered = this.preferences.autoEnableForFilteredVideos !== false;
-    if (!autoFilterAll && !autoEnableFiltered) return;
+    if (this.preferences.autoFilterCachedVideos !== true) return;
 
     const token = captureOperation(videoId);
     const stale = (): boolean => isOperationStale(token, this.currentVideoId);
@@ -1873,35 +1878,35 @@ class SafePlayContentScript {
         return;
       }
 
-      // No need for a second explicit master-enabled / auto-filter-all
-      // recheck here: applyPreferenceUpdate calls bumpEpoch('master-off')
-      // and bumpEpoch('auto-filter-all-off') the moment those flip, so a
-      // stale() check at the next await boundary already covers it. We
-      // do still snapshot autoFilterAll here to choose which sub-path to
-      // run — captured at function entry, used here.
+      // Cache probe. Fails closed on any error — including AGE_RESTRICTED /
+      // VIDEO_UNAVAILABLE, which the background handler surfaces as
+      // success:false (see handleGetPreview).
+      const previewResponse = await safeSendMessage<{ success: boolean; data?: PreviewData; error?: string }>({
+        type: 'GET_PREVIEW',
+        payload: { youtubeId: videoId },
+      });
 
-      if (autoFilterAll) {
-        const requireConfirmation = this.preferences.confirmBeforeAutoFilter === true;
-        if (!requireConfirmation) {
-          this.skipNextConfirmation = true;
-        }
-        log(`Auto-enabling filter (auto-filter-all on, confirm=${requireConfirmation}) for: ${videoId}`);
-        this.onFilterButtonClick(videoId);
+      if (stale()) { log('Auto-enable aborted post-preview: stale operation'); return; }
+
+      if (!previewResponse?.success || !previewResponse.data) {
+        log('Auto-enable skipped: preview unavailable (failing closed)');
+        return;
+      }
+      if (!previewResponse.data.isCached) {
+        log(`Auto-enable skipped: video not cached on server: ${videoId}`);
         return;
       }
 
-      // Storage lookup of "did the user previously filter this video".
-      // Pass the captured videoId — if currentVideoId has changed during
-      // the await, we want the answer for the ORIGINAL operation, not the
-      // new page.
-      const wasFiltered = await isVideoFiltered(videoId);
-      if (stale()) { log('Auto-enable aborted post-isVideoFiltered: stale operation'); return; }
-      if (wasFiltered) {
-        log(`Auto-enabling filter for previously filtered video: ${videoId}`);
-        this.onFilterButtonClick(videoId);
-      }
+      // Server has the transcript — auto-fire is free. Skip the credit
+      // confirmation dialog (cost is zero, but onFilterButtonClick already
+      // auto-skips on isCached+cost=0; this is belt-and-suspenders for the
+      // unlikely race where the server cache disappears between probe and
+      // start).
+      this.skipNextConfirmation = true;
+      log(`Auto-enabling filter for cached video: ${videoId}`);
+      this.onFilterButtonClick(videoId);
     } catch (error) {
-      log('Error checking auto-enable:', error);
+      log('Error checking auto-enable (failing closed):', error);
     }
   }
 }

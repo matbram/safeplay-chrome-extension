@@ -1053,7 +1053,7 @@ chrome.action.onClicked.addListener((_tab) => {
 
 // Current schema version. Bump every time a storage shape changes,
 // add a matching migration step in runMigrations().
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 const SCHEMA_VERSION_KEY = 'safeplay_schema_version';
 const LEGACY_PENDING_JOB_COSTS_KEY = 'safeplay_pending_job_costs';
 
@@ -1074,6 +1074,26 @@ async function runMigrations(): Promise<void> {
       [STORAGE_KEYS.SESSION_STATE]: { byTab: {}, activeJobs: {}, lastUpdated: 0 },
     });
     await chrome.storage.local.remove(LEGACY_PENDING_JOB_COSTS_KEY);
+  }
+
+  // v2 → v3: collapse three auto-filter prefs into one. The new
+  // autoFilterCachedVideos pref only auto-fires when the server already
+  // has a transcript (no transcription cost). Preserve user intent: any
+  // user who had autoFilterAllVideos OR didn't explicitly disable
+  // autoEnableForFilteredVideos was getting some form of auto-filter, so
+  // they get the new pref ON. Users who explicitly opted out of both get
+  // the new pref OFF.
+  if (fromVersion < 3) {
+    const prefsResult = await chrome.storage.local.get(STORAGE_KEYS.PREFERENCES);
+    const oldPrefs = (prefsResult[STORAGE_KEYS.PREFERENCES] as Record<string, unknown>) || {};
+    const wasAutoEnabled =
+      oldPrefs.autoFilterAllVideos === true ||
+      oldPrefs.autoEnableForFilteredVideos !== false;
+    const migrated: Record<string, unknown> = { ...oldPrefs, autoFilterCachedVideos: wasAutoEnabled };
+    delete migrated.autoFilterAllVideos;
+    delete migrated.autoEnableForFilteredVideos;
+    delete migrated.confirmBeforeAutoFilter;
+    await chrome.storage.local.set({ [STORAGE_KEYS.PREFERENCES]: migrated });
   }
 
   await chrome.storage.local.set({ [SCHEMA_VERSION_KEY]: CURRENT_SCHEMA_VERSION });

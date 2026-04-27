@@ -46,9 +46,8 @@ function inRedaction(i: number, zones: Array<[number, number]>): boolean {
 }
 
 const AUTO_SENTENCES = {
-  always: 'Turns on automatically for every new video.',
-  ask:    'Asks you before filtering each new video.',
-  off:    'Only turns on when you click Filter on a video.',
+  on:  'Turns on automatically for videos already in our library.',
+  off: 'Only turns on when you click Filter on a video.',
 };
 
 const SAVE_SECTIONS: Section[] = ['settings', 'words', 'advanced'];
@@ -75,10 +74,6 @@ class OptionsController {
   private autoTrack!:        HTMLElement;
 
   // Settings — behavior toggles
-  private autoFilterAllVideos!:    HTMLInputElement;
-  private confirmBeforeAutoFilter!: HTMLInputElement;
-  private confirmBeforeAutoFilterRow!: HTMLElement;
-  private autoEnableFiltered!:     HTMLInputElement;
   private showTimelineMarkers!:    HTMLInputElement;
 
   // Words
@@ -260,10 +255,6 @@ class OptionsController {
     this.autoOpts      = document.querySelectorAll<HTMLButtonElement>('#autoSegment .pill-opt');
     this.autoTrack     = document.getElementById('autoTrack')      as HTMLElement;
 
-    this.autoFilterAllVideos       = document.getElementById('autoFilterAllVideos')       as HTMLInputElement;
-    this.confirmBeforeAutoFilter   = document.getElementById('confirmBeforeAutoFilter')   as HTMLInputElement;
-    this.confirmBeforeAutoFilterRow= document.getElementById('confirmBeforeAutoFilterRow') as HTMLElement;
-    this.autoEnableFiltered        = document.getElementById('autoEnableFiltered')        as HTMLInputElement;
     this.showTimelineMarkers       = document.getElementById('showTimelineMarkers')       as HTMLInputElement;
 
     this.customBlacklist  = document.getElementById('customBlacklist')  as HTMLTextAreaElement;
@@ -364,26 +355,15 @@ class OptionsController {
       });
     });
 
-    // Auto-filter pill segment (Off/Ask/Always)
+    // Auto-filter pill segment (Off/On)
     this.autoOpts.forEach(btn => {
       btn.addEventListener('click', () => {
-        const mode = btn.dataset.auto as 'off' | 'ask' | 'always';
-        const updates: Partial<UserPreferences> = mode === 'always'
-          ? { autoFilterAllVideos: true,  confirmBeforeAutoFilter: false }
-          : mode === 'ask'
-            ? { autoFilterAllVideos: true,  confirmBeforeAutoFilter: true  }
-            : { autoFilterAllVideos: false, confirmBeforeAutoFilter: false };
-        this.saveFilteringPrefs(updates);
+        const mode = btn.dataset.auto as 'off' | 'on';
+        this.saveFilteringPrefs({ autoFilterCachedVideos: mode === 'on' });
       });
     });
 
     // Settings toggles — autosave on change
-    this.autoFilterAllVideos.addEventListener('change', () => {
-      this.updateConfirmSubtoggleState();
-      this.autosave();
-    });
-    this.confirmBeforeAutoFilter.addEventListener('change', () => this.autosave());
-    this.autoEnableFiltered.addEventListener('change',    () => this.autosave());
     this.showTimelineMarkers.addEventListener('change',   () => this.autosave());
 
     // Word lists
@@ -446,12 +426,6 @@ class OptionsController {
     return value.split('\n').filter(l => l.trim().length > 0).length;
   }
 
-  private updateConfirmSubtoggleState(): void {
-    const parentOn = this.autoFilterAllVideos.checked;
-    this.confirmBeforeAutoFilter.disabled = !parentOn;
-    this.confirmBeforeAutoFilterRow.classList.toggle('enabled', parentOn);
-  }
-
   // ── Preferences ────────────────────────────────────────────
 
   private async loadPreferences(): Promise<void> {
@@ -467,9 +441,7 @@ class OptionsController {
   private renderPrefs(): void {
     const level  = severityToStrictness(this.prefs.severityLevels);
     const method = this.prefs.filterMode === 'bleep' ? 'bleep' : 'mute';
-    const autoMode: 'off' | 'ask' | 'always' = !this.prefs.autoFilterAllVideos
-      ? 'off'
-      : this.prefs.confirmBeforeAutoFilter ? 'ask' : 'always';
+    const autoMode: 'off' | 'on' = this.prefs.autoFilterCachedVideos === true ? 'on' : 'off';
 
     // Hero preview text
     const strengthWord = STRENGTH_LABEL[level];
@@ -501,11 +473,7 @@ class OptionsController {
     });
     this.updatePillTrack(this.autoOpts, this.autoTrack, autoMode, 'auto');
 
-    // Hidden inputs (preserved for collectPrefs compatibility)
-    this.autoFilterAllVideos.checked     = this.prefs.autoFilterAllVideos === true;
-    this.confirmBeforeAutoFilter.checked = this.prefs.confirmBeforeAutoFilter === true;
-    this.autoEnableFiltered.checked      = this.prefs.autoEnableForFilteredVideos !== false;
-    this.showTimelineMarkers.checked     = this.prefs.showTimelineMarkers !== false;
+    this.showTimelineMarkers.checked = this.prefs.showTimelineMarkers !== false;
 
     this.customBlacklist.value = this.prefs.customBlacklist.join('\n');
     this.customWhitelist.value = this.prefs.customWhitelist.join('\n');
@@ -577,10 +545,7 @@ class OptionsController {
 
   private collectPrefs(): Partial<UserPreferences> {
     return {
-      autoFilterAllVideos:        this.autoFilterAllVideos.checked,
-      confirmBeforeAutoFilter:    this.confirmBeforeAutoFilter.checked,
-      autoEnableForFilteredVideos: this.autoEnableFiltered.checked,
-      showTimelineMarkers:        this.showTimelineMarkers.checked,
+      showTimelineMarkers: this.showTimelineMarkers.checked,
       customBlacklist: this.customBlacklist.value.split('\n').map(l => l.trim()).filter(Boolean),
       customWhitelist: this.customWhitelist.value.split('\n').map(l => l.trim()).filter(Boolean),
       paddingBeforeMs: parseInt(this.paddingBefore.value, 10) || 100,
