@@ -13,7 +13,7 @@ import {
 } from './credit-confirmation';
 import { preflightVideoFilterable } from './preflight';
 import { TranscriptionSSEClient } from './sse-client';
-import { TimeEstimator, TranscriptionStateSnapshot } from './time-estimator';
+import { TimeEstimator, TranscriptionPhase, TranscriptionStateSnapshot } from './time-estimator';
 import {
   UserPreferences,
   DEFAULT_PREFERENCES,
@@ -42,6 +42,14 @@ const RETRY_GRACE_SECONDS = 30;
 // row, duration unresolvable). After this much elapsed time we give up in
 // session and defer to the background sweep.
 const NO_ETA_GIVE_UP_SECONDS = 5 * 60;
+// Once the estimator promotes the phase from 'almost-done' to 'still-working',
+// give the server this much extra grace before tearing down in-session work
+// and surfacing the check-back-later modal. The user has already been past
+// ETA for STILL_WORKING_DELAY_SECONDS (15s) at this point — sitting on
+// "Still working..." much longer just frustrates without giving the backend
+// any new useful runway. Pre-empts the retry path in evaluateRetryOrGiveUp,
+// which is keyed off the server's eta_seconds and fires later (ETA + 30s).
+const STILL_WORKING_GIVE_UP_SECONDS = 10;
 import { addFilteredVideo } from '../utils/storage';
 import './styles.css';
 
@@ -109,6 +117,11 @@ class SafePlayContentScript {
   private estimator: TimeEstimator | null = null;
   private sseClient: TranscriptionSSEClient | null = null;
   private fallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
+  // Armed when the estimator promotes phase to 'still-working'. Fires the
+  // check-back-later give-up after STILL_WORKING_GIVE_UP_SECONDS unless
+  // cleared by phase change away from still-working, completion, error, or
+  // teardown.
+  private stillWorkingGiveUpTimer: ReturnType<typeof setTimeout> | null = null;
   private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
   private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
   private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
@@ -1037,6 +1050,7 @@ class SafePlayContentScript {
       clearTimeout(this.fallbackPollTimer);
       this.fallbackPollTimer = null;
     }
+    this.clearStillWorkingGiveUp();
     this.statusCallInFlight = false;
     this.lastTranscriptionState = null;
     this.jobStartedAt = 0;
@@ -1050,6 +1064,7 @@ class SafePlayContentScript {
   // Create the estimator and wire its updates to the button UI + popup.
   private startEstimator(videoId: string): void {
     if (this.estimator) return;
+    let prevPhase: TranscriptionPhase | null = null;
     const estimator = new TimeEstimator(this.lastVideoDuration, (state: TranscriptionStateSnapshot) => {
       const broadcast: TranscriptionStateBroadcast = {
         youtubeId: videoId,
@@ -1060,6 +1075,16 @@ class SafePlayContentScript {
         errorCode: state.errorCode,
       };
       this.lastTranscriptionState = broadcast;
+
+      // Phase-transition hooks for the still-working give-up timer.
+      // Arm when we first enter still-working; clear on any transition out
+      // (done, error, or — defensively — back to anything else).
+      if (state.phase === 'still-working' && prevPhase !== 'still-working') {
+        this.armStillWorkingGiveUp(videoId);
+      } else if (state.phase !== 'still-working' && prevPhase === 'still-working') {
+        this.clearStillWorkingGiveUp();
+      }
+      prevPhase = state.phase;
 
       // Map estimator phase → ButtonState so existing color/icon logic still works.
       const buttonState: ButtonStateInfo['state'] =
@@ -1293,6 +1318,30 @@ class SafePlayContentScript {
   private surfaceCheckBackLater(videoId: string): void {
     this.terminateInSession(videoId);
     showCheckBackLaterNotification();
+  }
+
+  // Arm the still-working give-up timer. Idempotent — re-entry while
+  // already armed is a no-op, so the listener firing again on a subsequent
+  // estimator emit (which shouldn't happen given the dedupe in TimeEstimator,
+  // but be safe) won't reset the countdown.
+  private armStillWorkingGiveUp(videoId: string): void {
+    if (this.stillWorkingGiveUpTimer !== null) return;
+    log(`Entered still-working; arming ${STILL_WORKING_GIVE_UP_SECONDS}s give-up for ${videoId}`);
+    this.stillWorkingGiveUpTimer = setTimeout(() => {
+      this.stillWorkingGiveUpTimer = null;
+      // Guard against a stale fire: navigation, completion, or error may
+      // have torn things down between the timer arming and now.
+      if (this.filteringVideoId !== videoId) return;
+      log(`Still-working give-up fired for ${videoId} after ${STILL_WORKING_GIVE_UP_SECONDS}s`);
+      this.surfaceCheckBackLater(videoId);
+    }, STILL_WORKING_GIVE_UP_SECONDS * 1000);
+  }
+
+  private clearStillWorkingGiveUp(): void {
+    if (this.stillWorkingGiveUpTimer !== null) {
+      clearTimeout(this.stillWorkingGiveUpTimer);
+      this.stillWorkingGiveUpTimer = null;
+    }
   }
 
   // Apply a completed transcript — wraps the existing applyFilter to make
