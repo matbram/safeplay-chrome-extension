@@ -1299,14 +1299,13 @@ class SafePlayContentScript {
       videoId,
     });
 
-    if (this.videoWasPlaying) {
-      const video = this.getVideoElement();
-      if (video) {
-        video.play();
-        log('Video resumed after terminating in-session polling');
-      }
-      this.videoWasPlaying = false;
-    }
+    // Leave the video PAUSED. The user clicked Filter specifically to avoid
+    // hearing unfiltered audio; auto-resuming on the give-up path would play
+    // the very profanity they were trying to mute. They can hit play
+    // themselves if they decide the original is OK. Reset the flag so a
+    // subsequent retry doesn't carry stale "was playing" state into a fresh
+    // filter attempt.
+    this.videoWasPlaying = false;
     this.isProcessing = false;
     this.filteringVideoId = null;
   }
