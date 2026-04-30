@@ -159,6 +159,17 @@ class SafePlayContentScript {
   // session" holds even if the user clicks Filter again and the server's
   // dedupe hands back the same still-in-flight job.
   private retriedJobIds: Set<string> = new Set();
+  // videoId → jobId for filters that hit check-back-later this session.
+  // On a re-click for one of these videos we route the user straight to
+  // the same "Taking Longer" modal and quietly probe the server in the
+  // background — instead of running them through preview / credit
+  // confirmation / red error modal again, which is misleading because the
+  // server's dedupe just rejoins the same in-flight job (no new charge,
+  // no new work). Cleared on detected completion (auto-apply) and on
+  // detected failure (so the next click can start fresh). Intentionally
+  // kept across SPA navigations: returning to the video later should still
+  // recognize the deferred state.
+  private deferredVideoJobs: Map<string, string> = new Map();
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -463,6 +474,24 @@ class SafePlayContentScript {
   private async onFilterButtonClick(youtubeId: string): Promise<void> {
     if (this.isProcessing) {
       log('Already processing, ignoring click');
+      return;
+    }
+
+    // Deferred-video shortcut: if we've already given up on this video in
+    // this session, skip preview / credit confirmation / start-filter (the
+    // server's dedupe would just rejoin the same in-flight job and lead the
+    // user back through the error+retry+check-back-later cycle anyway). Show
+    // the "Taking Longer" modal directly and quietly probe the server — if
+    // the job actually finished while the user was away, auto-apply.
+    // Auto-retry doesn't take this branch: scheduleAutoRetry's timer fires
+    // with skipNextConfirmation=true, but the deferred entry is added by
+    // surfaceCheckBackLater AFTER the cap fires, so an in-flight retry never
+    // sees a populated map for its own video.
+    const deferredJobId = this.deferredVideoJobs.get(youtubeId);
+    if (deferredJobId) {
+      log(`Click on deferred video ${youtubeId} (job ${deferredJobId}); routing to taking-longer modal`);
+      showCheckBackLaterNotification();
+      void this.probeDeferredJob(youtubeId, deferredJobId);
       return;
     }
 
@@ -1351,11 +1380,98 @@ class SafePlayContentScript {
   // (where the modal may not be on screen yet). The modal helper is
   // idempotent, so callers that may double-fire don't need to coordinate.
   private surfaceCheckBackLater(videoId: string): void {
+    // Capture the jobId BEFORE terminateInSession clears retryState. We
+    // record it so a subsequent click on this same video can route straight
+    // to the modal + a quiet completion probe, instead of running the user
+    // through the full preview / credit / start-filter dance again.
+    const deferredJobId = this.retryState?.jobId;
     this.terminateInSession(videoId);
+    if (deferredJobId) {
+      this.deferredVideoJobs.set(videoId, deferredJobId);
+    }
     // Drop any error modal that's still on screen from the previous attempt
     // — the friendlier check-back-later one supersedes it.
     dismissFilterErrorNotification();
     showCheckBackLaterNotification();
+  }
+
+  // Quietly probe a deferred job's server-side status. Called when the user
+  // re-clicks Filter on a video we previously gave up on this session. The
+  // modal is already up by the time this runs (caller showed it
+  // synchronously); this method only mutates state on the happy path.
+  //
+  //   - completed → dismiss modal, auto-apply the transcript (user already
+  //     paid the credits at job start; making them click again is just tax).
+  //   - failed    → drop the deferred entry so the next click starts a
+  //     fresh job. Modal stays up; user can dismiss it.
+  //   - anything else (still pending/processing) → leave modal up, do
+  //     nothing. The user's mental model of "taking longer, check back" is
+  //     accurate.
+  private async probeDeferredJob(videoId: string, jobId: string): Promise<void> {
+    type JobCheckResponse = {
+      success: boolean;
+      error?: string;
+      data?: {
+        status: string;
+        progress: number;
+        transcript?: Transcript;
+        error?: string;
+        error_code?: string;
+      };
+    };
+    let response: JobCheckResponse | null;
+    try {
+      response = await safeSendMessage<JobCheckResponse>({
+        type: 'CHECK_JOB',
+        payload: { jobId },
+      });
+    } catch (err) {
+      log(`Deferred CHECK_JOB threw for ${jobId}:`, err);
+      return;
+    }
+    if (!response?.success || !response.data) {
+      log(`Deferred CHECK_JOB unsuccessful for ${jobId}; leaving modal up`);
+      return;
+    }
+    // User may have navigated to a different video while the probe was in
+    // flight. Don't apply a transcript to the wrong page.
+    if (this.currentVideoId !== videoId) {
+      log(`Deferred probe for ${videoId} returned but page is on ${this.currentVideoId}; skipping`);
+      return;
+    }
+
+    const { status, transcript } = response.data;
+    if (status === 'completed' && transcript) {
+      log(`Deferred job ${jobId} completed; auto-applying for ${videoId}`);
+      this.deferredVideoJobs.delete(videoId);
+      dismissCheckBackLaterNotification();
+
+      if (this.isProcessing) {
+        // A concurrent click started a fresh attempt while the probe was in
+        // flight — don't double-apply. The other attempt will own the flow.
+        log(`Skipping deferred auto-apply for ${videoId}: already processing`);
+        return;
+      }
+      this.isProcessing = true;
+      this.filteringVideoId = videoId;
+      this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
+      try {
+        await this.applyFilter(transcript);
+      } catch (err) {
+        // applyFilter's finally block clears isProcessing/filteringVideoId,
+        // so we just log here. The button will already be in error state
+        // from the inner failure path.
+        log(`Deferred auto-apply failed for ${videoId}:`, err);
+      }
+      return;
+    }
+    if (status === 'failed') {
+      log(`Deferred job ${jobId} failed server-side; clearing deferred entry for ${videoId}`);
+      this.deferredVideoJobs.delete(videoId);
+      return;
+    }
+    // pending / downloading / transcribing / processing — leave modal up
+    log(`Deferred job ${jobId} still ${status}; leaving modal up`);
   }
 
   // Arm the still-working give-up timer. Idempotent — re-entry while
