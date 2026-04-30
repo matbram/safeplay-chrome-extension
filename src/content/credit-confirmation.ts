@@ -491,9 +491,15 @@ export class CreditConfirmation {
   }
 }
 
-// Helper function to show a filter error notification
+// Helper function to show a filter error notification.
+// Idempotent: rapid back-to-back error paths (auto-retry hitting the same
+// stuck job, polling timeout chasing an SSE error) used to stack a fresh
+// modal on each call. Now subsequent calls while one is on screen are
+// no-ops; the existing dialog stays put until dismissed.
 export function showFilterErrorNotification(): void {
+  if (document.querySelector('[data-safeplay-filter-error]')) return;
   const overlay = document.createElement('div');
+  overlay.setAttribute('data-safeplay-filter-error', '');
   // Use inline styles to avoid conflicts with CreditConfirmation styles
   overlay.style.cssText = `
     position: fixed;
@@ -704,6 +710,15 @@ export function showUnfilterableVideoNotification(reason: UnfilterableReason): v
 // when the modal isn't present.
 export function dismissCheckBackLaterNotification(): void {
   document.querySelector('[data-safeplay-check-back-later]')?.remove();
+}
+
+// Quietly remove the "Having Trouble Filtering" error modal if it's on
+// screen. Used by the auto-retry path so we don't end up with the old
+// error dialog still up while the retry runs, and by the give-up path so
+// users see the friendlier check-back-later modal alone instead of layered
+// over the error one.
+export function dismissFilterErrorNotification(): void {
+  document.querySelector('[data-safeplay-filter-error]')?.remove();
 }
 
 // Per-tab cooldown so transient auth blips (network hiccup, refresh-endpoint

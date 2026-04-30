@@ -6,6 +6,7 @@ import { TimelineMarkers } from './timeline-markers';
 import {
   CreditConfirmation,
   dismissCheckBackLaterNotification,
+  dismissFilterErrorNotification,
   showAuthRequiredMessage,
   showCheckBackLaterNotification,
   showFilterErrorNotification,
@@ -50,6 +51,13 @@ const NO_ETA_GIVE_UP_SECONDS = 5 * 60;
 // any new useful runway. Pre-empts the retry path in evaluateRetryOrGiveUp,
 // which is keyed off the server's eta_seconds and fires later (ETA + 30s).
 const STILL_WORKING_GIVE_UP_SECONDS = 10;
+// Hard cap on how many times scheduleAutoRetry will silently restart the
+// flow after a failure. Without a cap, a server-side stuck job (the
+// "Rejoined in-flight filter job" dedupe path) produced an infinite
+// preview→start→error→retry loop with stacking error modals. One transient
+// retry is plenty; after that we surface the check-back-later modal and
+// let the server's background sweep finish the job.
+const MAX_AUTO_RETRIES = 1;
 import { addFilteredVideo } from '../utils/storage';
 import './styles.css';
 
@@ -113,6 +121,11 @@ class SafePlayContentScript {
   private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
   private lastVideoDuration: number | undefined; // Duration in seconds from preview, used to compute the transcription countdown
   private autoRetryTimer: ReturnType<typeof setTimeout> | null = null; // Timer for automatic retry after error
+  // Counts auto-retries fired since the last user-initiated filter click /
+  // successful completion. Capped by MAX_AUTO_RETRIES to break server-side
+  // stuck-job loops. Reset in onFilterButtonClick (user click) and in
+  // applyCompletedTranscript (success).
+  private autoRetryCount = 0;
   private skipNextConfirmation = false; // Skip credit confirmation on auto-retry
   private estimator: TimeEstimator | null = null;
   private sseClient: TranscriptionSSEClient | null = null;
@@ -374,22 +387,33 @@ class SafePlayContentScript {
     });
   }
 
-  // Schedule a silent auto-retry after a delay, dismissing the error modal automatically
+  // Schedule a silent auto-retry after a delay, dismissing the error modal
+  // automatically. Capped at MAX_AUTO_RETRIES per filter session — once the
+  // budget is spent we surface the check-back-later modal instead of looping
+  // on a stuck job.
   private scheduleAutoRetry(videoId: string, delayMs = 5000): void {
     // Clear any existing auto-retry timer
     if (this.autoRetryTimer) {
       clearTimeout(this.autoRetryTimer);
+      this.autoRetryTimer = null;
     }
+
+    if (this.autoRetryCount >= MAX_AUTO_RETRIES) {
+      log(`Auto-retry budget exhausted (${this.autoRetryCount}/${MAX_AUTO_RETRIES}); surfacing check-back-later for ${videoId}`);
+      // Drop the error modal first so the friendlier check-back-later one
+      // shows alone instead of stacked behind the red error dialog.
+      dismissFilterErrorNotification();
+      this.surfaceCheckBackLater(videoId);
+      return;
+    }
+
+    this.autoRetryCount += 1;
     this.autoRetryTimer = setTimeout(() => {
       this.autoRetryTimer = null;
-      // Dismiss the error modal if it's still showing
-      const errorOverlay = document.querySelector('[role="dialog"]')?.closest('div[style*="z-index: 999999"]');
-      if (errorOverlay) {
-        errorOverlay.remove();
-      }
+      dismissFilterErrorNotification();
       // Skip confirmation on retry since user already intended to filter
       this.skipNextConfirmation = true;
-      log('Auto-retrying filter for:', videoId);
+      log(`Auto-retrying filter for ${videoId} (attempt ${this.autoRetryCount}/${MAX_AUTO_RETRIES})`);
       this.onFilterButtonClick(videoId);
     }, delayMs);
   }
@@ -440,6 +464,15 @@ class SafePlayContentScript {
     if (this.isProcessing) {
       log('Already processing, ignoring click');
       return;
+    }
+
+    // User-initiated click resets the auto-retry budget so a fresh attempt
+    // gets a fresh allowance (e.g. after the user dismisses check-back-later
+    // and tries again). The auto-retry path enters here with
+    // skipNextConfirmation=true, which we leave alone so it keeps drawing
+    // from the existing budget.
+    if (!this.skipNextConfirmation) {
+      this.autoRetryCount = 0;
     }
 
     // Close the guard gap immediately.
@@ -1308,6 +1341,9 @@ class SafePlayContentScript {
     this.videoWasPlaying = false;
     this.isProcessing = false;
     this.filteringVideoId = null;
+    // Spent retry budget belongs to this attempt; the next user click should
+    // start with a clean slate.
+    this.autoRetryCount = 0;
   }
 
   // Give-up path: tear down transport AND show the friendly deferred-to-server
@@ -1316,6 +1352,9 @@ class SafePlayContentScript {
   // idempotent, so callers that may double-fire don't need to coordinate.
   private surfaceCheckBackLater(videoId: string): void {
     this.terminateInSession(videoId);
+    // Drop any error modal that's still on screen from the previous attempt
+    // — the friendlier check-back-later one supersedes it.
+    dismissFilterErrorNotification();
     showCheckBackLaterNotification();
   }
 
@@ -1367,6 +1406,9 @@ class SafePlayContentScript {
     // window 1, quietly remove it now that the job has actually completed.
     // No-op when the modal isn't present.
     dismissCheckBackLaterNotification();
+    // Job actually completed — clear the auto-retry budget so a future
+    // failure on a different video gets a fresh allowance.
+    this.autoRetryCount = 0;
     this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
     await this.applyFilter(transcript);
   }
