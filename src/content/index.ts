@@ -6,14 +6,17 @@ import { TimelineMarkers } from './timeline-markers';
 import {
   CreditConfirmation,
   dismissCheckBackLaterNotification,
+  dismissFilterErrorNotification,
+  dismissProcessingNotification,
   showAuthRequiredMessage,
   showCheckBackLaterNotification,
   showFilterErrorNotification,
+  showProcessingNotification,
   showUnfilterableVideoNotification,
 } from './credit-confirmation';
 import { preflightVideoFilterable } from './preflight';
 import { TranscriptionSSEClient } from './sse-client';
-import { TimeEstimator, TranscriptionStateSnapshot } from './time-estimator';
+import { TimeEstimator, TranscriptionPhase, TranscriptionStateSnapshot } from './time-estimator';
 import {
   UserPreferences,
   DEFAULT_PREFERENCES,
@@ -42,6 +45,21 @@ const RETRY_GRACE_SECONDS = 30;
 // row, duration unresolvable). After this much elapsed time we give up in
 // session and defer to the background sweep.
 const NO_ETA_GIVE_UP_SECONDS = 5 * 60;
+// Once the estimator promotes the phase from 'almost-done' to 'still-working',
+// give the server this much extra grace before tearing down in-session work
+// and surfacing the check-back-later modal. The user has already been past
+// ETA for STILL_WORKING_DELAY_SECONDS (15s) at this point — sitting on
+// "Still working..." much longer just frustrates without giving the backend
+// any new useful runway. Pre-empts the retry path in evaluateRetryOrGiveUp,
+// which is keyed off the server's eta_seconds and fires later (ETA + 30s).
+const STILL_WORKING_GIVE_UP_SECONDS = 10;
+// Hard cap on how many times scheduleAutoRetry will silently restart the
+// flow after a failure. Without a cap, a server-side stuck job (the
+// "Rejoined in-flight filter job" dedupe path) produced an infinite
+// preview→start→error→retry loop with stacking error modals. One transient
+// retry is plenty; after that we surface the check-back-later modal and
+// let the server's background sweep finish the job.
+const MAX_AUTO_RETRIES = 1;
 import { addFilteredVideo } from '../utils/storage';
 import './styles.css';
 
@@ -105,10 +123,20 @@ class SafePlayContentScript {
   private lastCreditCost = 0; // Credit cost from preview, passed to START_FILTER for optimistic badge update
   private lastVideoDuration: number | undefined; // Duration in seconds from preview, used to compute the transcription countdown
   private autoRetryTimer: ReturnType<typeof setTimeout> | null = null; // Timer for automatic retry after error
+  // Counts auto-retries fired since the last user-initiated filter click /
+  // successful completion. Capped by MAX_AUTO_RETRIES to break server-side
+  // stuck-job loops. Reset in onFilterButtonClick (user click) and in
+  // applyCompletedTranscript (success).
+  private autoRetryCount = 0;
   private skipNextConfirmation = false; // Skip credit confirmation on auto-retry
   private estimator: TimeEstimator | null = null;
   private sseClient: TranscriptionSSEClient | null = null;
   private fallbackPollTimer: ReturnType<typeof setTimeout> | null = null;
+  // Armed when the estimator promotes phase to 'still-working'. Fires the
+  // check-back-later give-up after STILL_WORKING_GIVE_UP_SECONDS unless
+  // cleared by phase change away from still-working, completion, error, or
+  // teardown.
+  private stillWorkingGiveUpTimer: ReturnType<typeof setTimeout> | null = null;
   private statusCallInFlight = false; // Ensures we only call /status/:jobId once on complete
   private jobStartedAt = 0; // Wall-clock start of transcription flow, used only for the completion log
   private lastTranscriptionState: TranscriptionStateBroadcast | null = null;
@@ -133,6 +161,14 @@ class SafePlayContentScript {
   // session" holds even if the user clicks Filter again and the server's
   // dedupe hands back the same still-in-flight job.
   private retriedJobIds: Set<string> = new Set();
+  // Deferred-video map state lives in BG-managed storage.local, accessed
+  // via GET_DEFERRED_JOB / SET_DEFERRED_JOB / CLEAR_DEFERRED_JOB. The
+  // content script doesn't cache it locally — every onFilterButtonClick
+  // checks the BG, which is one cheap message round-trip and avoids
+  // staleness from another tab updating the map. The server (via
+  // CHECK_JOB) is the source of truth on whether a deferred entry is
+  // still relevant; entries are cleared on terminal job states and on 404
+  // (job rotated out / no longer exists).
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -361,22 +397,33 @@ class SafePlayContentScript {
     });
   }
 
-  // Schedule a silent auto-retry after a delay, dismissing the error modal automatically
+  // Schedule a silent auto-retry after a delay, dismissing the error modal
+  // automatically. Capped at MAX_AUTO_RETRIES per filter session — once the
+  // budget is spent we surface the check-back-later modal instead of looping
+  // on a stuck job.
   private scheduleAutoRetry(videoId: string, delayMs = 5000): void {
     // Clear any existing auto-retry timer
     if (this.autoRetryTimer) {
       clearTimeout(this.autoRetryTimer);
+      this.autoRetryTimer = null;
     }
+
+    if (this.autoRetryCount >= MAX_AUTO_RETRIES) {
+      log(`Auto-retry budget exhausted (${this.autoRetryCount}/${MAX_AUTO_RETRIES}); surfacing check-back-later for ${videoId}`);
+      // Drop the error modal first so the friendlier check-back-later one
+      // shows alone instead of stacked behind the red error dialog.
+      dismissFilterErrorNotification();
+      this.surfaceCheckBackLater(videoId);
+      return;
+    }
+
+    this.autoRetryCount += 1;
     this.autoRetryTimer = setTimeout(() => {
       this.autoRetryTimer = null;
-      // Dismiss the error modal if it's still showing
-      const errorOverlay = document.querySelector('[role="dialog"]')?.closest('div[style*="z-index: 999999"]');
-      if (errorOverlay) {
-        errorOverlay.remove();
-      }
+      dismissFilterErrorNotification();
       // Skip confirmation on retry since user already intended to filter
       this.skipNextConfirmation = true;
-      log('Auto-retrying filter for:', videoId);
+      log(`Auto-retrying filter for ${videoId} (attempt ${this.autoRetryCount}/${MAX_AUTO_RETRIES})`);
       this.onFilterButtonClick(videoId);
     }, delayMs);
   }
@@ -427,6 +474,56 @@ class SafePlayContentScript {
     if (this.isProcessing) {
       log('Already processing, ignoring click');
       return;
+    }
+
+    // Pause IMMEDIATELY — before auth check, preflight, preview fetch, the
+    // deferred-shortcut probe, or anything else that has an await boundary.
+    // The user clicked SafePlay specifically to avoid hearing unfiltered
+    // audio; even a few hundred ms of profanity leaking through while the
+    // flow gets going defeats the point. videoWasPlaying captures the
+    // pre-click state so we know whether to resume on cancel / failure /
+    // success. Idempotent re-pauses later in the flow (confirmation
+    // dialog, proceedWithFiltering) are now no-ops.
+    const videoEl = this.getVideoElement();
+    const wasPlaying = !!(videoEl && !videoEl.paused);
+    if (wasPlaying && videoEl) {
+      videoEl.pause();
+      log('Video paused on SafePlay click');
+    }
+    this.videoWasPlaying = wasPlaying;
+
+    // Deferred-video shortcut: if we've already given up on this video,
+    // skip preview / credit confirmation / start-filter (the server's
+    // dedupe would just rejoin the same in-flight job and lead the user
+    // back through the error+retry+check-back-later cycle anyway). Show
+    // the "We're working on this video" modal directly and quietly probe
+    // the server — if the job actually finished while the user was away,
+    // auto-apply.
+    // Auto-retry doesn't take this branch: scheduleAutoRetry's timer
+    // fires with skipNextConfirmation=true, but the deferred entry is
+    // recorded by surfaceCheckBackLater AFTER the cap fires, so an
+    // in-flight retry never sees a populated map for its own video.
+    const deferredJobId = await this.getDeferredVideoJob(youtubeId);
+    if (deferredJobId) {
+      log(`Click on deferred video ${youtubeId} (job ${deferredJobId}); routing to processing modal`);
+      // Use the calmer "We're Working On This Video" modal here rather
+      // than "Taking Longer Than Expected". Deferred-click can fire after
+      // a page refresh / browser restart / re-click long after the
+      // original give-up — in those cases the user didn't just witness
+      // anything take longer than expected; they're just discovering
+      // that filtering is in progress.
+      showProcessingNotification();
+      void this.probeDeferredJob(youtubeId, deferredJobId);
+      return;
+    }
+
+    // User-initiated click resets the auto-retry budget so a fresh attempt
+    // gets a fresh allowance (e.g. after the user dismisses check-back-later
+    // and tries again). The auto-retry path enters here with
+    // skipNextConfirmation=true, which we leave alone so it keeps drawing
+    // from the existing budget.
+    if (!this.skipNextConfirmation) {
+      this.autoRetryCount = 0;
     }
 
     // Close the guard gap immediately.
@@ -543,13 +640,10 @@ class SafePlayContentScript {
         return;
       }
 
-      // Pause video and show confirmation dialog
+      // Video is already paused at the top of onFilterButtonClick.
+      // this.videoWasPlaying captures the pre-click state for the
+      // resume-on-cancel branch below.
       const video = this.getVideoElement();
-      const videoWasPlayingBeforeDialog = !!(video && !video.paused);
-      if (video && videoWasPlayingBeforeDialog) {
-        video.pause();
-        log('Video paused for credit confirmation');
-      }
 
       this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
       release();
@@ -564,16 +658,19 @@ class SafePlayContentScript {
             log('Confirmation accepted but operation is stale — dropping');
             return;
           }
-          this.videoWasPlaying = videoWasPlayingBeforeDialog;
           await this.proceedWithFiltering(youtubeId);
         },
         onCancel: () => {
           log('User cancelled filtering');
           this.filteringVideoId = null;
-          if (videoWasPlayingBeforeDialog && video) {
+          // Resume only if the video was actually playing before the
+          // SafePlay click. Cancel means the user changed their mind, so
+          // restore the pre-click state.
+          if (this.videoWasPlaying && video) {
             video.play();
             log('Video resumed after cancel');
           }
+          this.videoWasPlaying = false;
         },
         debug: DEBUG,
       });
@@ -1037,6 +1134,7 @@ class SafePlayContentScript {
       clearTimeout(this.fallbackPollTimer);
       this.fallbackPollTimer = null;
     }
+    this.clearStillWorkingGiveUp();
     this.statusCallInFlight = false;
     this.lastTranscriptionState = null;
     this.jobStartedAt = 0;
@@ -1050,6 +1148,7 @@ class SafePlayContentScript {
   // Create the estimator and wire its updates to the button UI + popup.
   private startEstimator(videoId: string): void {
     if (this.estimator) return;
+    let prevPhase: TranscriptionPhase | null = null;
     const estimator = new TimeEstimator(this.lastVideoDuration, (state: TranscriptionStateSnapshot) => {
       const broadcast: TranscriptionStateBroadcast = {
         youtubeId: videoId,
@@ -1060,6 +1159,16 @@ class SafePlayContentScript {
         errorCode: state.errorCode,
       };
       this.lastTranscriptionState = broadcast;
+
+      // Phase-transition hooks for the still-working give-up timer.
+      // Arm when we first enter still-working; clear on any transition out
+      // (done, error, or — defensively — back to anything else).
+      if (state.phase === 'still-working' && prevPhase !== 'still-working') {
+        this.armStillWorkingGiveUp(videoId);
+      } else if (state.phase !== 'still-working' && prevPhase === 'still-working') {
+        this.clearStillWorkingGiveUp();
+      }
+      prevPhase = state.phase;
 
       // Map estimator phase → ButtonState so existing color/icon logic still works.
       const buttonState: ButtonStateInfo['state'] =
@@ -1274,16 +1383,18 @@ class SafePlayContentScript {
       videoId,
     });
 
-    if (this.videoWasPlaying) {
-      const video = this.getVideoElement();
-      if (video) {
-        video.play();
-        log('Video resumed after terminating in-session polling');
-      }
-      this.videoWasPlaying = false;
-    }
+    // Leave the video PAUSED. The user clicked Filter specifically to avoid
+    // hearing unfiltered audio; auto-resuming on the give-up path would play
+    // the very profanity they were trying to mute. They can hit play
+    // themselves if they decide the original is OK. Reset the flag so a
+    // subsequent retry doesn't carry stale "was playing" state into a fresh
+    // filter attempt.
+    this.videoWasPlaying = false;
     this.isProcessing = false;
     this.filteringVideoId = null;
+    // Spent retry budget belongs to this attempt; the next user click should
+    // start with a clean slate.
+    this.autoRetryCount = 0;
   }
 
   // Give-up path: tear down transport AND show the friendly deferred-to-server
@@ -1291,8 +1402,165 @@ class SafePlayContentScript {
   // (where the modal may not be on screen yet). The modal helper is
   // idempotent, so callers that may double-fire don't need to coordinate.
   private surfaceCheckBackLater(videoId: string): void {
+    // Capture the jobId BEFORE terminateInSession clears retryState. We
+    // record it so a subsequent click on this same video can route straight
+    // to the modal + a quiet completion probe, instead of running the user
+    // through the full preview / credit / start-filter dance again.
+    const deferredJobId = this.retryState?.jobId;
     this.terminateInSession(videoId);
+    if (deferredJobId) {
+      void this.setDeferredVideoJob(videoId, deferredJobId);
+    }
+    // Drop any error modal that's still on screen from the previous attempt
+    // — the friendlier check-back-later one supersedes it.
+    dismissFilterErrorNotification();
     showCheckBackLaterNotification();
+  }
+
+  // BG-routed accessors for the deferred-video map. The BG owns the
+  // storage; we just send messages. All three helpers are best-effort
+  // (failures degrade to "act as if there's no deferred entry").
+  private async getDeferredVideoJob(videoId: string): Promise<string | null> {
+    const res = await safeSendMessage<{ success: boolean; data?: { jobId: string | null } }>({
+      type: 'GET_DEFERRED_JOB',
+      payload: { videoId },
+    });
+    return res?.success ? res.data?.jobId ?? null : null;
+  }
+
+  private async setDeferredVideoJob(videoId: string, jobId: string): Promise<void> {
+    await safeSendMessage({
+      type: 'SET_DEFERRED_JOB',
+      payload: { videoId, jobId },
+    });
+  }
+
+  private async clearDeferredVideoJob(videoId: string): Promise<void> {
+    await safeSendMessage({
+      type: 'CLEAR_DEFERRED_JOB',
+      payload: { videoId },
+    });
+  }
+
+  // Quietly probe a deferred job's server-side status. Called when the user
+  // re-clicks Filter on a video we previously gave up on this session. The
+  // modal is already up by the time this runs (caller showed it
+  // synchronously); this method only mutates state on the happy path.
+  //
+  //   - completed → dismiss modal, auto-apply the transcript (user already
+  //     paid the credits at job start; making them click again is just tax).
+  //   - failed    → drop the deferred entry so the next click starts a
+  //     fresh job. Modal stays up; user can dismiss it.
+  //   - anything else (still pending/processing) → leave modal up, do
+  //     nothing. The user's mental model of "taking longer, check back" is
+  //     accurate.
+  private async probeDeferredJob(videoId: string, jobId: string): Promise<void> {
+    type JobCheckResponse = {
+      success: boolean;
+      error?: string;
+      statusCode?: number;
+      data?: {
+        status: string;
+        progress: number;
+        transcript?: Transcript;
+        error?: string;
+        error_code?: string;
+      };
+    };
+    let response: JobCheckResponse | null;
+    try {
+      response = await safeSendMessage<JobCheckResponse>({
+        type: 'CHECK_JOB',
+        payload: { jobId },
+      });
+    } catch (err) {
+      // Optimistic: a thrown probe is a transient failure (network blip,
+      // worker context lost). Leave the modal up; next click will retry.
+      log(`Deferred CHECK_JOB threw for ${jobId}:`, err);
+      return;
+    }
+    if (!response?.success || !response.data) {
+      // 404 = the server has rotated/timed out the job, our deferred
+      // entry is stale. Clear it so the next click starts a fresh job
+      // (which will charge no extra credits for an already-paid video,
+      // and is the only way out of the "still working" loop). Other
+      // failures are transient — leave the entry alone.
+      if (response?.statusCode === 404) {
+        log(`Deferred CHECK_JOB returned 404 for ${jobId}; clearing stale deferred entry for ${videoId}`);
+        await this.clearDeferredVideoJob(videoId);
+        return;
+      }
+      log(`Deferred CHECK_JOB unsuccessful for ${jobId} (status ${response?.statusCode ?? '?'}); leaving modal up`);
+      return;
+    }
+    // User may have navigated to a different video while the probe was in
+    // flight. Don't apply a transcript to the wrong page.
+    if (this.currentVideoId !== videoId) {
+      log(`Deferred probe for ${videoId} returned but page is on ${this.currentVideoId}; skipping`);
+      return;
+    }
+
+    const { status, transcript } = response.data;
+    if (status === 'completed' && transcript) {
+      log(`Deferred job ${jobId} completed; auto-applying for ${videoId}`);
+      await this.clearDeferredVideoJob(videoId);
+      // Either modal could be up depending on whether this was an
+      // in-session re-click (Modal A) or a fresh-recognition click (Modal
+      // B). Dismiss both — the helpers are no-ops when the modal isn't
+      // present.
+      dismissCheckBackLaterNotification();
+      dismissProcessingNotification();
+
+      if (this.isProcessing) {
+        // A concurrent click started a fresh attempt while the probe was in
+        // flight — don't double-apply. The other attempt will own the flow.
+        log(`Skipping deferred auto-apply for ${videoId}: already processing`);
+        return;
+      }
+      this.isProcessing = true;
+      this.filteringVideoId = videoId;
+      this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
+      try {
+        await this.applyFilter(transcript);
+      } catch (err) {
+        // applyFilter's finally block clears isProcessing/filteringVideoId,
+        // so we just log here. The button will already be in error state
+        // from the inner failure path.
+        log(`Deferred auto-apply failed for ${videoId}:`, err);
+      }
+      return;
+    }
+    if (status === 'failed') {
+      log(`Deferred job ${jobId} failed server-side; clearing deferred entry for ${videoId}`);
+      await this.clearDeferredVideoJob(videoId);
+      return;
+    }
+    // pending / downloading / transcribing / processing — leave modal up
+    log(`Deferred job ${jobId} still ${status}; leaving modal up`);
+  }
+
+  // Arm the still-working give-up timer. Idempotent — re-entry while
+  // already armed is a no-op, so the listener firing again on a subsequent
+  // estimator emit (which shouldn't happen given the dedupe in TimeEstimator,
+  // but be safe) won't reset the countdown.
+  private armStillWorkingGiveUp(videoId: string): void {
+    if (this.stillWorkingGiveUpTimer !== null) return;
+    log(`Entered still-working; arming ${STILL_WORKING_GIVE_UP_SECONDS}s give-up for ${videoId}`);
+    this.stillWorkingGiveUpTimer = setTimeout(() => {
+      this.stillWorkingGiveUpTimer = null;
+      // Guard against a stale fire: navigation, completion, or error may
+      // have torn things down between the timer arming and now.
+      if (this.filteringVideoId !== videoId) return;
+      log(`Still-working give-up fired for ${videoId} after ${STILL_WORKING_GIVE_UP_SECONDS}s`);
+      this.surfaceCheckBackLater(videoId);
+    }, STILL_WORKING_GIVE_UP_SECONDS * 1000);
+  }
+
+  private clearStillWorkingGiveUp(): void {
+    if (this.stillWorkingGiveUpTimer !== null) {
+      clearTimeout(this.stillWorkingGiveUpTimer);
+      this.stillWorkingGiveUpTimer = null;
+    }
   }
 
   // Apply a completed transcript — wraps the existing applyFilter to make
@@ -1315,10 +1583,15 @@ class SafePlayContentScript {
       this.jobStartedAt = 0;
     }
     this.stopTranscriptionResources();
-    // If the "taking longer than expected" modal is still on screen from
-    // window 1, quietly remove it now that the job has actually completed.
-    // No-op when the modal isn't present.
+    // Either modal could be up at this point: "Taking Longer" from
+    // window 1, or "We're Working On This Video" from a same-session
+    // re-click that took the deferred branch. Dismiss both — helpers
+    // are no-ops when the modal isn't present.
     dismissCheckBackLaterNotification();
+    dismissProcessingNotification();
+    // Job actually completed — clear the auto-retry budget so a future
+    // failure on a different video gets a fresh allowance.
+    this.autoRetryCount = 0;
     this.updateButtonState({ state: 'processing', text: 'Applying filter...', videoId });
     await this.applyFilter(transcript);
   }

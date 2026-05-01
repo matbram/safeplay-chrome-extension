@@ -239,6 +239,15 @@ async function handleMessage(
       case 'STORE_PROPOSE':
         return await handleStoreProposal(message.payload as StoreProposePayload, _sender);
 
+      case 'GET_DEFERRED_JOB':
+        return await handleGetDeferredJob(message.payload as { videoId: string });
+
+      case 'SET_DEFERRED_JOB':
+        return await handleSetDeferredJob(message.payload as { videoId: string; jobId: string });
+
+      case 'CLEAR_DEFERRED_JOB':
+        return await handleClearDeferredJob(message.payload as { videoId: string });
+
       default:
         return { success: false, error: 'Unknown message type' };
     }
@@ -565,7 +574,13 @@ async function handleCheckJob(
   } catch (error) {
     logError('handleCheckJob error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Failed to check job status';
-    return { success: false, error: errorMessage };
+    // Surface statusCode so callers can distinguish "job no longer exists"
+    // (404 — server has rotated/timed out the job, our cached entry is
+    // stale) from a transient network or auth blip. The deferred-video
+    // probe needs this distinction: 404 → clear the deferred entry,
+    // anything else → leave the user's "Taking Longer" modal up.
+    const statusCode = error instanceof ApiError ? error.statusCode : undefined;
+    return { success: false, error: errorMessage, statusCode };
   }
 }
 
@@ -900,6 +915,61 @@ async function handleCheckAuthStrict(): Promise<
 
 async function handleClearCache(): Promise<MessageResponse> {
   await clearCachedTranscripts();
+  return { success: true };
+}
+
+// Storage key for the deferred-video map. Lives in storage.local so it
+// survives extension auto-updates (storage.session resets on update),
+// page refreshes, browser restarts, and tab close. Stale entries are
+// pruned by the content script's probe — when CHECK_JOB returns 404 or
+// the job is in a terminal state, the entry is cleared. There's no
+// time-based TTL because the server is the source of truth on whether a
+// job is still in-flight.
+const DEFERRED_VIDEO_JOBS_KEY = 'safeplay:deferredVideoJobs';
+
+async function readDeferredVideoJobs(): Promise<Record<string, string>> {
+  try {
+    const res = await chrome.storage.local.get(DEFERRED_VIDEO_JOBS_KEY);
+    const raw = res[DEFERRED_VIDEO_JOBS_KEY];
+    if (raw && typeof raw === 'object') return raw as Record<string, string>;
+  } catch (err) {
+    log('readDeferredVideoJobs failed:', err);
+  }
+  return {};
+}
+
+async function writeDeferredVideoJobs(map: Record<string, string>): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [DEFERRED_VIDEO_JOBS_KEY]: map });
+  } catch (err) {
+    log('writeDeferredVideoJobs failed:', err);
+  }
+}
+
+async function handleGetDeferredJob(
+  payload: { videoId: string }
+): Promise<MessageResponse<{ jobId: string | null }>> {
+  const map = await readDeferredVideoJobs();
+  const jobId = map[payload.videoId] || null;
+  return { success: true, data: { jobId } };
+}
+
+async function handleSetDeferredJob(
+  payload: { videoId: string; jobId: string }
+): Promise<MessageResponse> {
+  const map = await readDeferredVideoJobs();
+  map[payload.videoId] = payload.jobId;
+  await writeDeferredVideoJobs(map);
+  return { success: true };
+}
+
+async function handleClearDeferredJob(
+  payload: { videoId: string }
+): Promise<MessageResponse> {
+  const map = await readDeferredVideoJobs();
+  if (!(payload.videoId in map)) return { success: true };
+  delete map[payload.videoId];
+  await writeDeferredVideoJobs(map);
   return { success: true };
 }
 

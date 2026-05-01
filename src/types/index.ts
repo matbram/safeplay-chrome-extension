@@ -254,7 +254,15 @@ export type MessageType =
   // Reactive store plumbing: non-background contexts send STORE_PROPOSE to
   // the background when they want to mutate a shared key. Background is the
   // only writer — every other surface subscribes via chrome.storage.onChanged.
-  | 'STORE_PROPOSE';
+  | 'STORE_PROPOSE'
+  // Deferred-video map (videoId → jobId for filters that hit
+  // check-back-later). Backed by storage.local in the BG so it survives
+  // extension auto-updates and is readable from the content script via
+  // messaging (storage.session and direct content-script storage.session
+  // access have lifetime / permission gotchas — see commit history).
+  | 'GET_DEFERRED_JOB'
+  | 'SET_DEFERRED_JOB'
+  | 'CLEAR_DEFERRED_JOB';
 
 export interface Message<T = unknown> {
   type: MessageType;
@@ -265,6 +273,10 @@ export interface MessageResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  // HTTP status code surfaced from API errors when callers need to
+  // distinguish 404 (resource gone) from transient failures. Only set on
+  // ApiError-shaped failures; absent for network errors and others.
+  statusCode?: number;
 }
 
 // Preview data passed to content script
