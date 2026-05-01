@@ -159,22 +159,14 @@ class SafePlayContentScript {
   // session" holds even if the user clicks Filter again and the server's
   // dedupe hands back the same still-in-flight job.
   private retriedJobIds: Set<string> = new Set();
-  // videoId → jobId for filters that hit check-back-later this session.
-  // On a re-click for one of these videos we route the user straight to
-  // the same "Taking Longer" modal and quietly probe the server in the
-  // background — instead of running them through preview / credit
-  // confirmation / red error modal again, which is misleading because the
-  // server's dedupe just rejoins the same in-flight job (no new charge,
-  // no new work). Cleared on detected completion (auto-apply) and on
-  // detected failure (so the next click can start fresh). Intentionally
-  // kept across SPA navigations: returning to the video later should still
-  // recognize the deferred state. Persisted to chrome.storage.session so a
-  // page refresh doesn't drop the state and re-expose the user to the full
-  // flow on a still-stuck job. storage.session clears on browser restart,
-  // which is right: a job that's been "in-flight" across browser sessions
-  // is almost certainly server-side timed out by then.
-  private deferredVideoJobs: Map<string, string> = new Map();
-  private static readonly DEFERRED_VIDEO_JOBS_KEY = 'safeplay:deferredVideoJobs';
+  // Deferred-video map state lives in BG-managed storage.local, accessed
+  // via GET_DEFERRED_JOB / SET_DEFERRED_JOB / CLEAR_DEFERRED_JOB. The
+  // content script doesn't cache it locally — every onFilterButtonClick
+  // checks the BG, which is one cheap message round-trip and avoids
+  // staleness from another tab updating the map. The server (via
+  // CHECK_JOB) is the source of truth on whether a deferred entry is
+  // still relevant; entries are cleared on terminal job states and on 404
+  // (job rotated out / no longer exists).
 
   constructor() {
     // Initialize resilient injector for video watch page
@@ -199,10 +191,6 @@ class SafePlayContentScript {
 
     // Load user preferences
     await this.loadPreferences();
-
-    // Hydrate deferred-video map from session storage so a page refresh
-    // mid-stuck-job doesn't lose track and re-expose the full flow.
-    await this.loadDeferredVideoJobs();
 
     // Start injector - it handles watch page and Shorts detection internally
     this.injector.start();
@@ -486,17 +474,17 @@ class SafePlayContentScript {
       return;
     }
 
-    // Deferred-video shortcut: if we've already given up on this video in
-    // this session, skip preview / credit confirmation / start-filter (the
-    // server's dedupe would just rejoin the same in-flight job and lead the
-    // user back through the error+retry+check-back-later cycle anyway). Show
-    // the "Taking Longer" modal directly and quietly probe the server — if
-    // the job actually finished while the user was away, auto-apply.
-    // Auto-retry doesn't take this branch: scheduleAutoRetry's timer fires
-    // with skipNextConfirmation=true, but the deferred entry is added by
-    // surfaceCheckBackLater AFTER the cap fires, so an in-flight retry never
-    // sees a populated map for its own video.
-    const deferredJobId = this.deferredVideoJobs.get(youtubeId);
+    // Deferred-video shortcut: if we've already given up on this video,
+    // skip preview / credit confirmation / start-filter (the server's
+    // dedupe would just rejoin the same in-flight job and lead the user
+    // back through the error+retry+check-back-later cycle anyway). Show
+    // the "Taking Longer" modal directly and quietly probe the server —
+    // if the job actually finished while the user was away, auto-apply.
+    // Auto-retry doesn't take this branch: scheduleAutoRetry's timer
+    // fires with skipNextConfirmation=true, but the deferred entry is
+    // recorded by surfaceCheckBackLater AFTER the cap fires, so an
+    // in-flight retry never sees a populated map for its own video.
+    const deferredJobId = await this.getDeferredVideoJob(youtubeId);
     if (deferredJobId) {
       log(`Click on deferred video ${youtubeId} (job ${deferredJobId}); routing to taking-longer modal`);
       showCheckBackLaterNotification();
@@ -1396,7 +1384,7 @@ class SafePlayContentScript {
     const deferredJobId = this.retryState?.jobId;
     this.terminateInSession(videoId);
     if (deferredJobId) {
-      this.setDeferredVideoJob(videoId, deferredJobId);
+      void this.setDeferredVideoJob(videoId, deferredJobId);
     }
     // Drop any error modal that's still on screen from the previous attempt
     // — the friendlier check-back-later one supersedes it.
@@ -1404,45 +1392,29 @@ class SafePlayContentScript {
     showCheckBackLaterNotification();
   }
 
-  // Hydrate deferredVideoJobs from session storage. Best-effort: on any
-  // failure we proceed with an empty map (the user just falls back to the
-  // full flow on this video, which is no worse than the pre-persistence
-  // behavior).
-  private async loadDeferredVideoJobs(): Promise<void> {
-    try {
-      const res = await chrome.storage.session.get(SafePlayContentScript.DEFERRED_VIDEO_JOBS_KEY);
-      const raw = res[SafePlayContentScript.DEFERRED_VIDEO_JOBS_KEY];
-      if (raw && typeof raw === 'object') {
-        for (const [videoId, jobId] of Object.entries(raw)) {
-          if (typeof jobId === 'string') this.deferredVideoJobs.set(videoId, jobId);
-        }
-        log(`Hydrated ${this.deferredVideoJobs.size} deferred-video entries from session storage`);
-      }
-    } catch (err) {
-      log('Failed to hydrate deferred-video map (non-fatal):', err);
-    }
+  // BG-routed accessors for the deferred-video map. The BG owns the
+  // storage; we just send messages. All three helpers are best-effort
+  // (failures degrade to "act as if there's no deferred entry").
+  private async getDeferredVideoJob(videoId: string): Promise<string | null> {
+    const res = await safeSendMessage<{ success: boolean; data?: { jobId: string | null } }>({
+      type: 'GET_DEFERRED_JOB',
+      payload: { videoId },
+    });
+    return res?.success ? res.data?.jobId ?? null : null;
   }
 
-  // Persist current deferredVideoJobs to session storage. Fire-and-forget;
-  // the next read on a fresh page load will pick up whatever landed.
-  private persistDeferredVideoJobs(): void {
-    if (!isExtensionContextValid()) return;
-    const obj: Record<string, string> = {};
-    for (const [k, v] of this.deferredVideoJobs.entries()) obj[k] = v;
-    chrome.storage.session.set({
-      [SafePlayContentScript.DEFERRED_VIDEO_JOBS_KEY]: obj,
-    }).catch(err => log('persistDeferredVideoJobs failed (non-fatal):', err));
+  private async setDeferredVideoJob(videoId: string, jobId: string): Promise<void> {
+    await safeSendMessage({
+      type: 'SET_DEFERRED_JOB',
+      payload: { videoId, jobId },
+    });
   }
 
-  private setDeferredVideoJob(videoId: string, jobId: string): void {
-    this.deferredVideoJobs.set(videoId, jobId);
-    this.persistDeferredVideoJobs();
-  }
-
-  private clearDeferredVideoJob(videoId: string): void {
-    if (this.deferredVideoJobs.delete(videoId)) {
-      this.persistDeferredVideoJobs();
-    }
+  private async clearDeferredVideoJob(videoId: string): Promise<void> {
+    await safeSendMessage({
+      type: 'CLEAR_DEFERRED_JOB',
+      payload: { videoId },
+    });
   }
 
   // Quietly probe a deferred job's server-side status. Called when the user
@@ -1461,6 +1433,7 @@ class SafePlayContentScript {
     type JobCheckResponse = {
       success: boolean;
       error?: string;
+      statusCode?: number;
       data?: {
         status: string;
         progress: number;
@@ -1476,11 +1449,23 @@ class SafePlayContentScript {
         payload: { jobId },
       });
     } catch (err) {
+      // Optimistic: a thrown probe is a transient failure (network blip,
+      // worker context lost). Leave the modal up; next click will retry.
       log(`Deferred CHECK_JOB threw for ${jobId}:`, err);
       return;
     }
     if (!response?.success || !response.data) {
-      log(`Deferred CHECK_JOB unsuccessful for ${jobId}; leaving modal up`);
+      // 404 = the server has rotated/timed out the job, our deferred
+      // entry is stale. Clear it so the next click starts a fresh job
+      // (which will charge no extra credits for an already-paid video,
+      // and is the only way out of the "still working" loop). Other
+      // failures are transient — leave the entry alone.
+      if (response?.statusCode === 404) {
+        log(`Deferred CHECK_JOB returned 404 for ${jobId}; clearing stale deferred entry for ${videoId}`);
+        await this.clearDeferredVideoJob(videoId);
+        return;
+      }
+      log(`Deferred CHECK_JOB unsuccessful for ${jobId} (status ${response?.statusCode ?? '?'}); leaving modal up`);
       return;
     }
     // User may have navigated to a different video while the probe was in
@@ -1493,7 +1478,7 @@ class SafePlayContentScript {
     const { status, transcript } = response.data;
     if (status === 'completed' && transcript) {
       log(`Deferred job ${jobId} completed; auto-applying for ${videoId}`);
-      this.clearDeferredVideoJob(videoId);
+      await this.clearDeferredVideoJob(videoId);
       dismissCheckBackLaterNotification();
 
       if (this.isProcessing) {
@@ -1517,7 +1502,7 @@ class SafePlayContentScript {
     }
     if (status === 'failed') {
       log(`Deferred job ${jobId} failed server-side; clearing deferred entry for ${videoId}`);
-      this.clearDeferredVideoJob(videoId);
+      await this.clearDeferredVideoJob(videoId);
       return;
     }
     // pending / downloading / transcribing / processing — leave modal up
