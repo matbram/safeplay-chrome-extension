@@ -50,6 +50,29 @@ function log(...args: unknown[]): void {
   console.log('[SafePlay BG]', ...args);
 }
 
+// chrome.storage.session is gated to extension contexts by default — content
+// scripts (the part injected into YouTube) can't read or write it without
+// the access level being explicitly widened. The deferred-video map
+// (videoId → jobId for filters that hit check-back-later) lives in
+// session storage and is read/written from the content script on click,
+// so we need to flip this on at every service-worker boot. Without it,
+// content-script reads silently fail, the map stays empty after a page
+// refresh, and the user falls back through the full preview / credit /
+// error / retry flow on a still-stuck job.
+//
+// setAccessLevel is per-storage-area, in-memory, and resets when the
+// service worker restarts — so it must be called at top-level of the
+// worker script, not inside an event handler. Chrome 115+; older Chrome
+// throws, which we swallow (the deferred shortcut just won't survive
+// refresh on those installs).
+try {
+  chrome.storage.session
+    .setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' })
+    .catch(err => log('storage.session.setAccessLevel failed (non-fatal):', err));
+} catch (err) {
+  log('storage.session.setAccessLevel unavailable (non-fatal):', err);
+}
+
 function logError(...args: unknown[]): void {
   // Promote any Error arg's .stack to a second console.error line so the
   // stack trace survives text-only log extraction (support copy-paste, CI
