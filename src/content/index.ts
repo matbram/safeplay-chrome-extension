@@ -7,9 +7,11 @@ import {
   CreditConfirmation,
   dismissCheckBackLaterNotification,
   dismissFilterErrorNotification,
+  dismissProcessingNotification,
   showAuthRequiredMessage,
   showCheckBackLaterNotification,
   showFilterErrorNotification,
+  showProcessingNotification,
   showUnfilterableVideoNotification,
 } from './credit-confirmation';
 import { preflightVideoFilterable } from './preflight';
@@ -474,20 +476,43 @@ class SafePlayContentScript {
       return;
     }
 
+    // Pause IMMEDIATELY — before auth check, preflight, preview fetch, the
+    // deferred-shortcut probe, or anything else that has an await boundary.
+    // The user clicked SafePlay specifically to avoid hearing unfiltered
+    // audio; even a few hundred ms of profanity leaking through while the
+    // flow gets going defeats the point. videoWasPlaying captures the
+    // pre-click state so we know whether to resume on cancel / failure /
+    // success. Idempotent re-pauses later in the flow (confirmation
+    // dialog, proceedWithFiltering) are now no-ops.
+    const videoEl = this.getVideoElement();
+    const wasPlaying = !!(videoEl && !videoEl.paused);
+    if (wasPlaying && videoEl) {
+      videoEl.pause();
+      log('Video paused on SafePlay click');
+    }
+    this.videoWasPlaying = wasPlaying;
+
     // Deferred-video shortcut: if we've already given up on this video,
     // skip preview / credit confirmation / start-filter (the server's
     // dedupe would just rejoin the same in-flight job and lead the user
     // back through the error+retry+check-back-later cycle anyway). Show
-    // the "Taking Longer" modal directly and quietly probe the server —
-    // if the job actually finished while the user was away, auto-apply.
+    // the "We're working on this video" modal directly and quietly probe
+    // the server — if the job actually finished while the user was away,
+    // auto-apply.
     // Auto-retry doesn't take this branch: scheduleAutoRetry's timer
     // fires with skipNextConfirmation=true, but the deferred entry is
     // recorded by surfaceCheckBackLater AFTER the cap fires, so an
     // in-flight retry never sees a populated map for its own video.
     const deferredJobId = await this.getDeferredVideoJob(youtubeId);
     if (deferredJobId) {
-      log(`Click on deferred video ${youtubeId} (job ${deferredJobId}); routing to taking-longer modal`);
-      showCheckBackLaterNotification();
+      log(`Click on deferred video ${youtubeId} (job ${deferredJobId}); routing to processing modal`);
+      // Use the calmer "We're Working On This Video" modal here rather
+      // than "Taking Longer Than Expected". Deferred-click can fire after
+      // a page refresh / browser restart / re-click long after the
+      // original give-up — in those cases the user didn't just witness
+      // anything take longer than expected; they're just discovering
+      // that filtering is in progress.
+      showProcessingNotification();
       void this.probeDeferredJob(youtubeId, deferredJobId);
       return;
     }
@@ -615,13 +640,10 @@ class SafePlayContentScript {
         return;
       }
 
-      // Pause video and show confirmation dialog
+      // Video is already paused at the top of onFilterButtonClick.
+      // this.videoWasPlaying captures the pre-click state for the
+      // resume-on-cancel branch below.
       const video = this.getVideoElement();
-      const videoWasPlayingBeforeDialog = !!(video && !video.paused);
-      if (video && videoWasPlayingBeforeDialog) {
-        video.pause();
-        log('Video paused for credit confirmation');
-      }
 
       this.updateButtonState({ state: 'idle', text: 'SafePlay', videoId: youtubeId });
       release();
@@ -636,16 +658,19 @@ class SafePlayContentScript {
             log('Confirmation accepted but operation is stale — dropping');
             return;
           }
-          this.videoWasPlaying = videoWasPlayingBeforeDialog;
           await this.proceedWithFiltering(youtubeId);
         },
         onCancel: () => {
           log('User cancelled filtering');
           this.filteringVideoId = null;
-          if (videoWasPlayingBeforeDialog && video) {
+          // Resume only if the video was actually playing before the
+          // SafePlay click. Cancel means the user changed their mind, so
+          // restore the pre-click state.
+          if (this.videoWasPlaying && video) {
             video.play();
             log('Video resumed after cancel');
           }
+          this.videoWasPlaying = false;
         },
         debug: DEBUG,
       });
@@ -1479,7 +1504,12 @@ class SafePlayContentScript {
     if (status === 'completed' && transcript) {
       log(`Deferred job ${jobId} completed; auto-applying for ${videoId}`);
       await this.clearDeferredVideoJob(videoId);
+      // Either modal could be up depending on whether this was an
+      // in-session re-click (Modal A) or a fresh-recognition click (Modal
+      // B). Dismiss both — the helpers are no-ops when the modal isn't
+      // present.
       dismissCheckBackLaterNotification();
+      dismissProcessingNotification();
 
       if (this.isProcessing) {
         // A concurrent click started a fresh attempt while the probe was in
@@ -1553,10 +1583,12 @@ class SafePlayContentScript {
       this.jobStartedAt = 0;
     }
     this.stopTranscriptionResources();
-    // If the "taking longer than expected" modal is still on screen from
-    // window 1, quietly remove it now that the job has actually completed.
-    // No-op when the modal isn't present.
+    // Either modal could be up at this point: "Taking Longer" from
+    // window 1, or "We're Working On This Video" from a same-session
+    // re-click that took the deferred branch. Dismiss both — helpers
+    // are no-ops when the modal isn't present.
     dismissCheckBackLaterNotification();
+    dismissProcessingNotification();
     // Job actually completed — clear the auto-retry budget so a future
     // failure on a different video gets a fresh allowance.
     this.autoRetryCount = 0;

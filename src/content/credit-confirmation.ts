@@ -721,6 +721,78 @@ export function dismissFilterErrorNotification(): void {
   document.querySelector('[data-safeplay-filter-error]')?.remove();
 }
 
+// Shown when the user clicks SafePlay on a video that's already in our
+// deferred-job map (i.e. a previous attempt hit check-back-later, or the
+// page was refreshed while a job was still in-flight). Distinct from the
+// "Taking Longer Than Expected" modal because the framing is different:
+// "Taking Longer" implies the user just witnessed it overshoot ETA, which
+// only makes sense in the same continuous session. After a refresh — or
+// even on a same-session re-click after they dismissed the give-up modal
+// — a calmer "we're working on this" framing avoids implying anything is
+// wrong. The job is just still cooking; come back in a bit.
+export function showProcessingNotification(): void {
+  // Idempotent: rapid re-clicks shouldn't stack dialogs.
+  if (document.querySelector('[data-safeplay-processing]')) return;
+  const overlay = document.createElement('div');
+  overlay.setAttribute('data-safeplay-processing', '');
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999999;
+    font-family: 'Roboto', 'YouTube Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  `;
+  overlay.innerHTML = `
+    <div tabindex="-1" role="dialog" style="background: #212121; border: 1px solid #3F3F3F; border-radius: 12px; padding: 24px; max-width: 380px; width: 90%; box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5); outline: none;">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+        <div style="width: 40px; height: 40px; border-radius: 50%; background: #FF0000; display: flex; align-items: center; justify-content: center; color: white; flex-shrink: 0;">
+          <svg viewBox="0 0 24 24" fill="currentColor" width="24" height="24">
+            <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+          </svg>
+        </div>
+        <h2 style="margin: 0; font-size: 18px; font-weight: 600; color: #F1F1F1;">We're Working On This Video</h2>
+      </div>
+      <div style="margin-bottom: 24px;">
+        <p style="color: #AAAAAA; font-size: 14px; line-height: 1.5; margin: 0;">
+          SafePlay is filtering this video in the background. Check back shortly and it'll be ready to watch.
+        </p>
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: flex-end;">
+        <button data-action="close" style="padding: 10px 20px; border-radius: 8px; font-size: 14px; font-weight: 500; cursor: pointer; border: none; background: #FF0000; color: white;">
+          Got It
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const closeDialog = () => {
+    overlay.remove();
+  };
+
+  overlay.querySelector('[data-action="close"]')?.addEventListener('click', closeDialog);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) closeDialog();
+  });
+  document.addEventListener('keydown', function escHandler(e) {
+    if (e.key === 'Escape') {
+      closeDialog();
+      document.removeEventListener('keydown', escHandler);
+    }
+  });
+}
+
+export function dismissProcessingNotification(): void {
+  document.querySelector('[data-safeplay-processing]')?.remove();
+}
+
 // Per-tab cooldown so transient auth blips (network hiccup, refresh-endpoint
 // rejecting a token the website handed us) don't spam the user with the
 // sign-in modal. A real signed-out user clicking Filter again after a minute
